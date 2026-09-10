@@ -44,8 +44,8 @@ defaults. The spec also leaves gaps that the tooling must fill:
 
 | Role (spec) | Key held | Where it runs | Commands | SDK surface |
 |---|---|---|---|---|
-| **Publisher / operator** | master (offline) | workstation, ceremony | `init`, `channel add/remove`, `editor add/revoke`, `pattern add/remove`, `company set`, `rotate-root`, `validate`, `keys backup` | `Publisher.*` master-path ops |
-| **Channel publisher** | channel key | CI / pipeline | `publish`, `item withdraw`, `channel key rotate/revoke` | `Publisher.Publish` etc. |
+| **Publisher / operator** | master (offline) | ceremony machine | `init`, `channel add/remove`, `editor add/revoke`, `pattern add/remove`, `company set`, `rotate-root`, `validate`, `keys generate/export` | `Publisher.*` master-path ops, `ceremony.Stage` |
+| **Channel publisher** | channel key (+ ops) | CI / pipeline | `publish`, `item withdraw`, `channel key rotate/revoke` (apply side), `ceremony apply` | `Publisher.Publish` etc., `ceremony.Apply` |
 | **Ops** | online ops key | cron / CI | `refresh-timestamp` | `Publisher.RefreshTimestamp` |
 | **Editor** | editor key | editor's own machine | `item sign` | `feed.SignItem` |
 | **Feed engine** | private-feed engine key | eshop backend / logistics partner | `private-feed new/update/expire` (or direct SDK call) | `privatefeed.*` |
@@ -61,20 +61,164 @@ channel keys).
 
 ---
 
-## 3. Architecture
+## 3. Multi-role workflow (the shape that actually works)
+
+### 3.1 Principles
+
+1. **The repo is the only shared state.** The TUF repo (metadata + feeds) is
+   what flows between roles; it is *public* and *verifiable*, so every role
+   can fetch it (git checkout, rsync, or `pub pull` from the deployed base)
+   and every role that reads it verifies the chain first. Nothing else is
+   shared.
+2. **Keys never leave their role.** No single workspace holds all keys.
+   Each role's machine has only its own keys; a role that does not hold a
+   key simply cannot run the commands that need it — the CLI fails fast with
+   a typed `missing key: channel key "security" — run this on the pipeline
+   machine` error instead of producing half-signed metadata.
+3. **Every handoff is a signed artifact, verified at the boundary.** Editor
+   → pipeline: signed item. Operator → pipeline: ceremony bundle
+   (master-signed metadata). Operator → editor: key export (encrypted).
+   Each recipient verifies before trusting; the protocol's "binary
+   verification" applies to tooling handoffs too, not just to client
+   fetches.
+4. **Read-verify-apply-verify.** Every command loads the repo, verifies the
+   metadata chain it read, applies the change in memory, verifies the
+   resulting repo in full, then swaps atomically.
+
+### 3.2 Role contexts (what each machine has)
+
+```
+operator (ceremony machine)        CI / pipeline                  editor's machine
+┌──────────────────────────┐      ┌──────────────────────────┐   ┌────────────────┐
+│ keys/  master (+ ops)    │      │ keys/  channel key(s)    │   │ keys/ editor   │
+│ repo/  checkout          │      │        + ops             │   │                │
+│ anchor/ root.json+chain  │      │ repo/  checkout          │   │ (no repo, no   │
+│ config: role=operator    │      │ anchor/ read-only copy   │   │  anchor —      │
+└──────────────────────────┘      │ config: role=ci          │   │  item sign     │
+          │                       └──────────────────────────┘   │  needs only    │
+          │  git: repo + anchor                                    │  the keystore)│
+          └───────────────────────────────────────────────────────┘
+```
+
+- **Editor** is the minimal case: no repo, no anchor, no metadata. `pub
+  item sign --channel security --file draft.json --out signed.json` needs
+  the editor key, the channel name, and the draft. It does not even need to
+  know whether the channel is in editor mode — `publish` decides that.
+- **CI** needs the repo (latest `targets.json` → editor-mode requirements;
+  feed → append) and its keys. It gets the repo via git (default) or
+  `pub pull`; it **pulls before every publish** so it never acts on stale
+  authorization.
+- **Operator** needs a repo checkout only for version consistency; the
+  anchor dir only for root ceremonies and `validate`.
+
+### 3.3 Handoff artifacts
+
+| Artifact | Producer → Consumer | Content | Consumer verifies |
+|---|---|---|---|
+| **signed item** | editor → pipeline (or editor → editor for thresholds) | full item object with `_sig` | editor-mode threshold against `custom.editor_mode`, `_sig.channel` vs feed path, known-keyid validity |
+| **key export bundle** | operator → editor / operator → CI | encrypted keystore entries, role-tagged | passphrase; role lands in the right store |
+| **public key card** | editor/CI → operator | public key object + keyid only | keyid = SHA-256 of canonical key object |
+| **ceremony bundle** | operator → CI/ops | master-signed `targets.json` (or new root) + pending steps | master signature, version monotonicity, delegation invariants |
+| **deploy bundle** | anyone → static host | the two dirs (anchor/, repo/) | `validate` before upload |
+
+### 3.4 Editor flow (incl. thresholds)
+
+```
+draft.json (id, content, dates, tags, [resources])      editor's machine
+   │  pub item sign --channel security --keyid <alice>
+   ▼
+signed.json  (_sig.channel, withdrawn:false, signatures:[alice])
+   │  → handed to co-editor (same bytes!)                  bob's machine
+   ▼  pub item sign --file signed.json (adds bob's sig) — JCS is
+   │  deterministic and _sig.signatures is excluded from the
+   │  signed bytes, so threshold signatures accumulate
+   ▼
+signed.json (alice+bob)  →  PR / upload  →  CI
+```
+
+Key points: the signed object is fixed at first signing (`id`, `channel`,
+`withdrawn`, `resources` included — per the JCS rule in
+[spec/feeds.md §1.2](../spec/feeds.md)), so co-editors re-sign the *same
+file*; if the draft has no `id`, `item sign` derives one deterministically
+(content hash), so co-editors agree. The pipeline never sees editor private
+keys; it only verifies.
+
+### 3.5 Ceremony flow (two modes, same command)
+
+**Single-step (default, operator holds master + ops backup):**
+`pub channel add --name security` on the ceremony machine does everything:
+master signs `targets.json`, channel role metadata is created, ops re-signs
+snapshot+timestamp, `validate`, swap, commit. Small publishers run this —
+it's the spec's "one tool" promise.
+
+**Strict two-step (master and ops keys never co-locate):**
+```
+operator (offline)                          CI / ops machine
+  pub channel add --name security --stage bundle/
+      │  writes bundle/: targets.json (master-signed)
+      │  + step manifest (create role metadata for "security",
+      │    delegation invariants, expected keyids)          ┌────────────────────┐
+      └──────────────────────────────────────────────────▶ │ pub ceremony apply │
+                                                             │  verify master sig │
+        bundle travels by git, USB, or a                 ─▶ │  + version mono    │
+        paste in an air-gapped setup                        │  + invariants      │
+                                                             │  create channels.  │
+                                                             │  security.json     │
+                                                             │  (channel key)     │
+                                                             │  re-sign snapshot  │
+                                                             │  +timestamp (ops)  │
+                                                             │  validate → swap   │
+                                                             └────────────────────┘
+```
+
+Which commands need which ceremony mode:
+
+| Ceremony | Keys (single-step) | Bundle steps on apply |
+|---|---|---|
+| `channel add` | master + ops + channel key | verify, create role metadata + empty feed (channel key), snapshot/timestamp |
+| `channel remove` | master + ops | verify, drop role metadata/target from snapshot, snapshot/timestamp |
+| `editor add/revoke` | master + ops | verify, snapshot/timestamp |
+| `pattern add/remove` | master + ops | verify, snapshot/timestamp |
+| `company set` | master + ops | verify, snapshot/timestamp |
+| `channel key rotate` | master + ops + channel key | verify, re-sign role metadata with old+new (overlap), snapshot/timestamp |
+| `channel key revoke` | master + ops | verify, snapshot/timestamp |
+| `rotate-root` | master only | no bundle needed (anchor only) — unless the ops key rotates too, then a bundle whose apply re-signs snapshot/timestamp with the new ops key |
+
+### 3.6 CI publish flow
+
+```
+git pull (repo+anchor)          # fresh authorization
+pub validate                    # cheap pre-check
+pub publish --channel security --file signed.json
+    # verify editor threshold (or default-mode rules), append item,
+    # re-sign channels.security.json (channel key), snapshot+timestamp
+    # (ops), validate, swap, commit
+pub deploy s3 --bucket …        # repo base; anchor separately (or same job)
+```
+
+The repo round-trips through git between roles; the SDK never transports —
+transport (git, rsync, CDN push) is the operator's existing tooling, which
+is also why `deploy` stays a thin interface.
+
+---
+
+## 4. Architecture
 
 ```
 ┌─────────────────────────── SDK (library, keryx/sdk) ──────────────────────────┐
 │                                                                              │
-│  keys/        KeyStore iface, ed25519, keyid, backup/restore, signer adapters │
+│  keys/        KeyStore iface, ed25519, keyid, backup/export(role-tagged),     │
+│               signer adapters (Sigstore → KMS/hardware later)                 │
+│  repo/        Repo iface (Read/Write/List), DirRepo; the shared state         │
 │  tuf/         go-tuf v2 wrapper: root/targets/snapshot/timestamp + channel    │
 │               role metadata; sign, verify, rotate; custom-field accessors     │
 │  feed/        JSON Feed types; item build/sign/verify (JCS); resources hashes │
 │  privatefeed/ capability-feed engine: token, build, sign, verify, expire      │
 │  join/        join URL + QR payload encode/decode/validate; QR image          │
 │  publisher/   high-level ops = the CLI verbs as library functions             │
+│  ceremony/    stage/apply bundle types + verification                         │
 │  deploy/      Deployer iface: local dir, S3-compatible                        │
-│  workspace/   dir layout (keys/ anchor/ repo/), load/save, atomic writes      │
+│  config/      role-scoped workspace config (paths, origin, base, role)        │
 └───────────────▲───────────────────────────────────────────────────────────────┘
                 │  one module: github.com/v1b3coder/keryx/sdk
     ┌───────────┴────────────┐
@@ -89,15 +233,14 @@ channel keys).
 1. **No `os.Exit`, no globals, no stdout in the SDK.** All operations are
    methods taking `context.Context`; results are returned as values; logging
    is `slog`-injectable (or absent). The CLI owns prompts and rendering.
-2. **Everything through interfaces.** `keys.KeyStore` (file/keychain/KMS),
-   `deploy.Deployer` (local/S3), a `Clock` (testability + determinism). The
-   web app can back these with its own storage (DB, Vault, object storage)
-   without touching the protocol code.
-3. **The workspace is the repo.** No hidden database: versions, feed
-   content, keyids, and `custom` all derive from the metadata/feed files on
-   disk. `Workspace` = `keys/`, `anchor/` (well-known root dir), `repo/`
-   (repo base). Single-writer per workspace — documented, enforced by
-   advisory lock in the CLI; the web app serializes per repo on its side.
+2. **Everything through interfaces.** `keys.KeyStore`, `repo.Repo`
+   (dir-backed now; object-store/DB-backed by the web app later),
+   `deploy.Deployer`, a `Clock`. The web app can back these with its own
+   storage without touching protocol code.
+3. **The repo is the only state.** No hidden database: versions, feed
+   content, keyids, and `custom` all derive from the metadata/feed files.
+   Single-writer per repo — documented, advisory-locked in the CLI; the web
+   app serializes per repo on its side.
 4. **Deterministic bytes.** Same keys + same inputs + same version numbers →
    identical output (fixed serialization, JCS for items, go-tuf canonical
    JSON for metadata). This is what makes hashing, `validate`, and CI
@@ -121,36 +264,42 @@ can be re-ported onto it (or retired) in a later pass.
 
 ---
 
-## 4. Command surface (`pub`, cobra)
+## 5. Command surface (`pub`, cobra)
 
 Command names follow the normative contract in spec/clients.md §2; additions
-are marked **(new)**.
+are marked **(new)**. `--stage`/`apply` implement the two-step ceremonies
+(§3.5); without `--stage` the same commands run single-step when the
+keystore holds the required keys.
 
 ```
 pub init --domain company.example --name "ACME s.r.o."
          [--base https://cdn.example.com/keryx] [--logo URL]
          [--mode full] [--workspace .keryx]
-pub keys list | generate <name> [--role master|ops|channel|editor|engine] | export | import
-pub channel add <name> --display-name … [--description …]
-pub channel remove <name>
+pub keys list | generate <name> [--role master|ops|channel|editor|engine]
+pub keys export [--role …] [--name …] [--public] --out bundle   # (new) role-tagged, encrypted
+pub keys import --file bundle                                    # (new)
+pub channel add <name> --display-name … [--description …] [--keyid …] [--stage out/]
+pub channel remove <name> [--stage out/]
 pub channel list
-pub channel key rotate <name> [--announce-next-key]     # overlap, then drop
-pub channel key revoke <name> [--keyid …] [--reissue]
-pub editor add --channel <name> --keyid <id>
-pub editor revoke --channel <name> --keyid <id>
+pub channel key rotate <name> [--announce-next-key] [--stage out/]
+pub channel key revoke <name> [--keyid …] [--reissue] [--stage out/]
+pub editor add --channel <name> --keyid <id> [--stage out/]
+pub editor revoke --channel <name> --keyid <id> [--stage out/]
 pub editor list
-pub pattern add --channel <name> --pattern URL --keyid <id>   # private-feed patterns (master)
-pub pattern remove --channel <name>
-pub item sign --channel <name> --file draft.json --out signed.json   # (new) editor side
+pub pattern add --channel <name> --pattern URL --keyid <id> [--stage out/]   # master
+pub pattern remove --channel <name> [--stage out/]
+pub ceremony apply --bundle out/                                 # (new) verify + finish
+pub item sign --channel <name> --file draft.json --out signed.json          # (new) editor side
 pub publish --channel <name> --file signed.json [--no-channel-sig]
 pub item withdraw --channel <name> --id <id>                       # (new)
 pub refresh-timestamp [--expires 48h]                              # the cron line
-pub company set [--name …] [--logo URL]                            # identity ceremony (master)
+pub company set [--name …] [--logo URL] [--stage out/]             # identity ceremony (master)
 pub rotate-root [--announce-next-key]
 pub private-feed new|update|expire …                               # (new) engine side
 pub validate [--strict]
 pub join-url --channels a,b [--private-feed URL …] [--out qr.png]  # (new; split from qr)
 pub qr --channels a,b [--private-feed URL …] --out qr.png
+pub pull [--base URL]                                              # (new) fetch+verify repo state
 pub deploy local --target /var/www/keryx | pub deploy s3 --bucket … --prefix …
 ```
 
@@ -159,24 +308,30 @@ pub deploy local --target /var/www/keryx | pub deploy s3 --bucket … --prefix �
 - `init` generates master + ops keys (channel/editor/engine keys on demand),
   builds the full 4-role repo, writes the anchor dir and repo dir, prints
   the one-time backup; `--logo` fetches once and records `logo_sha256`.
-- `publish` = read repo → verify input item (editor-mode threshold against
-  `custom.editor_mode.<channel>`; refuses unsigned items there; refuses
-  unknown/unauthorized keyids) → optionally add channel-key signature
-  (default mode: load-bearing attribution; editor mode: portability extra) →
-  insert item (newest first) / replace in place on known `(channel, id)` →
-  recompute feed bytes → re-sign `channels.<name>.json` (channel key,
-  version+1) → `snapshot.json` (ops) → `timestamp.json` (ops) → verify →
-  swap. **No master involvement.**
-- `item sign` runs on the editor's machine with the editor's keystore: takes
-  a draft (id, content, dates, tags, optional `_sig.resources` via
+- `item sign` runs on the editor's machine with the editor's keystore only:
+  takes a draft (id, content, dates, tags, optional `_sig.resources` via
   `--pin URL=FILE`), fills `_sig.channel`/`_sig.withdrawn:false`, signs JCS
-  with the editor key, writes `signed.json`. It **never** touches channel
-  keys, and `publish` re-verifies (the two never trust each other).
+  with the editor key, writes `signed.json`. Re-signing an already-signed
+  file *adds* a signature (threshold accumulation, §3.4). It never touches
+  channel keys and never needs the repo.
+- `publish` = pull-fresh repo → verify input item (editor-mode threshold
+  against `custom.editor_mode.<channel>`; refuses unsigned items there;
+  refuses unknown/unauthorized keyids) → optionally add channel-key
+  signature (default mode: load-bearing attribution; editor mode: portability
+  extra) → insert item (newest first) / replace in place on known
+  `(channel, id)` → recompute feed bytes → re-sign `channels.<name>.json`
+  (channel key, version+1) → `snapshot.json` (ops) → `timestamp.json` (ops)
+  → verify → swap. **No master involvement.**
+- `ceremony apply` is the only command that merges master-signed metadata
+  into a live repo: it verifies the bundle's master signature, version
+  monotonicity, and delegation invariants before touching anything, then
+  performs the pending steps (channel role metadata creation, re-signing,
+  snapshot/timestamp) with the keys it holds.
 - `channel add` = targets.json v+1 (master): delegation
-  (`channels.<name>`, terminating, `paths: ["channels/<name>/*"]`) + key
-  generation + empty feed + role metadata (channel key) + snapshot/timestamp
-  (ops). `channel remove` = drop delegation/role metadata/target from
-  snapshot; local history is the client's to keep.
+  (`channels.<name>`, terminating, `paths: ["channels/<name>/*"]`) + role
+  metadata + empty feed (channel key) + snapshot/timestamp (ops).
+  `channel remove` = drop delegation/role metadata/target from snapshot;
+  local history is the client's to keep.
 - `editor add/revoke` and `pattern add/remove` = targets.json v+1 (master)
   + snapshot/timestamp. Rotations use the overlap protocol
   ([spec/repository.md §5](../spec/repository.md)); the tool prints the
@@ -185,6 +340,9 @@ pub deploy local --target /var/www/keryx | pub deploy s3 --bucket … --prefix �
   writes `root.json` **and** `N.root.json` to the anchor dir only
   ([spec/repository.md §1](../spec/repository.md)); never touches the repo
   base.
+- `pull` fetches the repo (and optionally the anchor) from the deployed
+  base/join origin and verifies the metadata chain — useful for the
+  operator's ceremonies and CI when git is not the transport.
 - `validate` = the full check: root chain from the anchor; timestamp →
   snapshot → targets → per-channel role metadata; delegation invariants
   (role name `channels.<name>`, terminating, paths inside namespace,
@@ -209,7 +367,7 @@ verify every signature written.
 
 ---
 
-## 5. SDK package contracts (sketch)
+## 6. SDK package contracts (sketch)
 
 ```go
 // keys
@@ -220,20 +378,36 @@ type KeyStore interface {
     Remove(ctx context.Context, id string) error
 }
 type KeyInfo struct { ID, Name, Role string; Key *metadata.Key }
+func Export(ctx, KeyStore, ExportParams) ([]byte, error)   // role-tagged, encrypted (age)
+func Import(ctx, KeyStore, []byte) error
+type ErrMissingKey struct { Role, KeyID string }           // typed; CLI renders the hint
+
+// repo — the shared state (dir-backed now, object-store/DB later)
+type Repo interface {
+    Read(ctx context.Context, path string) ([]byte, error)
+    Write(ctx context.Context, path string, data []byte) error
+    List(ctx context.Context, prefix string) ([]string, error)
+}
+type DirRepo struct{ Root string }
 
 // publisher — one method per CLI verb; all take ctx, all return values
-type Publisher struct { Workspace *Workspace; Keys keys.KeyStore; Clock func() time.Time }
+type Publisher struct { Repo repo.Repo; Anchor repo.Repo; Keys keys.KeyStore; Clock func() time.Time }
 func (p *Publisher) Init(ctx, InitParams) (Result, error)
 func (p *Publisher) Publish(ctx, PublishParams) (Result, error)
 func (p *Publisher) Withdraw(ctx, string, string) (Result, error)
-func (p *Publisher) ChannelAdd(ctx, ChannelSpec) error
-func (p *Publisher) ChannelRemove(ctx, string) error
-func (p *Publisher) EditorAdd(ctx, string, string) error
-func (p *Publisher) PatternAdd(ctx, PatternSpec) error
-func (p *Publisher) RotateChannelKey(ctx, string, ...) error
-func (p *Publisher) RotateRoot(ctx, RotateRootParams) error
+func (p *Publisher) ChannelAdd(ctx, ChannelSpec) (ceremony.Step, error)      // stage or full
+func (p *Publisher) ChannelRemove(ctx, string) (ceremony.Step, error)
+func (p *Publisher) EditorAdd(ctx, string, string) (ceremony.Step, error)
+func (p *Publisher) PatternAdd(ctx, PatternSpec) (ceremony.Step, error)
+func (p *Publisher) RotateChannelKey(ctx, string, ...) (ceremony.Step, error)
+func (p *Publisher) RotateRoot(ctx, RotateRootParams) (Result, error)
 func (p *Publisher) RefreshTimestamp(ctx, time.Duration) error
 func (p *Publisher) Validate(ctx, ValidateParams) (Report, error)
+
+// ceremony — the operator→CI handoff
+type Bundle struct { Targets *metadata.Metadata[metadata.TargetsType]; Steps []Step; … }
+func Stage(ctx, Publisher, Step) (*Bundle, error)   // master signs; never touches ops keys
+func Apply(ctx, Publisher, *Bundle) (Result, error) // verify master sig + invariants, run steps, ops re-sign
 
 // feed — item + whole-document signing/verification (JCS), shared with the app
 func SignItem(item map[string]any, signer signature.Signer, keyid string) error
@@ -259,9 +433,12 @@ func QR(url string, size int) ([]byte, error)
 - `context.Context` everywhere → HTTP handlers cancel cleanly.
 - No prompt/exit/log assumptions → the app calls `Publisher.Publish` from a
   request handler; prompts live in the CLI only.
-- KeyStore/Deployer interfaces → the app swaps in Vault-backed signers and
-  object-storage deployers; private feeds get created by the eshop backend
-  via `privatefeed.Build` with its own engine key.
+- `KeyStore`/`Repo`/`Deployer` interfaces → the app swaps in Vault-backed
+  signers, DB/object-store repos, and its own deploy path; private feeds get
+  created by the eshop backend via `privatefeed.Build` with its own engine
+  key. The web app's users map onto the same roles (admin=operator,
+  editor=editor, publish=CI), so the multi-role design of §3 is exactly what
+  the app will need — one code path, two front ends.
 - Deterministic + typed results (`Report`, `Result`) → JSON responses, CI
   gates, and the app's audit log without parsing stdout.
 - Single-writer documented → the app serializes per-repo (DB lock) — the
@@ -269,28 +446,33 @@ func QR(url string, size int) ([]byte, error)
 
 ---
 
-## 6. Phased delivery (implementation order)
+## 7. Phased delivery (implementation order)
 
-1. **Foundation** — `sdk/` module scaffold; `keys` (ed25519, keyid, age-encrypted
-   file store, backup export/import); `tuf` (init/build/sign/verify via
+1. **Foundation** — `sdk/` module scaffold; `keys` (ed25519, keyid,
+   age-encrypted file store, export/import, `ErrMissingKey`); `repo`
+   (interface + DirRepo, atomic swap); `tuf` (init/build/sign/verify via
    go-tuf v2, custom accessors); `feed` (types, JCS sign/verify, resources);
-   `workspace` (layout, atomic swap); CLI skeleton: `init`, `publish`,
-   `validate`. Verification: demo-repo built by SDK validates clean;
-   golden/determinism tests; JCS + keyid unit tests.
-2. **Lifecycle** — `channel add/remove`, `editor add/revoke`, `pattern
-   add/remove`, `item sign`, `item withdraw`, `channel key rotate/revoke`,
-   `company set`, `rotate-root` (+ chain-walk test), `refresh-timestamp`;
-   `privatefeed` package + CLI; fail-safe unit tests (refusals).
-3. **Surface** — `join-url`/`qr` (+ payload validation tests), `deploy`
-   (local + S3), `--json` output mode, e2e CLI tests (init→publish→validate→
-   deploy), README for `pub`.
+   CLI skeleton: `init`, `publish`, `validate`. Verification: demo-repo
+   built by SDK validates clean; golden/determinism tests; JCS + keyid unit
+   tests.
+2. **Lifecycle + multi-role** — `channel add/remove`, `editor add/revoke`,
+   `pattern add/remove`, `item sign` (incl. threshold accumulation, no-repo
+   mode), `item withdraw`, `channel key rotate/revoke`, `company set`,
+   `rotate-root` (+ chain-walk test), `refresh-timestamp`; `ceremony`
+   (stage/apply, strict two-step path); `privatefeed` package + CLI; keys
+   export/import; fail-safe unit tests (refusals); role-context e2e tests
+   (three machines simulated: editor signs → CI publishes → operator
+   ceremony staged → CI applies → validate).
+3. **Surface** — `join-url`/`qr` (+ payload validation tests), `pull`,
+   `deploy` (local + S3), `--json` output mode, e2e CLI tests
+   (init→publish→validate→deploy), README for `pub`.
 
 Non-goals for v1: lite mode, mirrors, KMS/hardware backends (interface is
 there, no impl), the web app itself, push, email bridge.
 
 ---
 
-## 7. Open questions (to settle during Phase 1)
+## 8. Open questions (to settle during Phase 1)
 
 1. **Module path**: `github.com/v1b3coder/keryx/sdk` — stable import path is
    what matters for the web app; rename-friendly (wire stays codename-neutral
@@ -306,3 +488,6 @@ there, no impl), the web app itself, push, email bridge.
 5. **`--no-channel-sig` in default mode**: publish signing items with the
    channel key is optional per spec ([spec/feeds.md §1.2](../spec/feeds.md));
    we default to *sign* (portability, zero cost) but keep the flag.
+6. **Ceremony transport**: git (default), USB/air-gap (bundle), or
+   `pub pull` from the deployed base — the SDK is transport-agnostic; the
+   doc assumes git for the common case. Confirm.
