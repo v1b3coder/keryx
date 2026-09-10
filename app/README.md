@@ -41,6 +41,17 @@ subscribe) → subscribe → verified inbox.
 > host via `network_security_config.xml`). A real deployment uses the
 > company's HTTPS origin.
 
+## Deployment
+
+`main` builds and publishes to GitHub Pages automatically
+(`.github/workflows/deploy-pages.yml`): https://v1b3coder.github.io/keryx/
+
+The build is a project site, so Vite's `base` is `/keryx/` (see
+`vite.config.ts`); `start_url`, `scope`, icon and asset URLs are relative or
+base-relative, so the same build also works on a custom domain (set `base`
+to `/` for that). The manifest + service worker come from vite-plugin-pwa
+(`autoUpdate`, workbox precache of the whole `dist/`).
+
 ## Scripts
 
 | Script | Purpose |
