@@ -112,6 +112,7 @@ export default function App() {
         origin={view.origin}
         onBackToContacts={() => setView({ t: 'contacts' })}
         onRepair={(origin) => setView({ t: 'add', from: 'contacts', repairOrigin: origin })}
+        onAddCompany={() => setView({ t: 'add', from: 'start' })}
       />
     );
   }
@@ -139,10 +140,12 @@ function CompanyRoute({
   origin,
   onBackToContacts,
   onRepair,
+  onAddCompany,
 }: {
   origin: string;
   onBackToContacts: () => void;
   onRepair: (origin: string) => void;
+  onAddCompany: () => void;
 }) {
   const { companies } = useApp();
   const [company, setCompany] = useState<CompanyRecord | null>(null);
@@ -172,7 +175,7 @@ function CompanyRoute({
   }
 
   return (
-    <CompanyView company={company} items={companyItems} onBack={onBackToContacts} onRepair={onRepair} />
+    <CompanyView company={company} items={companyItems} onBack={onBackToContacts} onRepair={onRepair} onAdd={onAddCompany} />
   );
 }
 

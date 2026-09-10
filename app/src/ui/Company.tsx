@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, GearSix, ArrowClockwise, Trash, ShieldWarning, LockSimple } from '@phosphor-icons/react';
+import { ArrowLeft, GearSix, ArrowClockwise, Trash, ShieldWarning, LockSimple, Plus } from '@phosphor-icons/react';
 import { Capacitor } from '@capacitor/core';
 import { Browser } from '@capacitor/browser';
 import type { CompanyRecord, StoredItem, ChannelState } from '../lib/store';
@@ -29,12 +29,15 @@ export function CompanyView({
   items,
   onBack,
   onRepair,
+  onAdd,
 }: {
   company: CompanyRecord;
   items: StoredItem[];
   onBack: () => void;
   /** re-pair flow for a company_name change (scan a fresh QR) */
   onRepair: (origin: string) => void;
+  /** add another company (single-source shortcut: no contacts list yet) */
+  onAdd: () => void;
 }) {
   const { actions, companies, syncing } = useApp();
   const [showSettings, setShowSettings] = useState(false);
@@ -143,6 +146,11 @@ export function CompanyView({
           <button className="iconbtn" onClick={() => setShowSettings(true)} aria-label="Settings">
             <GearSix size={24} />
           </button>
+          {companies.length === 1 && (
+            <button className="iconbtn" onClick={onAdd} aria-label="Add company">
+              <Plus size={24} weight="bold" />
+            </button>
+          )}
         </div>
       </div>
 
