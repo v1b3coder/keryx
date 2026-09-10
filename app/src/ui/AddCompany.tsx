@@ -5,6 +5,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { QrCode, ClipboardText, ArrowLeft, ArrowRight } from '@phosphor-icons/react';
 import { parseJoinUrl, type JoinPayload } from '../lib/payload';
 import { buildPairingOffer, createCompanyFromOffer, type PairingOffer } from '../lib/pair';
@@ -70,6 +71,19 @@ export function AddCompany({
   }, [scanning]);
 
   function handleScan() {
+    if (Capacitor.isNativePlatform()) {
+      // Native: MLKit provides its own full-screen camera UI, so there is no
+      // in-app preview step (and no empty <video> artefact before it).
+      void scanQr()
+        .then((text) => {
+          if (text) startPairing(text);
+          else setStep({ t: 'input', error: 'No QR code found. Try again or paste the link.' });
+        })
+        .catch(() => {
+          setStep({ t: 'input', error: 'Camera is not available. Paste the link instead.' });
+        });
+      return;
+    }
     setStep({ t: 'scan' });
   }
 
