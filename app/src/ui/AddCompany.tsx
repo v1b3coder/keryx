@@ -25,16 +25,25 @@ export function AddCompany({
   onDone,
   onCancel,
   repairOrigin,
+  initialUrl,
 }: {
   onDone: (origin: string) => void;
   onCancel: () => void;
   /** set when re-pairing a company whose name changed (spec/core.md §2) */
   repairOrigin?: string;
+  /** set when opened from a PWA deep link — pairing starts without the input screen */
+  initialUrl?: string;
 }) {
   const [step, setStep] = useState<Step>({ t: 'input' });
   const [pasting, setPasting] = useState(false);
   const [pasteValue, setPasteValue] = useState('');
   const { actions } = useApp();
+
+  // PWA deep link (?domain=&p=): go straight to the origin confirmation.
+  useEffect(() => {
+    if (initialUrl) startPairing(initialUrl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleScan() {
     try {

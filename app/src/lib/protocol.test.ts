@@ -42,7 +42,7 @@ import {
   type FeedItem,
 } from './item';
 import { verifyPrivateFeedDocument, matchesPattern, PRIVATE_FEED_MAX_BYTES } from './private';
-import { parseJoinUrl, rootAnchorUrl } from './payload';
+import { parseJoinUrl, rootAnchorUrl, joinUrlFromDeepLink } from './payload';
 import { patternMatches, pathPatternMatches } from './pattern';
 import { olpcCanonical } from './olpc';
 import { textToBase64url, bytesToBase64url, bytesToHex, hexToBytes } from './bytes';
@@ -127,6 +127,17 @@ describe('join payload (spec/core.md §3)', () => {
     expect(() => parseJoinUrl('ftp://x/join?p=eyJ2IjoxfQ')).toThrow();
     expect(() => parseJoinUrl(`${origin}/blog/hello.html`)).toThrow();
     expect(() => parseJoinUrl(`${origin}/join?p=`)).toThrow();
+  });
+
+  it('builds a join URL from the PWA deep link (out-of-spec extension)', () => {
+    expect(joinUrlFromDeepLink('keryx-demo.github.io', null)).toBe('https://keryx-demo.github.io/join');
+    expect(joinUrlFromDeepLink('https://keryx-demo.github.io/', 'eyJ2IjoxfQ')).toBe(
+      'https://keryx-demo.github.io/join?p=eyJ2IjoxfQ',
+    );
+    expect(joinUrlFromDeepLink('http://10.110.147.178:8000', 'eyJ2IjoxfQ')).toBe(
+      'http://10.110.147.178:8000/join?p=eyJ2IjoxfQ',
+    );
+    expect(joinUrlFromDeepLink('', null)).toBeNull();
   });
 
   it('normalizes a bare domain to https (entry field convenience)', () => {

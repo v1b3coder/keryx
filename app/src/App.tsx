@@ -10,12 +10,13 @@ import { AddCompany } from './ui/AddCompany';
 import { Contacts } from './ui/Contacts';
 import { CompanyView } from './ui/Company';
 import { getCompany, getItems, type CompanyRecord, type StoredItem } from './lib/store';
+import { joinUrlFromDeepLink } from './lib/payload';
 
 type View =
   | { t: 'start' }
   | { t: 'contacts' }
   | { t: 'company'; origin: string }
-  | { t: 'add'; from: 'start' | 'contacts'; repairOrigin?: string };
+  | { t: 'add'; from: 'start' | 'contacts'; repairOrigin?: string; deepLink?: string };
 
 export default function App() {
   const { companies, loaded } = useApp();
@@ -52,9 +53,22 @@ export default function App() {
     );
   }
 
+  // Out-of-spec PWA deep link (?domain=&p=): start pairing immediately,
+  // then drop the params so a reload does not re-trigger pairing.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const domain = params.get('domain');
+    if (!domain) return;
+    const url = joinUrlFromDeepLink(domain, params.get('p'));
+    if (!url) return;
+    setView({ t: 'add', from: 'start', deepLink: url });
+    history.replaceState(null, '', window.location.pathname + window.location.hash);
+  }, []);
+
   if (view.t === 'add') {
     return (
       <AddCompany
+        initialUrl={view.deepLink}
         repairOrigin={view.repairOrigin}
         onDone={(origin) => setView({ t: 'company', origin })}
         onCancel={() => {

@@ -121,3 +121,16 @@ export function parseJoinUrl(input: string): ParsedJoin {
 export function rootAnchorUrl(origin: string): string {
   return origin + '/.well-known/keryx/root.json';
 }
+
+/**
+ * Out-of-spec PWA convenience (NOT part of the join URL spec): the PWA may
+ * be opened as `?domain=<origin>&p=<payload>` to start pairing directly —
+ * the same `p` bytes are passed through, no re-encoding. Returns the join
+ * URL to feed into parseJoinUrl, or null when no domain is given.
+ */
+export function joinUrlFromDeepLink(domain: string, p: string | null): string | null {
+  const d = domain.trim();
+  if (!d) return null;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(d) ? d : `https://${d}`;
+  return `${withScheme.replace(/\/+$/, '')}/join${p ? `?p=${p}` : ''}`;
+}

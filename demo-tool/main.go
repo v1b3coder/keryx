@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"html"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -200,11 +201,14 @@ var qrLib string
 
 // installSection lists the three client options on the demo pages. Only the
 // PWA is live; Android/iOS Capacitor shells exist in keryx/app but have no
-// store builds yet, so they are placeholders.
-func installSection() string {
+// store builds yet, so they are placeholders. The PWA link carries
+// ?domain=<origin> (the join page appends &p= client-side) — an out-of-spec
+// PWA deep link that starts pairing without the input screen.
+func installSection(origin string) string {
+	pwa := "https://v1b3coder.github.io/keryx/?domain=" + url.QueryEscape(origin)
 	return `<h2>Installation</h2>
 <ul>
-<li><a href="https://v1b3coder.github.io/keryx/">PWA</a> — installable web app (works now)</li>
+<li><a id="pwa-link" href="` + pwa + `">PWA</a> — installable web app (works now)</li>
 <li>Android app — coming soon</li>
 <li>iOS app — coming soon</li>
 </ul>
@@ -302,6 +306,11 @@ var DEMO_JOIN = ` + jsonString(demoJoinURL) + `;
     root.appendChild(ul);
   }
   var m = window.location.search.match(/[?&]p=([A-Za-z0-9_-]+)/);
+  if (m) {
+    // pass the join payload through to the PWA deep link (same p bytes)
+    var pl = document.getElementById('pwa-link');
+    if (pl) pl.href += '&p=' + m[1];
+  }
   if (!m) {
     root.appendChild(el('h2', 'Generic join link'));
     root.appendChild(el('p', 'This link carries no join payload: no suggested channels and no private capability feed. It still pairs — the app will show the publisher\u2019s public channels to choose from. The demo join link below also suggests channels:'));
@@ -319,7 +328,7 @@ var DEMO_JOIN = ` + jsonString(demoJoinURL) + `;
   }
 })();
 </script>
-` + installSection() + `
+` + installSection(metadataOrigin) + `
 <p><small>Demo only — software demo keys, origin `)
 	b.WriteString(html.EscapeString(metadataOrigin))
 	b.WriteString(`. Not published by Trezor.</small></p>
@@ -397,7 +406,7 @@ a private capability feed (QR code rendered on the page; the URL is also in
 </ul>
 {{INSTALL}}
 </body></html>
-`, "{{ORIGIN}}", metadataOrigin, 1), "{{JOIN}}", joinQuery, 1), "{{INSTALL}}", installSection(), 1)
+`, "{{ORIGIN}}", metadataOrigin, 1), "{{JOIN}}", joinQuery, 1), "{{INSTALL}}", installSection(metadataOrigin), 1)
 	if err := os.WriteFile(filepath.Join(site, "index.html"), []byte(index), 0o644); err != nil {
 		return err
 	}
