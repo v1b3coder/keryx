@@ -17,6 +17,7 @@ import {
   type StoredItem,
 } from './lib/store';
 import { syncCompany } from './lib/sync';
+import { initDebugBuild } from './lib/build';
 
 export interface AppActions {
   refreshAll: () => Promise<void>;
@@ -50,6 +51,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const itemsRef = useRef<StoredItem[]>([]);
 
   useEffect(() => {
+    initDebugBuild();
     void (async () => {
       const list = await getAllCompanies();
       setCompanies(list);

@@ -12,6 +12,7 @@
  */
 
 import { base64urlToText } from './bytes';
+import { isDebugBuild } from './build';
 
 export interface JoinPayload {
   v: number;
@@ -40,6 +41,7 @@ export interface ParsedJoin {
 
 const CHANNEL_RE = /^[a-z0-9-_]+$/;
 
+
 /**
  * Parse a join URL (or a bare join URL origin string) into the confirmed
  * origin and the payload. Throws PayloadError on malformed input; throws
@@ -59,6 +61,9 @@ export function parseJoinUrl(input: string): ParsedJoin {
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
     throw new PayloadError('This link is not a web address.');
+  }
+  if (url.protocol === 'http:' && !isDebugBuild()) {
+    throw new PayloadError('This link is not using HTTPS. Only secure (https://) links are allowed.');
   }
   const p = url.searchParams.get('p');
   if (p === null) {

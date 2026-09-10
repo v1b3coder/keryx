@@ -32,6 +32,7 @@ import {
 } from './item';
 import { verifyPrivateFeedDocument, matchesPattern, PRIVATE_FEED_MAX_BYTES } from './private';
 import { hexToBytes } from './bytes';
+import { isDebugBuild } from './build';
 import {
   type CompanyRecord,
   type ChannelState,
@@ -100,12 +101,12 @@ export function isLocalDevOrigin(origin: string): boolean {
   }
 }
 
-/** Private-feed transport rule (spec/feeds.md §3): HTTPS only — HTTP allowed on local-dev origins only. */
+/** Private-feed transport rule (spec/feeds.md §3): HTTPS only — HTTP allowed on local-dev origins in debug builds only. */
 export function privateFeedUrlAllowed(url: string): boolean {
   try {
     const u = new URL(url);
     if (u.protocol === 'https:') return true;
-    if (u.protocol === 'http:' && isLocalDevOrigin(u.origin)) return true;
+    if (u.protocol === 'http:' && isLocalDevOrigin(u.origin) && isDebugBuild()) return true;
     return false;
   } catch {
     return false;

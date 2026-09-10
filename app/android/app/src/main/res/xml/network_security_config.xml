@@ -1,15 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Cleartext HTTP is permitted ONLY for the local demo origin (and loopback).
-  The Keryx protocol itself is HTTPS-only; this is a dev exception so the
-  demo artifact (signed for http://10.110.147.178:5001) can be tried on a
-  device without a TLS certificate. Production traffic is unaffected.
+  Release builds: the Keryx protocol is HTTPS-only. Cleartext HTTP is not
+  permitted anywhere, so an http:// join URL or feed can never be fetched.
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">10.110.147.178</domain>
-        <domain includeSubdomains="false">localhost</domain>
-        <domain includeSubdomains="false">127.0.0.1</domain>
-    </domain-config>
 </network-security-config>

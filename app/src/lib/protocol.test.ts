@@ -43,6 +43,7 @@ import {
 } from './item';
 import { verifyPrivateFeedDocument, matchesPattern, PRIVATE_FEED_MAX_BYTES } from './private';
 import { parseJoinUrl, rootAnchorUrl, joinUrlFromDeepLink } from './payload';
+import { setDebugBuild } from './build';
 import { patternMatches, pathPatternMatches } from './pattern';
 import { olpcCanonical } from './olpc';
 import { textToBase64url, bytesToBase64url, bytesToHex, hexToBytes } from './bytes';
@@ -127,6 +128,15 @@ describe('join payload (spec/core.md §3)', () => {
     expect(() => parseJoinUrl('ftp://x/join?p=eyJ2IjoxfQ')).toThrow();
     expect(() => parseJoinUrl(`${origin}/blog/hello.html`)).toThrow();
     expect(() => parseJoinUrl(`${origin}/join?p=`)).toThrow();
+  });
+
+  it('allows http join links in debug builds only (HTTPS-only protocol)', () => {
+    const p = textToBase64url(JSON.stringify({ v: 1, channels: ['a'] }));
+    setDebugBuild(false);
+    expect(() => parseJoinUrl(`${origin}/join?p=${p}`)).toThrow(/https/i);
+    setDebugBuild(true);
+    expect(parseJoinUrl(`${origin}/join?p=${p}`).origin).toBe(origin);
+    setDebugBuild(null);
   });
 
   it('builds a join URL from the PWA deep link (out-of-spec extension)', () => {
