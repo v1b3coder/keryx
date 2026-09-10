@@ -199,17 +199,18 @@ func copyDir(src, dst string) error {
 //go:embed assets/qrcode.min.js
 var qrLib string
 
-// installSection lists the three client options on the demo pages. Only the
-// PWA is live; Android/iOS Capacitor shells exist in keryx/app but have no
-// store builds yet, so they are placeholders. The PWA link carries
-// ?domain=<origin> (the join page appends &p= client-side) — an out-of-spec
-// PWA deep link that starts pairing without the input screen.
+// installSection lists the three client options on the demo pages. The PWA
+// and the Android APK (GitHub Releases) are live; the iOS Capacitor shell
+// exists in keryx/app but has no store build yet, so it stays a placeholder.
+// The PWA link carries ?domain=<origin> (the join page appends &p=
+// client-side) — an out-of-spec PWA deep link that starts pairing without
+// the input screen.
 func installSection(origin string) string {
 	pwa := "https://v1b3coder.github.io/keryx/?domain=" + url.QueryEscape(origin)
 	return `<h2>Installation</h2>
 <ul>
 <li><a id="pwa-link" href="` + pwa + `">PWA</a> — installable web app (works now)</li>
-<li>Android app — coming soon</li>
+<li><a href="https://github.com/v1b3coder/keryx/releases">Android app</a> — debug APK in GitHub Releases</li>
 <li>iOS app — coming soon</li>
 </ul>
 `
