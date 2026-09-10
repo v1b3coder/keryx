@@ -227,6 +227,8 @@ a {
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--border);
+  /* Android 15+ edge-to-edge: keep the header below the status bar */
+  padding-top: var(--safe-top, env(safe-area-inset-top, 0px));
 }
 
 .appbar-inner {
