@@ -198,6 +198,19 @@ func copyDir(src, dst string) error {
 //go:embed assets/qrcode.min.js
 var qrLib string
 
+// installSection lists the three client options on the demo pages. Only the
+// PWA is live; Android/iOS Capacitor shells exist in keryx/app but have no
+// store builds yet, so they are placeholders.
+func installSection() string {
+	return `<h2>Installation</h2>
+<ul>
+<li><a href="https://v1b3coder.github.io/keryx/">PWA</a> — installable web app (works now)</li>
+<li>Android app — coming soon</li>
+<li>iOS app — coming soon</li>
+</ul>
+`
+}
+
 // jsonString renders s as a JavaScript/JSON string literal.
 func jsonString(s string) string {
 	b, err := json.Marshal(s)
@@ -306,6 +319,7 @@ var DEMO_JOIN = ` + jsonString(demoJoinURL) + `;
   }
 })();
 </script>
+` + installSection() + `
 <p><small>Demo only — software demo keys, origin `)
 	b.WriteString(html.EscapeString(metadataOrigin))
 	b.WriteString(`. Not published by Trezor.</small></p>
@@ -361,7 +375,7 @@ readers ignore the extension; the Keryx app enforces it.</p>
 	if err := os.WriteFile(filepath.Join(site, "_sig", "index.html"), []byte(sigPage), 0o644); err != nil {
 		return err
 	}
-	index := strings.Replace(strings.Replace(`<!doctype html>
+	index := strings.Replace(strings.Replace(strings.Replace(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Keryx demo — Trezor</title></head>
 <body style="font-family:sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem">
 <h1>Keryx protocol — local demo</h1>
@@ -381,8 +395,9 @@ a private capability feed (QR code rendered on the page; the URL is also in
 <li><a href="_sig/">_sig extension</a></li>
 <li><a href="blog/">Announcements</a></li>
 </ul>
+{{INSTALL}}
 </body></html>
-`, "{{ORIGIN}}", metadataOrigin, 1), "{{JOIN}}", joinQuery, 1)
+`, "{{ORIGIN}}", metadataOrigin, 1), "{{JOIN}}", joinQuery, 1), "{{INSTALL}}", installSection(), 1)
 	if err := os.WriteFile(filepath.Join(site, "index.html"), []byte(index), 0o644); err != nil {
 		return err
 	}
