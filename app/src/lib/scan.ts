@@ -6,7 +6,7 @@
 import { Capacitor } from '@capacitor/core';
 import jsQR from 'jsqr';
 
-export async function scanQr(): Promise<string | null> {
+export async function scanQr(preview?: HTMLVideoElement, signal?: AbortSignal): Promise<string | null> {
   if (Capacitor.isNativePlatform()) {
     try {
       const { BarcodeScanner } = await import('@capacitor-mlkit/barcode-scanning');
@@ -19,15 +19,17 @@ export async function scanQr(): Promise<string | null> {
       return null;
     }
   }
-  return scanWeb();
+  return scanWeb(preview, signal);
 }
 
-async function scanWeb(): Promise<string | null> {
+async function scanWeb(preview?: HTMLVideoElement, signal?: AbortSignal): Promise<string | null> {
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: 'environment' },
   });
   try {
-    const video = document.createElement('video');
+    // A preview element (attached by the UI) makes the camera feed visible;
+    // without one the feed is scanned invisibly (legacy behaviour).
+    const video = preview ?? document.createElement('video');
     video.srcObject = stream;
     video.setAttribute('playsinline', 'true');
     await video.play();
@@ -46,6 +48,7 @@ async function scanWeb(): Promise<string | null> {
     }
     const deadline = Date.now() + 20000;
     while (Date.now() < deadline) {
+      if (signal?.aborted) return null;
       if (detector) {
         const codes = await detector.detect(video);
         if (codes.length > 0) return codes[0].rawValue;

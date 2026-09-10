@@ -16,6 +16,7 @@ import { useApp } from '../state';
 
 type Step =
   | { t: 'input'; error?: string }
+  | { t: 'scan' }
   | { t: 'confirm'; origin: string; joinUrl: string; payload: JoinPayload }
   | { t: 'loading'; origin: string; joinUrl: string; payload: JoinPayload }
   | { t: 'consent'; offer: PairingOffer }
@@ -37,6 +38,7 @@ export function AddCompany({
   const [step, setStep] = useState<Step>({ t: 'input' });
   const [pasting, setPasting] = useState(false);
   const [pasteValue, setPasteValue] = useState('');
+  const videoRef = useRef<HTMLVideoElement>(null);
   const { actions } = useApp();
 
   // PWA deep link (?domain=&p=): go straight to the origin confirmation.
@@ -45,14 +47,30 @@ export function AddCompany({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function handleScan() {
-    try {
-      const text = await scanQr();
-      if (text) startPairing(text);
-      else setStep({ t: 'input', error: 'No QR code found. Try again or paste the link.' });
-    } catch {
-      setStep({ t: 'input', error: 'Camera is not available. Paste the link instead.' });
-    }
+  // Web scan: run the detector against the visible preview element; abort on
+  // cancel or unmount. (Native platforms use the MLKit scanner, no preview.)
+  const scanning = step.t === 'scan';
+  useEffect(() => {
+    if (!scanning) return;
+    const video = videoRef.current;
+    if (!video) return;
+    const ctrl = new AbortController();
+    scanQr(video, ctrl.signal)
+      .then((text) => {
+        if (ctrl.signal.aborted) return;
+        if (text) startPairing(text);
+        else setStep({ t: 'input', error: 'No QR code found. Try again or paste the link.' });
+      })
+      .catch(() => {
+        if (ctrl.signal.aborted) return;
+        setStep({ t: 'input', error: 'Camera is not available. Paste the link instead.' });
+      });
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanning]);
+
+  function handleScan() {
+    setStep({ t: 'scan' });
   }
 
   function startPairing(input: string) {
@@ -106,6 +124,46 @@ export function AddCompany({
       }
       onDone(company.origin);
     }
+  }
+
+  if (step.t === 'scan') {
+    return (
+      <div className="screen screen-pad" style={{ paddingTop: 48 }}>
+        <h1 className="t-title" style={{ margin: 0 }}>
+          Scan QR code
+        </h1>
+        <div
+          className="card"
+          style={{ position: 'relative', overflow: 'hidden', padding: 0, margin: '16px 0' }}
+        >
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            style={{ display: 'block', width: '100%', aspectRatio: '3/4', objectFit: 'cover' }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              pointerEvents: 'none',
+            }}
+          >
+            <div style={{ width: 200, height: 200, border: '2px solid #fff', borderRadius: 12 }} />
+          </div>
+        </div>
+        <p className="t-body t-muted" style={{ margin: '0 0 16px' }}>
+          Point the camera at the company's QR code.
+        </p>
+        <button className="btn btn-secondary" onClick={() => setStep({ t: 'input' })}>
+          Cancel
+        </button>
+      </div>
+    );
   }
 
   if (step.t === 'input') {
