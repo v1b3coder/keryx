@@ -9,7 +9,7 @@ import { AppProvider, useApp } from './state';
 import { AddCompany } from './ui/AddCompany';
 import { Contacts } from './ui/Contacts';
 import { CompanyView } from './ui/Company';
-import { getCompany, getItems, type CompanyRecord, type StoredItem } from './lib/store';
+import { getAllItems, getCompany, getItems, type CompanyRecord, type StoredItem } from './lib/store';
 import { joinUrlFromDeepLink } from './lib/payload';
 
 type View =
@@ -21,6 +21,20 @@ type View =
 export default function App() {
   const { companies, loaded } = useApp();
   const [view, setView] = useState<View>({ t: 'start' });
+  const [contactsItems, setContactsItems] = useState<StoredItem[]>([]);
+
+  // Contacts shows unread counts; refresh them whenever the list is shown
+  // or the company set changes (e.g. after a sync or Remove company).
+  useEffect(() => {
+    if (view.t !== 'contacts') return;
+    let alive = true;
+    void getAllItems().then((list) => {
+      if (alive) setContactsItems(list);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [view.t, companies]);
 
   // initial routing: single company → straight to it; none → start; else contacts.
   // Also re-routes when the open company disappears (e.g. after Remove company).
@@ -77,6 +91,17 @@ export default function App() {
           else if (view.from === 'contacts' || companies.length > 1) setView({ t: 'contacts' });
           else setView({ t: 'start' });
         }}
+      />
+    );
+  }
+
+  if (view.t === 'contacts') {
+    return (
+      <Contacts
+        companies={companies}
+        items={contactsItems}
+        onOpen={(origin) => setView({ t: 'company', origin })}
+        onAdd={() => setView({ t: 'add', from: 'contacts' })}
       />
     );
   }

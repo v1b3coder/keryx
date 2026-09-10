@@ -170,6 +170,11 @@ export function privateFeedKey(url: string): string {
   return `private:${url}`;
 }
 
+export async function getAllItems(): Promise<StoredItem[]> {
+  const db = await openAppDb();
+  return (await db.getAll('items')) as StoredItem[];
+}
+
 export async function getItems(origin: string): Promise<StoredItem[]> {
   const db = await openAppDb();
   const all = (await db.getAll('items')) as StoredItem[];
