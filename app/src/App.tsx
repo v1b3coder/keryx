@@ -43,18 +43,9 @@ export default function App() {
     }
   }, [loaded, companies]);
 
-  if (!loaded) {
-    return (
-      <div className="screen">
-        <div className="empty">
-          <div className="spinner" />
-        </div>
-      </div>
-    );
-  }
-
   // Out-of-spec PWA deep link (?domain=&p=): start pairing immediately,
-  // then drop the params so a reload does not re-trigger pairing.
+  // then drop the params so a reload does not re-trigger pairing. Must stay
+  // above the early return below (hooks order must be stable).
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const domain = params.get('domain');
@@ -64,6 +55,16 @@ export default function App() {
     setView({ t: 'add', from: 'start', deepLink: url });
     history.replaceState(null, '', window.location.pathname + window.location.hash);
   }, []);
+
+  if (!loaded) {
+    return (
+      <div className="screen">
+        <div className="empty">
+          <div className="spinner" />
+        </div>
+      </div>
+    );
+  }
 
   if (view.t === 'add') {
     return (
