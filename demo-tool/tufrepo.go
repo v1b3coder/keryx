@@ -27,14 +27,16 @@ func channelFeedPath(name string) string {
 }
 
 // buildRepo creates the full TUF repository (root/targets/snapshot/timestamp
-// + one delegated role per channel, consistent snapshots, versioned files)
-// and writes it under siteDir/keryx/, plus the well-known root anchor at
-// siteDir/.well-known/keryx/root.json (PROTOCOL §2/§3).
+// + one delegated role per channel, consistent_snapshot: false — the spec
+// default) and writes it under siteDir/keryx/, plus the well-known root
+// anchor at siteDir/.well-known/keryx/root.json (spec/core.md §1, §3).
 //
-// Key split (PROTOCOL §3): the offline master key signs root + targets
-// (authorization); the online ops key signs snapshot + timestamp (freshness)
-// — no master involvement on any publish. Channel keys sign their own role
-// metadata (<channel>.json), which pins that channel's feed target.
+// Key split (spec/repository.md §1): the offline master key signs root +
+// targets (authorization); the online ops key signs snapshot + timestamp
+// (freshness) — no master involvement on any publish. Channel keys sign
+// their own role metadata (channels.<name>.json), which pins that channel's
+// feed target. Root metadata lives ONLY at the well-known anchor — never in
+// the repo base.
 func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte) error {
 	now := time.Now().UTC().Truncate(time.Second)
 	dir := filepath.Join(siteDir, repoDir)
@@ -48,7 +50,11 @@ func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte
 
 	// --- root.json: trust anchor. Master = root+targets; ops = snapshot+
 	// timestamp. custom carries repo_base (single URL) + mode ("full").
+	// consistent_snapshot: false (spec default) — metadata and targets are
+	// served at their plain paths; only root keeps versioned N.root.json
+	// files (TUF mandates them regardless of the flag).
 	root := metadata.Root(now.AddDate(2, 0, 0))
+	root.Signed.ConsistentSnapshot = false
 	for _, role := range []string{metadata.ROOT, metadata.TARGETS} {
 		if err := root.Signed.AddKey(keys["master"].Key, role); err != nil {
 			return fmt.Errorf("adding master key to root role %s: %w", role, err)
@@ -76,8 +82,11 @@ func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte
 	for _, ch := range channels {
 		kp := keys[ch.Name]
 		dlgKeys[kp.KeyID] = kp.Key
+		// Role name is namespaced `channels.<channel>` (spec/repository.md
+		// §2): the channel name is used verbatim in paths and _sig.channel,
+		// the role name (and its <role>.json metadata file) is prefixed.
 		dlgRoles = append(dlgRoles, metadata.DelegatedRole{
-			Name:        ch.Name,
+			Name:        "channels." + ch.Name,
 			KeyIDs:      []string{kp.KeyID},
 			Threshold:   1,
 			Terminating: true,
@@ -136,9 +145,10 @@ func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte
 		return fmt.Errorf("signing targets: %w", err)
 	}
 
-	// --- per-channel role metadata (<channel>.json): signed by the channel
-	// key; pins that channel's feed target (length + hashes + display
-	// metadata). Delegations are always empty — a channel is a leaf (§5).
+	// --- per-channel role metadata (channels.<name>.json): signed by the
+	// channel key; pins that channel's feed target (length + hashes +
+	// display metadata). Delegations are always empty — a channel is a leaf
+	// (spec/repository.md §2).
 	channelMeta := map[string]*metadata.Metadata[metadata.TargetsType]{}
 	for _, ch := range channels {
 		feedBytes := feeds[ch.Name]
@@ -182,7 +192,7 @@ func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte
 		if err != nil {
 			return err
 		}
-		metaFiles[ch.Name+".json"] = metaFilesFor(channelMeta[ch.Name].Signed.Version, b)
+		metaFiles["channels."+ch.Name+".json"] = metaFilesFor(channelMeta[ch.Name].Signed.Version, b)
 	}
 	snapshot := metadata.Snapshot(now.AddDate(0, 1, 0))
 	snapshot.Signed.Meta = metaFiles
@@ -199,24 +209,13 @@ func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte
 		return fmt.Errorf("signing timestamp: %w", err)
 	}
 
-	// --- write everything (consistent-snapshot naming: versioned + unversioned).
+	// --- write everything. consistent_snapshot: false — plain paths only.
+	// No root files in the repo base (spec/repository.md §1: root metadata is
+	// published exclusively at the well-known anchor).
 	write := func(name string, data []byte) error {
 		return os.WriteFile(filepath.Join(dir, name), data, 0o644)
 	}
-	rootBytes, err := root.ToBytes(true)
-	if err != nil {
-		return err
-	}
-	if err := write("root.json", rootBytes); err != nil {
-		return err
-	}
-	if err := write("1.root.json", rootBytes); err != nil {
-		return err
-	}
 	if err := write("targets.json", targetsBytes); err != nil {
-		return err
-	}
-	if err := write("1.targets.json", targetsBytes); err != nil {
 		return err
 	}
 	for _, ch := range channels {
@@ -224,17 +223,11 @@ func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte
 		if err != nil {
 			return err
 		}
-		if err := write(ch.Name+".json", b); err != nil {
-			return err
-		}
-		if err := write("1."+ch.Name+".json", b); err != nil {
+		if err := write("channels."+ch.Name+".json", b); err != nil {
 			return err
 		}
 	}
 	if err := write("snapshot.json", snapshotBytes); err != nil {
-		return err
-	}
-	if err := write("1.snapshot.json", snapshotBytes); err != nil {
 		return err
 	}
 	timestampBytes, err := timestamp.ToBytes(true)
@@ -244,10 +237,10 @@ func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte
 	if err := write("timestamp.json", timestampBytes); err != nil {
 		return err
 	}
-	// target files: canonical path + consistent-snapshot hash-prefixed copy
+	// target files: canonical path only (plain path serves TUF clients and
+	// generic JSON Feed readers from one file — spec/feeds.md §1.1)
 	for _, ch := range channels {
 		feedBytes := feeds[ch.Name]
-		sum := sha256.Sum256(feedBytes)
 		chDir := filepath.Join(dir, "channels", ch.Name)
 		if err := os.MkdirAll(chDir, 0o755); err != nil {
 			return err
@@ -255,12 +248,15 @@ func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte
 		if err := os.WriteFile(filepath.Join(chDir, "feed.json"), feedBytes, 0o644); err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(chDir, hex.EncodeToString(sum[:])+".feed.json"), feedBytes, 0o644); err != nil {
-			return err
-		}
 	}
 
-	// --- root anchor at the join origin's well-known space (PROTOCOL §2).
+	// --- root anchor at the join origin's well-known space (spec/core.md §3,
+	// spec/repository.md §1): root.json + every N.root.json — the only place
+	// root metadata is ever published.
+	rootBytes, err := root.ToBytes(true)
+	if err != nil {
+		return err
+	}
 	wk := filepath.Join(siteDir, ".well-known", "keryx")
 	if err := os.MkdirAll(wk, 0o755); err != nil {
 		return err
@@ -306,22 +302,11 @@ func metaFilesFor(version int64, data []byte) *metadata.MetaFiles {
 func verifyRepo(keys map[string]*keyPair, siteDir string) error {
 	dir := filepath.Join(siteDir, repoDir)
 
-	// root anchor (well-known) and repo-base root must be byte-identical
-	anchor, err := os.ReadFile(filepath.Join(siteDir, ".well-known", "keryx", "root.json"))
+	// root anchor: the ONLY source of root metadata — it lives at the
+	// well-known space, never in the repo base (spec/repository.md §1).
+	root, err := metadata.Root().FromFile(filepath.Join(siteDir, ".well-known", "keryx", "root.json"))
 	if err != nil {
-		return fmt.Errorf("loading well-known root anchor: %w", err)
-	}
-	baseRoot, err := os.ReadFile(filepath.Join(dir, "root.json"))
-	if err != nil {
-		return fmt.Errorf("loading repo base root.json: %w", err)
-	}
-	if !bytes.Equal(anchor, baseRoot) {
-		return fmt.Errorf("root anchor != repo base root.json")
-	}
-
-	root, err := metadata.Root().FromFile(filepath.Join(dir, "root.json"))
-	if err != nil {
-		return fmt.Errorf("loading root.json: %w", err)
+		return fmt.Errorf("loading root anchor: %w", err)
 	}
 	if err := root.VerifyDelegate(metadata.ROOT, root); err != nil {
 		return fmt.Errorf("root self-signature: %w", err)
@@ -335,6 +320,9 @@ func verifyRepo(keys map[string]*keyPair, siteDir string) error {
 		}
 	} else {
 		return fmt.Errorf("root.json: custom.repo_base missing")
+	}
+	if root.Signed.ConsistentSnapshot {
+		return fmt.Errorf("root.json: consistent_snapshot must be false (spec default)")
 	}
 
 	timestamp, err := metadata.Timestamp().FromFile(filepath.Join(dir, "timestamp.json"))
@@ -376,9 +364,9 @@ func verifyRepo(keys map[string]*keyPair, siteDir string) error {
 	}
 	editorMode, _ := targets.Signed.UnrecognizedFields["custom"].(map[string]any)["editor_mode"].(map[string]any)
 	for _, ch := range channels {
-		role := findRole(roles, ch.Name)
+		role := findRole(roles, "channels."+ch.Name)
 		if role == nil {
-			return fmt.Errorf("targets.json: missing delegation %q", ch.Name)
+			return fmt.Errorf("targets.json: missing delegation %q", "channels."+ch.Name)
 		}
 		if !role.Terminating {
 			return fmt.Errorf("delegation %q: terminating must be true", ch.Name)
@@ -419,7 +407,8 @@ func verifyRepo(keys map[string]*keyPair, siteDir string) error {
 	}
 
 	// per-channel role metadata: signed by the channel key, pinned by
-	// snapshot, pins the channel's feed target.
+	// snapshot, pins the channel's feed target. Files are named
+	// channels.<channel>.json (spec/repository.md §2).
 	type roleCheck struct {
 		meta *metadata.Metadata[metadata.TargetsType]
 		path string
@@ -427,29 +416,31 @@ func verifyRepo(keys map[string]*keyPair, siteDir string) error {
 	}
 	checks := map[string]roleCheck{}
 	for _, ch := range channels {
-		role, err := metadata.Targets().FromFile(filepath.Join(dir, ch.Name+".json"))
+		roleName := "channels." + ch.Name
+		role, err := metadata.Targets().FromFile(filepath.Join(dir, roleName+".json"))
 		if err != nil {
-			return fmt.Errorf("loading %s.json: %w", ch.Name, err)
+			return fmt.Errorf("loading %s.json: %w", roleName, err)
 		}
-		if err := targets.VerifyDelegate(ch.Name, role); err != nil {
-			return fmt.Errorf("%s signature (by delegated role): %w", ch.Name, err)
+		if err := targets.VerifyDelegate(roleName, role); err != nil {
+			return fmt.Errorf("%s signature (by delegated role): %w", roleName, err)
 		}
-		info := snapshot.Signed.Meta[ch.Name+".json"]
+		info := snapshot.Signed.Meta[roleName+".json"]
 		if info == nil {
-			return fmt.Errorf("snapshot: meta.%s.json missing", ch.Name)
+			return fmt.Errorf("snapshot: meta.%s.json missing", roleName)
 		}
 		if info.Version != role.Signed.Version {
-			return fmt.Errorf("snapshot references %s v%d, have v%d", ch.Name, info.Version, role.Signed.Version)
+			return fmt.Errorf("snapshot references %s v%d, have v%d", roleName, info.Version, role.Signed.Version)
 		}
 		path := channelFeedPath(ch.Name)
 		tf := role.Signed.Targets[path]
 		if tf == nil {
-			return fmt.Errorf("%s.json: missing target %q", ch.Name, path)
+			return fmt.Errorf("%s.json: missing target %q", roleName, path)
 		}
 		checks[ch.Name] = roleCheck{meta: role, path: path, info: tf}
 	}
 
-	// feed target bytes: length + sha256, consistent-snapshot copy identical
+	// feed target bytes: length + sha256 (plain path — consistent_snapshot
+	// is false, so exactly one copy serves TUF clients and generic readers)
 	for _, ch := range channels {
 		rc := checks[ch.Name]
 		feedBytes, err := os.ReadFile(filepath.Join(dir, rc.path))
@@ -462,13 +453,6 @@ func verifyRepo(keys map[string]*keyPair, siteDir string) error {
 		sum := sha256.Sum256(feedBytes)
 		if !bytes.Equal(sum[:], rc.info.Hashes["sha256"]) {
 			return fmt.Errorf("%s: feed sha256 mismatch", ch.Name)
-		}
-		hashCopy, err := os.ReadFile(filepath.Join(dir, rc.path, "..", hex.EncodeToString(sum[:])+".feed.json"))
-		if err != nil {
-			return fmt.Errorf("%s: consistent-snapshot feed copy: %w", ch.Name, err)
-		}
-		if !bytes.Equal(hashCopy, feedBytes) {
-			return fmt.Errorf("%s: consistent-snapshot feed copy differs from canonical feed.json", ch.Name)
 		}
 		fmt.Printf("  %s: %d bytes, sha256 %s\n", rc.path, len(feedBytes), hex.EncodeToString(sum[:]))
 

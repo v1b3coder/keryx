@@ -287,10 +287,9 @@ directory. All URLs point at <code>http://localhost:8000</code>; this demo is no
 published by Trezor.</p>
 <ul>
 <li><a href="join/">Pairing page (join/)</a> — <a href="join.png">QR code</a>, <a href="join.txt">join.txt</a></li>
-<li><a href=".well-known/keryx/root.json">.well-known/keryx/root.json</a> (root anchor on the join origin)</li>
-<li><a href="keryx/root.json">keryx/root.json</a> (repo base, same bytes)</li>
+<li><a href=".well-known/keryx/root.json">.well-known/keryx/root.json</a> (root anchor on the join origin; the ONLY root metadata source)</li>
 <li><a href="keryx/targets.json">keryx/targets.json</a> (channel authorization + editor mode + private patterns)</li>
-<li><a href="keryx/security.json">keryx/security.json</a> (channel role metadata pins channels/security/feed.json)</li>
+<li><a href="keryx/channels.security.json">keryx/channels.security.json</a> (channel role metadata pins channels/security/feed.json)</li>
 <li><a href="keryx/channels/security/feed.json">channels/security/feed.json</a> (signed public feed)</li>
 <li><a href="_sig/">_sig extension</a></li>
 <li><a href="blog/">Announcements</a></li>

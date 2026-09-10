@@ -75,15 +75,16 @@ func loadOrCreateKeys(dir string, names []string) (map[string]*keyPair, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Human-readable label on the key object (a TUF "unrecognized"
-		// field, ignored by clients). The keyid stays the normative SHA-256
-		// hash of the key — but because it hashes the whole key object, the
-		// label must be set BEFORE the keyid is computed.
-		tufKey.UnrecognizedFields = map[string]any{"name": name}
+		// keyid first: the TUF-standard keyid is the SHA-256 of the canonical
+		// key object {keytype, scheme, keyval} (spec/core.md §1) — go-tuf's
+		// Key.ID() hashes the whole object including unrecognized fields, so
+		// the human-readable label must be attached AFTER the keyid is
+		// computed (otherwise the keyid would be non-standard).
 		keyID, err := tufKey.ID()
 		if err != nil {
 			return nil, err
 		}
+		tufKey.UnrecognizedFields = map[string]any{"name": name}
 		keys[name] = &keyPair{
 			Name: name, Priv: priv, Pub: priv.Public().(ed25519.PublicKey),
 			Key: tufKey, KeyID: keyID,

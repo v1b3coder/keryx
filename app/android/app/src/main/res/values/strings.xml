@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Keryx</string>
+    <string name="title_activity_main">Keryx</string>
+    <string name="package_name">cz.v1b3coder.keryx</string>
+    <string name="custom_url_scheme">cz.v1b3coder.keryx</string>
+</resources>
