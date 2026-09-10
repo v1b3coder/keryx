@@ -21,9 +21,17 @@ export default function App() {
   const { companies, loaded } = useApp();
   const [view, setView] = useState<View>({ t: 'start' });
 
-  // initial routing: single company → straight to it; none → start; else contacts
+  // initial routing: single company → straight to it; none → start; else contacts.
+  // Also re-routes when the open company disappears (e.g. after Remove company).
   useEffect(() => {
     if (!loaded) return;
+    if (view.t === 'company' && !companies.some((c) => c.origin === view.origin)) {
+      // the company on screen was removed → route like a fresh load
+      if (companies.length === 1) setView({ t: 'company', origin: companies[0].origin });
+      else if (companies.length > 1) setView({ t: 'contacts' });
+      else setView({ t: 'start' });
+      return;
+    }
     if (view.t !== 'start' && view.t !== 'contacts') return;
     if (companies.length === 1) {
       setView({ t: 'company', origin: companies[0].origin });
@@ -32,7 +40,7 @@ export default function App() {
     } else {
       setView({ t: 'start' });
     }
-  }, [loaded, companies.length]);
+  }, [loaded, companies]);
 
   if (!loaded) {
     return (
@@ -104,7 +112,7 @@ function CompanyRoute({
     let alive = true;
     void (async () => {
       const c = await getCompany(origin);
-      if (alive && c) setCompany(c);
+      if (alive) setCompany(c ?? null);
       const list = await getItems(origin);
       if (alive) setCompanyItems(list);
     })();
