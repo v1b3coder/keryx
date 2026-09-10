@@ -6,11 +6,8 @@ the Keryx system: the **relay**, the single active server that delivers
 specification in [`../spec/`](../spec/core.md); the protocol treats push as
 an optional, provider-agnostic optimization
 ([`../design/why.md` §4.10](../design/why.md)). Wire identifiers are
-codename-neutral per [`../spec/core.md` §1.1](../spec/core.md).
-
-Companion reasoning: [`../NOTES.md`](../NOTES.md) (push topic — capability
-topics, iOS paths, registration, PWA/WebPush, prior art). Working title:
-**relay** (placeholder).
+codename-neutral per [`../spec/core.md` §1.1](../spec/core.md). Working
+title: **relay** (placeholder).
 
 ---
 
@@ -28,25 +25,32 @@ user devices over three delivery legs:
 | **WebPush** | PWA (browsers) | 1:1 send per stored subscription | SQLite (registration ↔ followed topics) |
 | **ntfy topics** | de-Googled Android (Keryx app as its own ntfy client) | one publish per topic; app subscribes client-side | **none** |
 
+All three legs are first-class: the PWA is the reference client today, and
+native apps are expected — the relay does not distinguish between them.
+
 (UnifiedPush — the endpoint-based app standard — was considered and
 rejected at this stage; see §6.3.)
 
 **Hard rules:**
 
-1. **The relay carries no content. Ever.** A wake-up payload contains only
-   opaque identifiers and counters. **Identifiers are not content:** a
-   wake-up may name *which* company/channel/order to refresh, never what a
-   message says (no title, body, status, amount, URL). Placement is
-   leg-dependent — on **topic-based legs** (FCM, ntfy topics) the
-   identifier travels in the **topic itself** (the device already
-   subscribed to it; the payload can be nearly empty); on **registry
-   legs** (WebPush) no topic exists at delivery, so the payload MUST carry
-   the **topic string** (§4) and the device maps it to the followed
-   company/channel/order locally. This is what bounds the relay's power:
-   a fully malicious or compromised relay can only **spam or withhold
-   wake-up signals** — it cannot forge a message (the app fetches and
-   verifies content through the TUF/thread path), cannot read anything
-   (content never transits), and cannot impersonate a publisher.
+1. **The relay carries no content. Ever.** A wake-up request contains only
+   an opaque **source hash** (§3) and counters. **Identifiers are not
+   content:** a wake-up may name *which* company/channel/order to refresh,
+   never what a message says (no title, body, status, amount, URL). The
+   relay never sees the underlying identity at all — the caller submits
+   only the source hash, from which the relay derives the delivery topic;
+   on **topic-based legs** (FCM, ntfy topics) the identifier travels in the
+   **topic itself** (the device already subscribed to it; the payload can
+   be nearly empty); on **registry legs** (WebPush) no topic exists at
+   delivery, so the payload MUST carry the **topic string** (§4) and the
+   device maps it to the followed company/channel/order locally. This is
+   what bounds the relay's power: a fully malicious or compromised relay
+   can only **spam or withhold wake-up signals** — it cannot forge a
+   message (the app fetches and verifies content through the TUF/thread
+   path), cannot read anything (content never transits; order capability
+   tokens never transit — only their hash), cannot learn which
+   company/channel/order a wake-up is for (only opaque hashes), and cannot
+   impersonate a publisher.
 2. **Best-effort delivery.** All three providers are best-effort; the relay
    provides no acknowledgement to the app, and the app reconciles by
    fetching and verifying on wake-up. A missed wake-up costs latency, never
@@ -60,7 +64,8 @@ rejected at this stage; see §6.3.)
 **Out of scope:** content delivery (CDN/TUF), the protocol itself, company
 registration/directory, per-company Firebase projects (impossible in one
 app binary — one shared project), iOS direct-APNs delivery (native iOS goes
-through FCM topics), and the order-thread content sync (the app's job).
+through FCM topics), the order-thread content sync (the app's job), and how
+the app discovers or uses wake-ups (the app's contract).
 
 ---
 
@@ -68,39 +73,60 @@ through FCM topics), and the order-thread content sync (the app's job).
 
 | Term | Meaning |
 |---|---|
-| **topic** | A string naming a fan-out channel. Derived, never chosen freely. See §3. |
-| **registration** | A delivery address on a registry leg, stored in SQLite: a WebPush `PushSubscription` (`endpoint` + `keys`). (A UnifiedPush endpoint would register the same way — rejected at this stage, §6.3.) |
-| **publisher** | A company (or a company's department/partner engine) with an API key. Recorded in SQLite with its allowed company origin(s) and delivery configuration. |
+| **topic** | A string naming a fan-out channel. Derived per §3 from the source hash — by the relay (publish) and by the app (subscription); never chosen freely. See §3. |
+| **source hash** | The opaque identifier a caller submits on every wake-up: `sha256` over the derivation input (`company_id` + `channel`, or `order_token`). The relay never sees the input itself. See §3. |
+| **registration** | A delivery address on a registry leg, stored in SQLite: a WebPush `PushSubscription` (`endpoint` + `keys`). |
+| **publisher** | A company (or a company's department/partner engine) with an API key. Recorded in SQLite with the company origin it serves (informational) and its rate limit. |
 | **wake-up** | A data-only push message, never content. |
-| **company_id** | The canonical join origin: lowercase ASCII origin, punycode for IDNs, no scheme, no trailing slash (e.g. `company.example`). This is the same value the user confirms at pairing. |
+| **company_id** | The canonical join origin: lowercase ASCII host, punycode for IDNs, no scheme, no port, no trailing slash (e.g. `company.example`), i.e. the confirmed origin after the single canonical redirect (http→https, www→apex) per [`../spec/core.md` §1.2](../spec/core.md). This is the same value the user confirms at pairing. |
 
 ---
 
-## 3. Topic Derivation (normative for app and relay)
+## 3. Topic Derivation (normative for app, relay, and caller tooling)
 
 Topics MUST be derived deterministically so the app (which subscribes
-client-side) and the relay (which publishes) agree without any exchange:
+client-side) and the relay (which publishes) agree without any exchange.
+Derivation is **two-stage**:
 
 ```
-broadcast:  n-b-<sha256hex("b|" + company_id + "|" + channel)>
-order:      n-o-<sha256hex("o|" + order_token)>
+h = sha256hex("b|" + company_id + "|" + channel)      // channel wake-up
+h = sha256hex("o|" + order_token)                     // order wake-up
+
+topic = "n-b-" + base64url_nopad(sha256("keryx/relay/v1|" + h))
+topic = "n-o-" + base64url_nopad(sha256("keryx/relay/v1|" + h))
 ```
 
 - `sha256hex` = lowercase hex of SHA-256 over the UTF-8 bytes of the string.
+- `base64url_nopad` = RFC 4648 §5 base64url **without padding** (43 chars
+  for 32 bytes).
+- `h` is the **source hash** — what callers submit and the app computes
+  from its own knowledge. The relay derives the topic from `h` and never
+  sees the derivation input.
 - `channel` = the bare channel name (`[a-z0-9-_]+`, per
   [`../spec/repository.md` §2](../spec/repository.md)).
 - `order_token` = the 128-bit base64url capability token (22 chars, no
   padding) from the join QR payload ([`../spec/core.md` §3](../spec/core.md)).
-- Output is 66 chars (`n-b-` / `n-o-` + 64 hex). Lowercase hex is valid in
-  both FCM topic names and ntfy topic names (no provider-specific escaping).
+- `"keryx/relay/v1|"` is a **static, public salt** (domain separator): it
+  keeps the topic distinct from `h` itself and from other SHA-256 uses in
+  the protocol. It is not secret.
+- Output is 47 chars (`n-b-` / `n-o-` + 43). Base64url (RFC 4648 §5
+  alphanumerics, `-`, `_`) is valid in both FCM topic names
+  (`[a-zA-Z0-9-_.~%]`) and ntfy topic names (`[-_A-Za-z0-9]`, ≤ 64 chars) —
+  no provider-specific escaping.
 - The domain separator (`b|` / `o|`) prevents cross-type collisions; the
   `n-` prefix namespaces the relay's topics on shared providers (e.g. a
   self-hosted ntfy server used by several apps).
 
-The relay MUST NOT accept raw topic names from callers — it derives them
-from `company_id`/`channel`/`order_token` and validates against the
-publisher record. The app derives them from the same inputs (from
-master-signed metadata and the QR payload).
+**Why two-stage:** callers (publisher tooling, order engine) know the
+derivation input; the app knows it too; the relay knows neither. The caller
+sends only `h`; the relay (and the delivery providers, which see only the
+topic) never learn the company, channel, or order token — `sha256` is
+one-way and the order token is 128-bit unguessable, so neither `h` nor the
+topic reveals it.
+
+The relay MUST NOT accept raw topic names or raw derivation inputs from
+callers — it derives the topic from `h` (§5.1). Callers MUST NOT submit the
+derivation input (`company_id`/`channel`/`order_token`) — only `h`.
 
 ---
 
@@ -115,23 +141,25 @@ A single JSON object. **What it carries depends on the leg** (§1):
 
 ```json
 // FCM data (native) — identity comes from the message's topic
-{ "v": 1, "n": 3 }          // broadcast
-{ "v": 1, "seq": 7 }        // order
+{ "v": 1, "n": 3 }          // channel wake-up
+{ "v": 1, "seq": 7 }        // order wake-up
 
 // WebPush payload — no topic at delivery, so carry it
-{ "v": 1, "t": "n-b-<64 hex>", "n": 3 }
-{ "v": 1, "t": "n-o-<64 hex>", "seq": 7 }
+{ "v": 1, "t": "n-b-<43 chars>", "n": 3 }
+{ "v": 1, "t": "n-o-<43 chars>", "seq": 7 }
 ```
 
 - `v` — schema version (1). Unknown versions: drop the wake-up.
 - `t` — the derived topic string (§3). The app maps `t` to its locally
   followed company/channel or order. Only registry legs carry `t`; on
-  topic-based legs the app learns the topic from the delivery itself (FCM
-  exposes it as `from` = `/topics/<topic>`; ntfy exposes it in the
-  message).
+  topic-based legs the app knows the topic from its own subscription state
+  (and on Android, FCM also exposes it as `from` = `/topics/<topic>` —
+  an implementation aid, not a requirement).
 - `n` — unread counter hint (optional; informational only).
 - `seq` — monotonic per order (optional gap hint, not a delivery
-  guarantee).
+  guarantee). Useful for debugging and missed-wake-up detection. (Unrelated
+  to the `_sig.seq` dropped from the feed format —
+  [`../design/why.md` §8](../design/why.md).)
 - Nothing else. In particular: no title, no body, no URL, no company name,
   no status text, no raw order token.
 
@@ -153,9 +181,9 @@ Request:
 ```json
 {
   "v": 1,
-  "company": "company.example",
-  "channel": "marketing",
-  "unread": 3
+  "kind": "channel",
+  "h": "<43-char base64url>",
+  "n": 3
 }
 ```
 
@@ -164,14 +192,19 @@ or, for an order thread:
 ```json
 {
   "v": 1,
-  "company": "eshop.example",
-  "order_token": "<22-char base64url>",
+  "kind": "order",
+  "h": "<43-char base64url>",
   "seq": 7
 }
 ```
 
-Exactly one of `channel` / `order_token` MUST be present. `company` MUST
-match an origin the API key is authorized for (publisher record).
+- `kind` — `"channel"` or `"order"`; selects the topic prefix (`n-b-` /
+  `n-o-`) and which counter applies.
+- `h` — the source hash (§3): `sha256hex("b|" + company_id + "|" + channel)`
+  for channels, `sha256hex("o|" + order_token)` for orders. The caller
+  computes it; the relay never sees the input. MUST be exactly 43 chars of
+  base64url (32 bytes).
+- `n` / `seq` — optional counters, forwarded to the payload (§4).
 
 Response `200 OK` (synchronous fan-out, concurrent across providers):
 
@@ -183,8 +216,8 @@ Response `200 OK` (synchronous fan-out, concurrent across providers):
 }
 ```
 
-- `fcm`/`ntfy` are `1` if the provider is enabled for this publisher and
-  the publish was accepted (a topic with zero subscribers still counts as
+- `fcm`/`ntfy` are `1` if the leg is enabled in the relay config and the
+  publish was accepted (a topic with zero subscribers still counts as
   dispatched — FCM/ntfy do not error on empty topics).
 - `webpush`: `sent` = registrations for this topic the provider accepted;
   `failed` = transient errors (retried, then counted); `removed` =
@@ -192,11 +225,18 @@ Response `200 OK` (synchronous fan-out, concurrent across providers):
 - `202 Accepted` MAY be returned when the relay is under load; the request
   is then queued (implementation detail — ordering between the response and
   delivery is not part of the contract).
-- Errors: `401` bad/unknown key; `403` key not authorized for `company`;
-  `400` schema violation; `429` rate limit (see §5.3).
+- Errors: `401` bad/unknown key; `400` schema violation (bad `kind`, `h`
+  not 43-char base64url, both or neither counter present); `429` rate limit
+  (see §5.3).
 
 Duplicate wake-ups are harmless (the app diffs content anyway); no
 idempotency key is required.
+
+Authorization is key-level: the relay cannot check that `h` belongs to the
+publisher's company (it never sees the input). A valid key can therefore
+publish a wake-up for any topic whose source hash it knows; public-channel
+source hashes are derivable by anyone, so a compromised key can spam other
+companies' wake-ups — bounded by per-publisher rate limits (§9).
 
 ### 5.2 Registration API (WebPush)
 
@@ -209,7 +249,6 @@ mappings in SQLite.
 | `POST /v1/registrations` | `{ "endpoint": "https://…", "keys": { "p256dh": "…", "auth": "…" }, "topics": ["n-b-…", …] }` | Register (or replace by `endpoint`). Returns `{ "id": "<uuid>" }`. |
 | `PUT /v1/registrations/{id}` | `{ "topics": [ … ] }` | Replace the followed-topic set (called on follow/unfollow). |
 | `DELETE /v1/registrations/{id}` | — | Remove (company deletion / uninstall). |
-| `GET /v1/registrations/{id}` | — | Exists check (debug). |
 
 - `endpoint` MUST be an `https://` URL; the relay never fetches it itself.
 - Rate-limited and throttled by IP; optionally gated by a shared app secret
@@ -217,13 +256,11 @@ mappings in SQLite.
   an open registration endpoint is a spam surface, so the app key SHOULD
   be configured.
 - `topics` are derived per §3; the relay accepts only `n-b-`/`n-o-` topics
-  and MAY ignore unknown prefixes.
+  (47 chars) and rejects others.
 - **Why the payload still needs `t` (§4):** the registration knows *which*
   topics it follows, but a delivered message carries no topic — so the
   wake-up payload must name it. The registry makes delivery *possible*;
   the payload makes it *legible*.
-- (If a UnifiedPush leg is ever adopted despite §6.3, this API covers it
-  unchanged — a per-instance endpoint registers the same way.)
 
 ### 5.3 Limits
 
@@ -237,18 +274,23 @@ subscription registration by IP.
 
 ### 6.1 FCM (native Android + iOS)
 
-- **Config:** one shared Firebase project (the app's project; per
-  [`../NOTES.md`](../NOTES.md): one app binary = one Firebase project).
-  Service account JSON path in relay config. OAuth2 access token fetched
-  from `https://oauth2.googleapis.com/token` and cached until ~5 min
-  before expiry.
+- **Config:** one shared Firebase project (the app's project — one app
+  binary = one Firebase project). Service account JSON path in relay
+  config. OAuth2 access token fetched from
+  `https://oauth2.googleapis.com/token` and cached until ~5 min before
+  expiry.
 - **Publish:** `POST https://fcm.googleapis.com/v1/projects/<project>/messages:send`
   with `{ "message": { "topic": "<derived>", "data": { <wake-up fields> },
   "android": { "priority": "high" } } }`. Field values in `data` are
   strings; the app parses JSON from a single field or individual fields
   (implementation choice — both are valid; the schema is §4).
 - **iOS:** topics work through the Firebase SDK (FCM → APNs proxy); no
-  separate APNs handling at the relay.
+  separate APNs handling at the relay. Honest caveat: data-only messages
+  arrive on iOS as **silent pushes** — Apple may throttle or defer them,
+  they never display a notification by themselves (the app must surface one
+  after fetching), and delivery when the app is terminated is not
+  guaranteed. Wake-ups on iOS are best-effort; background fetch is the
+  backstop (§1, hard rule 2).
 - **Errors:** `401/403` (credentials) → alarm; `429` → back off; `404`/
   `INVALID_ARGUMENT` on a topic → log and count as dispatched (empty topic
   is not an error). Transient errors retried with exponential backoff
@@ -279,15 +321,14 @@ subscription registration by IP.
 same shape as FCM. The Keryx app embeds an ntfy client and subscribes to
 the `n-b-`/`n-o-` topics itself; the relay publishes once per topic.
 
-- **Config:** per publisher, an optional `ntfy_base` (e.g.
-  `https://ntfy.acme.example` or the public `https://ntfy.sh`); absent =
-  leg disabled for that publisher. The app subscribes to
-  `<ntfy_base>/<topic>`; the base comes from `custom.push` metadata, so a
-  publisher self-hosting gets its own server and its own topic
-  namespace.
+- **Config:** a **single global** ntfy base in relay config (e.g. the
+  operator's own ntfy server, or `https://ntfy.sh` as default); absent =
+  leg disabled. No per-publisher custom URLs in v1 — a per-publisher ntfy
+  base is a future extension. The app ships with the same base (the app
+  publisher operates the relay); how the app is told of it is the app's
+  contract, not the relay's.
 - **Publish:** `POST <ntfy_base>/<topic>` with the §4 payload as the JSON
-  body. A per-publisher `Authorization: Bearer <ntfy key>` MAY be
-  configured for protected servers. Errors: `4xx` → log/count;
+  body. No per-publisher credentials. Errors: `4xx` → log/count;
   `5xx`/timeout → retry with backoff.
 - **Accepted trade:** the app holds the connection itself (foreground
   service; battery; Android 15+ `remoteMessaging` foreground-service
@@ -314,13 +355,11 @@ WAL mode, single file. Schema:
 ```sql
 CREATE TABLE publishers (
   id            INTEGER PRIMARY KEY,
-  api_key_hash  TEXT NOT NULL UNIQUE,      -- sha256hex of the key
+  api_key_hash  TEXT NOT NULL UNIQUE,      -- sha256hex of the key (shown once)
   name          TEXT NOT NULL,
-  company_id    TEXT NOT NULL,             -- canonical join origin
-  fcm_enabled   INTEGER NOT NULL DEFAULT 1,
-  ntfy_base     TEXT,                      -- NULL = disabled
-  ntfy_key      TEXT,                      -- optional write key
-  webpush_enabled INTEGER NOT NULL DEFAULT 1,
+  company_id    TEXT NOT NULL,             -- company origin the key is issued
+                                           --  for (informational; not checked
+                                           --  per request — §5.1)
   rate_per_min  INTEGER NOT NULL DEFAULT 60,
   created_at    TEXT NOT NULL
 );
@@ -344,7 +383,7 @@ CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
 
 CREATE TABLE event_log (
   id          INTEGER PRIMARY KEY,
-  publisher   TEXT NOT NULL,
+  publisher_id INTEGER NOT NULL,           -- publishers.id; rows outlive the record
   kind        TEXT NOT NULL,               -- channel | order
   topic       TEXT NOT NULL,
   fcm         INTEGER, ntfy INTEGER,
@@ -364,16 +403,15 @@ CREATE TABLE event_log (
 
 - **Single binary** (Go, matching the publisher tooling stack), static
   config via flags/env: listen address, SQLite path, service-account JSON
-  path, VAPID keys (or key file), VAPID `sub` contact, default ntfy base,
+  path, VAPID keys (or key file), VAPID `sub` contact, global ntfy base,
   TTLs, concurrency caps, rate limits, event-log retention.
 - **Provisioning:** a subcommand (`relayctl`-style, or `relay
   publishers add --name … --company company.example`) issues the API key
-  (shown once), creates the publisher record, and (optionally) configures
-  `ntfy_base`/`ntfy_key`.
+  (shown once) and creates the publisher record.
 - **Secrets** (highest to lowest sensitivity): FCM service account (can
   publish to every topic in the app's project), VAPID private key (can send
   to every registered PWA subscription), API keys (per publisher, hashed at
-  rest), ntfy keys. All in secret storage; never in the DB or logs.
+  rest). All in secret storage; never in the DB or logs.
 - **Scale:** one instance; SQLite WAL supports the fan-out volume. If a
   queue is needed later, `event_log` is the natural replay source; no
   protocol change.
@@ -386,16 +424,26 @@ CREATE TABLE event_log (
 
 | What the relay knows | What it never learns |
 |---|---|
-| publisher identity (API key → company origin) | user identity, email, phone |
+| publisher identity (API key → publisher record) | user identity, email, phone |
 | PWA device ↔ topic mapping (registration registry, targeted model) | device ↔ topic mapping on topic legs (FCM, ntfy — anonymous) |
-| opaque topic hashes, wake-up volume/timing | content, message text, order data |
-| WebPush payloads (it encrypts them — server-side only) | anything the app fetches afterwards |
+| opaque source hashes and topic hashes, wake-up volume/timing | company, channel, order identity (inputs never transit) |
+| WebPush payloads (it encrypts them — server-side only) | order capability tokens (only their SHA-256), content, anything the app fetches afterwards |
 
 - **Bounded power (the load-bearing property):** the relay can spam or
   withhold wake-ups. It cannot forge, alter, or read content — the
-  protocol's content-side verification is the only trust-bearing step. This
-  is why centralizing wake-ups in one shared server is acceptable, and it
-  is the reason the relay must never be asked to carry content.
+  protocol's content-side verification is the only trust-bearing step —
+  and it cannot learn *which* company/channel/order a wake-up concerns
+  (opaque hashes only). This is why centralizing wake-ups in one shared
+  server is acceptable, and it is the reason the relay must never be asked
+  to carry content.
+- **Residual (accepted):** authorization is key-level, not
+  company-level (§5.1) — a compromised publisher key can publish wake-ups
+  for any topic whose source hash it knows, including other companies'
+  public channels (source hashes of public channels are publicly
+  derivable). Impact is limited to spurious wake-ups (spam), never content,
+  and is bounded by per-publisher rate limits. If per-company binding is
+  ever required, it needs a different design (e.g. keyed salts) — out of
+  scope for v1.
 - **WebPush targeted model:** the relay holds device ↔ company mapping for
   PWA registrations (unavoidable — WebPush is per-instance). This is the
   same linkage class accepted for APNs/FCM in
@@ -405,9 +453,9 @@ CREATE TABLE event_log (
   mapping out of the relay at the cost of waking all registered devices
   per publish — recorded here as the privacy-preserving fallback; the
   targeted model is the default.
-- **Logging:** topic names and hashes only; `event_log` never logs order
-  tokens or payloads. Access to the relay's DB is a privacy incident by
-  itself (PWA registry) — treat as sensitive.
+- **Logging:** source hashes and topic names only; `event_log` never logs
+  order tokens or payloads. Access to the relay's DB is a privacy incident
+  by itself (PWA registry) — treat as sensitive.
 - **Abuse:** per-publisher rate limits, per-IP subscription throttling,
   endpoint validation, VAPID `sub` contact for provider abuse contact.
 
@@ -416,38 +464,30 @@ CREATE TABLE event_log (
 ## 10. Integration with the Protocol
 
 - Publisher tooling (`pub`) gains a `push` step: after `publish`/order
-  event, call `POST /v1/publish` (idempotent in effect; failures are
-  non-fatal — content sync covers it).
-- `custom.push` in master-signed metadata
-  ([`../NOTES.md`](../NOTES.md)) selects the provider for a company:
-  `{ "provider": "relay" }` (default for the app), `{ "provider": "ntfy",
-  "base": … }`, or `{ "provider": "none" }`. The app reads it after chain
-  verification and subscribes accordingly; the publisher tooling uses the
-  same config to know whether to call the relay or its own ntfy.
-- The relay corresponds to `provider: "relay"` only. A publisher that
-  prefers zero third parties runs its own ntfy and never calls the relay.
+  event, compute the source hash (§3) and call `POST /v1/publish`
+  (idempotent in effect; failures are non-fatal — content sync covers it).
+- The wake-up is an optimization: publishers that don't want the relay
+  simply don't call it. How the app learns whether to expect wake-ups is
+  the app's contract, not the relay's.
 
 ---
 
 ## 11. Open Questions
 
-1. **Topic derivation finalization** — hash inputs, prefix (`n-b-`/`n-o-`),
-   hex vs base64url; must be frozen before printed QRs ship, and must match
-   app + relay + (for order topics) the publisher's order engine.
-2. **Targeted vs pure (WebPush)** — default is targeted (efficient); is
+1. **Targeted vs pure (WebPush)** — default is targeted (efficient); is
    the device↔company mapping at the relay acceptable long-term, or does
    the protocol's zero-state stance require the pure variant (send every
    wake-up to every registration, filter locally) or a config switch?
-3. **Shared-topic ntfy (bare ntfy app)** — is the generic "New message"
+2. **Shared-topic ntfy (bare ntfy app)** — is the generic "New message"
    display path (no Keryx integration) in v1 at all, and do order topics
    on it need read/write keys or just unguessable names?
-4. **TTLs** — WebPush default 1 h; FCM/ntfy default (FCM stores up to 4
+3. **TTLs** — WebPush default 1 h; FCM/ntfy default (FCM stores up to 4
    weeks; ntfy ephemeral unless configured). What cadence matches the
    protocol's freshness model?
-5. **Order wake-ups through the relay** — the relay is publisher-facing;
-   do order events go through the same `/v1/publish` (they have no
-   publisher tooling, they come from the order engine)? Confirm the engine
-   gets an API key too, or a separate `/v1/publish-order` endpoint with
-   tighter limits.
-6. **Relay identity** — who operates it (the app publisher), and what
+4. **Order wake-ups through the relay** — the relay is publisher-facing;
+   do order events go through the same `/v1/publish` (`kind: "order"`, they
+   have no publisher tooling, they come from the order engine)? Confirm the
+   engine gets its own publisher record/API key, possibly with tighter
+   limits.
+5. **Relay identity** — who operates it (the app publisher), and what
    governance applies if more than one app ships against it?
