@@ -65,8 +65,9 @@ Run it:
 cd app && npm install && npm run dev   # web client at http://localhost:5173
 ```
 
-Then paste the join URL from `demo/join.txt` into the client (or scan
-`demo/join.png`).
+Then paste the join URL from `demo/join.txt` into the client (or open
+the pairing page `demo/join/` and scan the QR code it renders from that
+URL).
 
 Regenerate the demo:
 

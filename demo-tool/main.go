@@ -2,17 +2,15 @@ package main
 
 import (
 	"crypto/rand"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"html"
-	"image/color"
 	"os"
 	"path/filepath"
 	"strings"
-
-	qrcode "github.com/skip2/go-qrcode"
 )
 
 func main() {
@@ -46,7 +44,7 @@ func buildAll(keys map[string]*keyPair, site string) error {
 	fmt.Println("== building TUF repository ==")
 	// stale artifacts from older layouts are removed so the repo is
 	// self-contained and matches the current protocol exactly.
-	for _, stale := range []string{".well-known", "beacon", "keryx"} {
+	for _, stale := range []string{".well-known", "beacon", "keryx", "join.png"} {
 		if err := os.RemoveAll(filepath.Join(site, stale)); err != nil {
 			return err
 		}
@@ -130,9 +128,7 @@ func buildAll(keys map[string]*keyPair, site string) error {
 	if err := os.WriteFile(filepath.Join(site, "join.txt"), []byte(joinURL+"\n"), 0o644); err != nil {
 		return err
 	}
-	if err := qrcode.WriteColorFile(joinURL, qrcode.Medium, 512, color.Black, color.White, filepath.Join(site, "join.png")); err != nil {
-		return err
-	}
+	// no static QR: the join page renders one client-side from the URL payload
 	if err := os.MkdirAll(filepath.Join(site, "join"), 0o755); err != nil {
 		return err
 	}
@@ -178,12 +174,23 @@ func copyDir(src, dst string) error {
 	return nil
 }
 
+// qrLib is the vendored QR code generator (MIT, kazuhikoarase/qrcode-generator,
+// qrcode-generator@1.4.4 minified). It is inlined into the join page so the
+// page stays fully self-contained: no third-party request, works offline.
+//
+//go:embed assets/qrcode.min.js
+var qrLib string
+
 // joinPage is the PROTOCOL §2 fallback page served at /join (shown when
 // the Keryx app is not installed). It renders the payload contents; per
 // §2/§10 it sets Referrer-Policy: no-referrer (the capability token travels
-// in ?p=) and includes no third-party resources.
+// in ?p=) and includes no third-party resources. The QR code is generated
+// client-side (inlined generator) from the page's own URL (?p= payload),
+// falling back to the canonical join URL when opened without one.
 func joinPage(payload map[string]any, joinURL string) string {
 	pretty, _ := json.MarshalIndent(payload, "", "  ")
+	joinURLJSON, _ := json.Marshal(joinURL)
+	joinURLJS := string(joinURLJSON)
 	channels := []string{}
 	if cs, ok := payload["channels"].([]string); ok {
 		channels = cs
@@ -204,6 +211,40 @@ app installed, the URL above would be handed to it and pairing would
 continue there. The root anchor is derived from this page's origin
 (<code>/.well-known/keryx/root.json</code>) — there is no metadata URL in
 the payload.</p>
+<h2>Join QR code</h2>
+<p>Scan this code with the Keryx app to pair and subscribe. It is generated
+from this page's own URL, so it always carries the join payload you opened.</p>
+<div id="join-qr"></div>
+<p id="join-qr-note" hidden>This page was opened without a join payload — the
+code below shows the canonical join link instead.</p>
+<script>
+`)
+	b.WriteString(qrLib)
+	b.WriteString(`
+(function () {
+  var url = window.location.href;
+  if (url.indexOf('p=') === -1) {
+    url = ` + joinURLJS + `;
+    document.getElementById('join-qr-note').hidden = false;
+  }
+  var qr = qrcode(0, 'M');
+  qr.addData(url);
+  qr.make();
+  var n = qr.getModuleCount(), s = 8;
+  var c = document.createElement('canvas');
+  c.width = c.height = n * s;
+  c.style.maxWidth = '100%';
+  c.style.height = 'auto';
+  var ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.fillStyle = '#000';
+  for (var r = 0; r < n; r++)
+    for (var col = 0; col < n; col++)
+      if (qr.isDark(r, col)) ctx.fillRect(col * s, r * s, s, s);
+  document.getElementById('join-qr').appendChild(c);
+})();
+</script>
 <h2>Join payload</h2>
 <pre style="background:#f4f4f4;padding:1rem;overflow-x:auto">`)
 	b.WriteString(html.EscapeString(string(pretty)))
@@ -283,10 +324,11 @@ readers ignore the extension; the Keryx app enforces it.</p>
 <body style="font-family:sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem">
 <h1>Keryx protocol — local demo</h1>
 <p>Demonstration of a signed company-to-user broadcast channel, served from this
-directory. All URLs point at <code>http://localhost:8000</code>; this demo is not
+directory. All URLs point at <code>http://10.110.147.178:8000</code>; this demo is not
 published by Trezor.</p>
 <ul>
-<li><a href="join/">Pairing page (join/)</a> — <a href="join.png">QR code</a>, <a href="join.txt">join.txt</a></li>
+<li><a href="join/">Pairing page (join/)</a> — QR code rendered on the page
+(not a static file; generated from the URL payload), <a href="join.txt">join.txt</a></li>
 <li><a href=".well-known/keryx/root.json">.well-known/keryx/root.json</a> (root anchor on the join origin; the ONLY root metadata source)</li>
 <li><a href="keryx/targets.json">keryx/targets.json</a> (channel authorization + editor mode + private patterns)</li>
 <li><a href="keryx/channels.security.json">keryx/channels.security.json</a> (channel role metadata pins channels/security/feed.json)</li>
