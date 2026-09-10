@@ -123,9 +123,19 @@ describe('join payload (spec/core.md §3)', () => {
 
   it('rejects malformed input', () => {
     expect(() => parseJoinUrl('not a url')).toThrow();
-    expect(() => parseJoinUrl(`${origin}/join`)).toThrow();
     expect(() => parseJoinUrl(`${origin}/join?p=%%%`)).toThrow();
     expect(() => parseJoinUrl('ftp://x/join?p=eyJ2IjoxfQ')).toThrow();
+    expect(() => parseJoinUrl(`${origin}/blog/hello.html`)).toThrow();
+    expect(() => parseJoinUrl(`${origin}/join?p=`)).toThrow();
+  });
+
+  it('accepts a payload-less join (spec: public channels only)', () => {
+    const expected = { v: 1, channels: [], privateFeeds: [] };
+    for (const url of [`${origin}/join`, `${origin}/join/`, origin, `${origin}/`]) {
+      const parsed = parseJoinUrl(url);
+      expect(parsed.origin).toBe(origin);
+      expect(parsed.payload).toEqual(expected);
+    }
   });
 
   it('filters invalid channel names out of the payload (spec: [a-z0-9-_]+)', () => {

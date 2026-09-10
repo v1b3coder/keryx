@@ -282,7 +282,11 @@ change — must pass through the origin's admin-controlled space. We accept the
 TOFU residual: at pairing time, origin control alone suffices — mitigated by
 QR placement on company-controlled surfaces ([`threats.md`](threats.md)). We
 also accept one canonical redirect (http→https, www→apex); cross-origin
-redirects stay blocked.
+redirects stay blocked. The payload itself is optional: with no `?p=` the app
+still pairs and offers the publisher's public channels (the payload carries
+only *preselects* and capability URLs, never trust), so a company with
+nothing private can be joined by domain alone — see
+[`core.md` §3](../spec/core.md#3-join-url-and-qr-payload).
 
 ### 4.7 Binary trust, no user judgment
 

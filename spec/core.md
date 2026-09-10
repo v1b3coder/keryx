@@ -179,6 +179,9 @@ Android App Links:
 https://company.example/join?p=<base64url(payload)>
 ```
 
+The payload is optional: `https://company.example/join` without `p` is a
+valid join URL (payload-less join, below).
+
 **Payload** (JSON, base64url without padding):
 
 ```json
@@ -189,6 +192,17 @@ https://company.example/join?p=<base64url(payload)>
 }
 ```
 
+- **Payload-less join (normative).** `p` MAY be omitted. `https://<origin>/join`
+  without `p` is a valid join URL whose payload is `{"v":1,"channels":[],
+  "private_feeds":[]}`: the app pairs with the confirmed origin and shows the
+  publisher's **public** channels for the user to choose (the consent rule
+  below still applies — nothing is auto-subscribed). There are no preselects
+  and, because capability URLs travel only in `?p=`, **never any private
+  feeds** — publishers with order-scoped content MUST keep using `?p=`. A
+  client MUST accept a payload-less join only from the join path (`/join` or
+  `/join/`) or the bare origin (`https://<origin>` or `https://<origin>/`);
+  other paths without `p` are not join URLs. The payload-less form is a
+  pairing convenience, not a trust mechanism — trust is unchanged (§1.2).
 - **Versioning (normative):** `v` is the payload's major version (`1` for
   this spec). An app that does not implement the payload's `v` **MUST NOT**
   attempt a partial parse: it stops and tells the user the code needs a newer

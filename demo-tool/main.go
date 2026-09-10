@@ -240,12 +240,6 @@ from this page's own URL, so it always matches the join link you opened.</p>
 	b.WriteString(`
 var DEMO_JOIN = ` + jsonString(demoJoinURL) + `;
 (function () {
-  var m = window.location.search.match(/[?&]p=([A-Za-z0-9_-]+)/);
-  if (!m) {
-    // no payload: nothing to scan — the generic page cannot pair the app
-    document.getElementById('join-qr-section').style.display = 'none';
-    return;
-  }
   var url = window.location.href;
   var qr = qrcode(0, 'M');
   qr.addData(url);
@@ -297,7 +291,7 @@ var DEMO_JOIN = ` + jsonString(demoJoinURL) + `;
   var m = window.location.search.match(/[?&]p=([A-Za-z0-9_-]+)/);
   if (!m) {
     root.appendChild(el('h2', 'Generic join link'));
-    root.appendChild(el('p', 'This link carries no join payload, so the Keryx app cannot pair with it: there are no suggested channels and no private capability feed. Use the demo join link to pair with the app:'));
+    root.appendChild(el('p', 'This link carries no join payload: no suggested channels and no private capability feed. It still pairs — the app will show the publisher\u2019s public channels to choose from. The demo join link below also suggests channels:'));
     var a = el('a', DEMO_JOIN);
     a.href = DEMO_JOIN;
     root.appendChild(a);
@@ -375,8 +369,8 @@ readers ignore the extension; the Keryx app enforces it.</p>
 directory. All URLs point at <code>{{ORIGIN}}</code>; this demo is not
 published by Trezor.</p>
 <ul>
-<li><a href="join/">Generic join link</a> — no payload, static, for anyone
-(QR code rendered on the page)</li>
+<li><a href="join/">Generic join link</a> — no payload, no suggested channels
+or private feeds (pairs with the public channels; QR rendered on the page)</li>
 <li><a href="{{JOIN}}">Demo join link</a> — with suggested public channels and
 a private capability feed (QR code rendered on the page; the URL is also in
 <a href="join.txt">join.txt</a>)</li>

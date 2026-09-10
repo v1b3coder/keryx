@@ -1,12 +1,14 @@
 /**
  * Join URL / QR payload (spec/core.md §3).
  *
- * The QR encodes a standard HTTPS URL `https://<origin>/join?p=<payload>`.
- * The payload is base64url (no padding) JSON `{v, channels, private_feeds}`
- * — there is NO metadata URL in it: the root anchor is derived from the
- * join origin (`<origin>/.well-known/keryx/root.json`). The payload is not
- * signed; trust comes from (a) the user confirming the origin and (b)
- * private-feed pattern authorization after pairing.
+ * The QR encodes a standard HTTPS URL `https://<origin>/join?p=<payload>`
+ * (payload optional — a payload-less join pairs with the origin's public
+ * channels only). The payload is base64url (no padding) JSON
+ * `{v, channels, private_feeds}` — there is NO metadata URL in it: the root
+ * anchor is derived from the join origin
+ * (`<origin>/.well-known/keryx/root.json`). The payload is not signed; trust
+ * comes from (a) the user confirming the origin and (b) private-feed pattern
+ * authorization after pairing.
  */
 
 import { base64urlToText } from './bytes';
@@ -55,8 +57,23 @@ export function parseJoinUrl(input: string): ParsedJoin {
     throw new PayloadError('This link is not a web address.');
   }
   const p = url.searchParams.get('p');
-  if (!p) {
-    throw new PayloadError('This link is missing its join information.');
+  if (p === null) {
+    // Payload-less join (§3): only unambiguous origin-level URLs — the bare
+    // origin or the join path. The app pairs with the confirmed origin and
+    // shows the publisher's public channels; there are no preselects and
+    // never any private feeds (capability URLs travel only in ?p=).
+    const path = url.pathname.replace(/\/+$/, '') || '/';
+    if (path !== '/' && path !== '/join') {
+      throw new PayloadError('This link is missing its join information.');
+    }
+    return {
+      origin: url.origin,
+      payload: { v: PAYLOAD_VERSION, channels: [], privateFeeds: [] },
+      joinUrl: url.toString(),
+    };
+  }
+  if (p === '') {
+    throw new PayloadError('This join link is damaged. Ask the company for a new one.');
   }
   let raw: unknown;
   try {
