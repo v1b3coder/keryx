@@ -18,6 +18,16 @@ The stack is deliberately boring: HTTPS + QR + TUF + Ed25519 + JSON Feed.
 
 ---
 
+## Demo
+
+Try it live: the [Keryx PWA](https://v1b3coder.github.io/keryx/) (installable
+web app) and the demo publisher site
+[`keryx-demo.github.io`](https://keryx-demo.github.io/) — its homepage
+offers both join links: the plain one (public channels only) and the one
+with the private tracking feed.
+
+---
+
 ## Documentation
 
 ### Normative — the protocol (`spec/`)
