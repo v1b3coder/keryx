@@ -124,7 +124,8 @@ func buildAll(keys map[string]*keyPair, site string) error {
 	if err != nil {
 		return err
 	}
-	joinURL := metadataOrigin + "/join?p=" + base64.RawURLEncoding.EncodeToString(payloadJSON)
+	joinQuery := "join?p=" + base64.RawURLEncoding.EncodeToString(payloadJSON)
+	joinURL := metadataOrigin + "/" + joinQuery
 	if err := os.WriteFile(filepath.Join(site, "join.txt"), []byte(joinURL+"\n"), 0o644); err != nil {
 		return err
 	}
@@ -132,13 +133,13 @@ func buildAll(keys map[string]*keyPair, site string) error {
 	if err := os.MkdirAll(filepath.Join(site, "join"), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(site, "join", "index.html"), []byte(joinPage(payload, joinURL)), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(site, "join", "index.html"), []byte(joinPage()), 0o644); err != nil {
 		return err
 	}
 	fmt.Printf("  join URL: %s\n", joinURL)
 
 	fmt.Println("== local permalink pages ==")
-	if err := writeLocalPages(site, token); err != nil {
+	if err := writeLocalPages(site, token, joinQuery); err != nil {
 		return err
 	}
 
@@ -182,23 +183,13 @@ func copyDir(src, dst string) error {
 var qrLib string
 
 // joinPage is the PROTOCOL §2 fallback page served at /join (shown when
-// the Keryx app is not installed). It renders the payload contents; per
-// §2/§10 it sets Referrer-Policy: no-referrer (the capability token travels
-// in ?p=) and includes no third-party resources. The QR code is generated
-// client-side (inlined generator) from the page's own URL (?p= payload),
-// falling back to the canonical join URL when opened without one.
-func joinPage(payload map[string]any, joinURL string) string {
-	pretty, _ := json.MarshalIndent(payload, "", "  ")
-	joinURLJSON, _ := json.Marshal(joinURL)
-	joinURLJS := string(joinURLJSON)
-	channels := []string{}
-	if cs, ok := payload["channels"].([]string); ok {
-		channels = cs
-	}
-	feeds := []string{}
-	if fs, ok := payload["private_feeds"].([]string); ok {
-		feeds = fs
-	}
+// the Keryx app is not installed). Per §2/§10 it sets Referrer-Policy:
+// no-referrer (the capability token travels in ?p=) and includes no
+// third-party resources. Everything payload-specific is derived at runtime
+// from the page's own URL: with ?p= the payload is decoded and rendered
+// (channels, private feeds); without one the page shows generic join
+// content only — no channels, no private capability feed.
+func joinPage() string {
 	b := &strings.Builder{}
 	b.WriteString(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Keryx — subscribe (demo)</title>
@@ -213,20 +204,15 @@ continue there. The root anchor is derived from this page's origin
 the payload.</p>
 <h2>Join QR code</h2>
 <p>Scan this code with the Keryx app to pair and subscribe. It is generated
-from this page's own URL, so it always carries the join payload you opened.</p>
+from this page's own URL, so it always matches the join link you opened.</p>
 <div id="join-qr"></div>
-<p id="join-qr-note" hidden>This page was opened without a join payload — the
-code below shows the canonical join link instead.</p>
+<div id="join-content"></div>
 <script>
 `)
 	b.WriteString(qrLib)
 	b.WriteString(`
 (function () {
   var url = window.location.href;
-  if (url.indexOf('p=') === -1) {
-    url = ` + joinURLJS + `;
-    document.getElementById('join-qr-note').hidden = false;
-  }
   var qr = qrcode(0, 'M');
   qr.addData(url);
   qr.make();
@@ -244,26 +230,51 @@ code below shows the canonical join link instead.</p>
       if (qr.isDark(r, col)) ctx.fillRect(col * s, r * s, s, s);
   document.getElementById('join-qr').appendChild(c);
 })();
+(function () {
+  function el(tag, text) {
+    var e = document.createElement(tag);
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  var root = document.getElementById('join-content');
+  function renderPayload(p) {
+    root.appendChild(el('h2', 'Join payload'));
+    var pre = el('pre');
+    pre.style.background = '#f4f4f4';
+    pre.style.padding = '1rem';
+    pre.style.overflowX = 'auto';
+    pre.textContent = JSON.stringify(p, null, 2);
+    root.appendChild(pre);
+    root.appendChild(el('h2', 'What this would subscribe you to'));
+    var ul = el('ul');
+    if (Array.isArray(p.channels) && p.channels.length) {
+      ul.appendChild(el('li', 'Suggested public channels: ' + p.channels.join(', ')));
+    }
+    (Array.isArray(p.private_feeds) ? p.private_feeds : []).forEach(function (f) {
+      var li = el('li');
+      li.appendChild(document.createTextNode('Private capability feed: '));
+      var a = el('a', f);
+      a.href = f;
+      li.appendChild(a);
+      ul.appendChild(li);
+    });
+    root.appendChild(ul);
+  }
+  var m = window.location.search.match(/[?&]p=([A-Za-z0-9_-]+)/);
+  if (!m) {
+    root.appendChild(el('h2', 'Generic join link'));
+    root.appendChild(el('p', 'This link carries no join payload: no suggested channels and no private capability feed. It is the static demo join page, safe to share with anyone. The demo join link with the suggested public channels and a private capability feed is on the demo homepage (and in join.txt).'));
+    return;
+  }
+  try {
+    var b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    renderPayload(JSON.parse(atob(b64)));
+  } catch (e) {
+    root.appendChild(el('p', 'This join link is damaged — ask the company for a new one.'));
+  }
+})();
 </script>
-<h2>Join payload</h2>
-<pre style="background:#f4f4f4;padding:1rem;overflow-x:auto">`)
-	b.WriteString(html.EscapeString(string(pretty)))
-	b.WriteString(`</pre>
-<h2>What this would subscribe you to</h2>
-<ul>
-<li>Suggested public channels: `)
-	b.WriteString(html.EscapeString(strings.Join(channels, ", ")))
-	b.WriteString(`</li>`)
-	for _, f := range feeds {
-		b.WriteString(`
-<li>Private capability feed: <a href="`)
-		b.WriteString(html.EscapeString(f))
-		b.WriteString(`">`)
-		b.WriteString(html.EscapeString(f))
-		b.WriteString(`</a></li>`)
-	}
-	b.WriteString(`
-</ul>
 <p><small>Demo only — software demo keys, origin `)
 	b.WriteString(html.EscapeString(metadataOrigin))
 	b.WriteString(`. Not published by Trezor.</small></p>
@@ -275,7 +286,7 @@ code below shows the canonical join link instead.</p>
 // writeLocalPages generates the local HTML pages so every URL in the signed
 // artifacts resolves on the local server: one page per announcement, the
 // private order page, the _sig extension page and an index.
-func writeLocalPages(site, token string) error {
+func writeLocalPages(site, token, joinQuery string) error {
 	blogDir := filepath.Join(site, "blog")
 	if err := os.MkdirAll(blogDir, 0o755); err != nil {
 		return err
@@ -319,7 +330,7 @@ readers ignore the extension; the Keryx app enforces it.</p>
 	if err := os.WriteFile(filepath.Join(site, "_sig", "index.html"), []byte(sigPage), 0o644); err != nil {
 		return err
 	}
-	index := `<!doctype html>
+	index := strings.Replace(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Keryx demo — Trezor</title></head>
 <body style="font-family:sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem">
 <h1>Keryx protocol — local demo</h1>
@@ -327,8 +338,11 @@ readers ignore the extension; the Keryx app enforces it.</p>
 directory. All URLs point at <code>http://10.110.147.178:8000</code>; this demo is not
 published by Trezor.</p>
 <ul>
-<li><a href="join/">Pairing page (join/)</a> — QR code rendered on the page
-(not a static file; generated from the URL payload), <a href="join.txt">join.txt</a></li>
+<li><a href="join/">Generic join link</a> — no payload, static, for anyone
+(QR code rendered on the page)</li>
+<li><a href="{{JOIN}}">Demo join link</a> — with suggested public channels and
+a private capability feed (QR code rendered on the page; the URL is also in
+<a href="join.txt">join.txt</a>)</li>
 <li><a href=".well-known/keryx/root.json">.well-known/keryx/root.json</a> (root anchor on the join origin; the ONLY root metadata source)</li>
 <li><a href="keryx/targets.json">keryx/targets.json</a> (channel authorization + editor mode + private patterns)</li>
 <li><a href="keryx/channels.security.json">keryx/channels.security.json</a> (channel role metadata pins channels/security/feed.json)</li>
@@ -337,7 +351,7 @@ published by Trezor.</p>
 <li><a href="blog/">Announcements</a></li>
 </ul>
 </body></html>
-`
+`, "{{JOIN}}", joinQuery, 1)
 	if err := os.WriteFile(filepath.Join(site, "index.html"), []byte(index), 0o644); err != nil {
 		return err
 	}

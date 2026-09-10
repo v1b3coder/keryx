@@ -30,8 +30,8 @@ npm run dev                          # web client (Vite prints the port)
 ```
 
 Then open the printed URL, tap **Add a company**, and paste the join URL from
-`demo/join.txt` (or open the pairing page `demo/join/` and scan the QR
-code it renders from that URL). The flow: confirm the origin
+`demo/join.txt` (or open the demo join link — `demo/join/?p=…` — and scan
+the QR code it renders). The flow: confirm the origin
 `10.110.147.178:8000` → choose channels (suggested ones preselected, you tap to
 subscribe) → subscribe → verified inbox.
 
