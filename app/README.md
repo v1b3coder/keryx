@@ -46,10 +46,11 @@ subscribe) → subscribe → verified inbox.
 `main` builds and publishes to GitHub Pages automatically
 (`.github/workflows/deploy-pages.yml`): https://v1b3coder.github.io/keryx/
 
-The build is a project site, so Vite's `base` is `/keryx/` (see
-`vite.config.ts`); `start_url`, `scope`, icon and asset URLs are relative or
-base-relative, so the same build also works on a custom domain (set `base`
-to `/` for that). The manifest + service worker come from vite-plugin-pwa
+The Pages build is a project site, so the workflow sets `VITE_BASE=/keryx/`
+(see `vite.config.ts`); `start_url`, `scope`, icon and asset URLs are relative
+or base-relative. Local dev and the Capacitor builds use the default `/`,
+so the same source works unmodified for Android/iOS. The manifest + service
+worker come from vite-plugin-pwa
 (`autoUpdate`, workbox precache of the whole `dist/`).
 
 ## Scripts

@@ -6,8 +6,10 @@ import { VitePWA } from 'vite-plugin-pwa';
 export default defineConfig({
   // GitHub Pages project site: https://v1b3coder.github.io/keryx/
   // vite-plugin-pwa derives manifest start_url/scope and the SW path from
-  // this base automatically.
-  base: '/keryx/',
+  // this base automatically. The Pages workflow sets VITE_BASE=/keryx/;
+  // local dev and the Capacitor WebView (served at https://localhost/)
+  // use the default '/', so absolute asset paths resolve.
+  base: process.env.VITE_BASE ?? '/',
   plugins: [
     react(),
     VitePWA({

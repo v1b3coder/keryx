@@ -38,6 +38,8 @@ jobs:
 
       - name: Build web app (PWA)
         working-directory: app
+        env:
+          VITE_BASE: /keryx/
         run: npm run build
 
       - name: Upload Pages artifact
