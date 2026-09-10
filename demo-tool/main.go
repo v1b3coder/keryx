@@ -149,7 +149,7 @@ func buildAll(keys map[string]*keyPair, site string) error {
 	if err := os.MkdirAll(filepath.Join(site, "join"), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(site, "join", "index.html"), []byte(joinPage()), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(site, "join", "index.html"), []byte(joinPage(joinURL)), 0o644); err != nil {
 		return err
 	}
 	fmt.Printf("  join URL: %s\n", joinURL)
@@ -198,6 +198,15 @@ func copyDir(src, dst string) error {
 //go:embed assets/qrcode.min.js
 var qrLib string
 
+// jsonString renders s as a JavaScript/JSON string literal.
+func jsonString(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return `""`
+	}
+	return string(b)
+}
+
 // joinPage is the PROTOCOL §2 fallback page served at /join (shown when
 // the Keryx app is not installed). Per §2/§10 it sets Referrer-Policy:
 // no-referrer (the capability token travels in ?p=) and includes no
@@ -205,7 +214,7 @@ var qrLib string
 // from the page's own URL: with ?p= the payload is decoded and rendered
 // (channels, private feeds); without one the page shows generic join
 // content only — no channels, no private capability feed.
-func joinPage() string {
+func joinPage(demoJoinURL string) string {
 	b := &strings.Builder{}
 	b.WriteString(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Keryx — subscribe (demo)</title>
@@ -218,16 +227,25 @@ app installed, the URL above would be handed to it and pairing would
 continue there. The root anchor is derived from this page's origin
 (<code>/.well-known/keryx/root.json</code>) — there is no metadata URL in
 the payload.</p>
+<div id="join-qr-section">
 <h2>Join QR code</h2>
 <p>Scan this code with the Keryx app to pair and subscribe. It is generated
 from this page's own URL, so it always matches the join link you opened.</p>
 <div id="join-qr"></div>
+</div>
 <div id="join-content"></div>
 <script>
 `)
 	b.WriteString(qrLib)
 	b.WriteString(`
+var DEMO_JOIN = ` + jsonString(demoJoinURL) + `;
 (function () {
+  var m = window.location.search.match(/[?&]p=([A-Za-z0-9_-]+)/);
+  if (!m) {
+    // no payload: nothing to scan — the generic page cannot pair the app
+    document.getElementById('join-qr-section').style.display = 'none';
+    return;
+  }
   var url = window.location.href;
   var qr = qrcode(0, 'M');
   qr.addData(url);
@@ -279,7 +297,10 @@ from this page's own URL, so it always matches the join link you opened.</p>
   var m = window.location.search.match(/[?&]p=([A-Za-z0-9_-]+)/);
   if (!m) {
     root.appendChild(el('h2', 'Generic join link'));
-    root.appendChild(el('p', 'This link carries no join payload: no suggested channels and no private capability feed. It is the static demo join page, safe to share with anyone. The demo join link with the suggested public channels and a private capability feed is on the demo homepage (and in join.txt).'));
+    root.appendChild(el('p', 'This link carries no join payload, so the Keryx app cannot pair with it: there are no suggested channels and no private capability feed. Use the demo join link to pair with the app:'));
+    var a = el('a', DEMO_JOIN);
+    a.href = DEMO_JOIN;
+    root.appendChild(a);
     return;
   }
   try {
