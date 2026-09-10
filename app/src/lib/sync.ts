@@ -77,22 +77,35 @@ function publicChannelRoles(targets: TargetsDoc): { roleName: string; channel: s
     .map((r) => ({ roleName: r.name, channel: r.name.slice('channels.'.length) }));
 }
 
-/** Is this origin a loopback dev origin (the local demo is served over http)? */
-export function isLoopback(origin: string): boolean {
+/**
+ * Is this a local-dev origin? Loopback, or a private LAN address (RFC 1918).
+ * The demo artifact is served over plain HTTP on a private network; the
+ * protocol mandates HTTPS for private feeds, so this is a documented
+ * dev-only exception — production origins stay HTTPS-only.
+ */
+export function isLocalDevOrigin(origin: string): boolean {
   try {
     const u = new URL(origin);
-    return u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '::1';
+    const host = u.hostname;
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
+    const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (!m) return false;
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    if (a === 10) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    return false;
   } catch {
     return false;
   }
 }
 
-/** HTTPS-only for private feeds (spec/feeds.md §3) — loopback allowed for the local demo. */
+/** Private-feed transport rule (spec/feeds.md §3): HTTPS only — HTTP allowed on local-dev origins only. */
 export function privateFeedUrlAllowed(url: string): boolean {
   try {
     const u = new URL(url);
     if (u.protocol === 'https:') return true;
-    if (u.protocol === 'http:' && isLoopback(u.origin)) return true;
+    if (u.protocol === 'http:' && isLocalDevOrigin(u.origin)) return true;
     return false;
   } catch {
     return false;

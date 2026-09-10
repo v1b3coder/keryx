@@ -10,7 +10,7 @@
  * metadata and feed targets are hash-pinned — byte fidelity matters.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
@@ -51,10 +51,10 @@ import type { StoredItem } from './store';
 hashes.sha512 = sha512;
 
 const demoDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'demo');
-const origin = 'http://localhost:8000';
+const origin = 'http://10.110.147.178:8000';
 
 function fileFor(url: string): string {
-  return join(demoDir, url.replace(/^http:\/\/localhost:8000\//, ''));
+  return join(demoDir, url.replace(/^http:\/\/10\.110\.147\.178:8000\//, ''));
 }
 
 function readBytes(url: string): Uint8Array {
@@ -68,6 +68,12 @@ const fetchLike = async (url: string) => {
 
 function loadJson<T = unknown>(path: string): T {
   return JSON.parse(readFileSync(join(demoDir, path), 'utf8')) as T;
+}
+
+/** The single generated capability token (demo regenerates it on every build). */
+function privateFeedRelPath(): string {
+  const token = readdirSync(join(demoDir, 'channels', 'tracking'))[0];
+  return `channels/tracking/${token}/feed.json`;
 }
 
 function seedOf(name: string): Uint8Array {
@@ -330,45 +336,45 @@ describe('item verification (spec/feeds.md §1.2)', () => {
 
 describe('private capability feed (spec/feeds.md §3)', () => {
   const meta = loadJson<{ _sig: { channel: string; url: string; version: number } }>(
-    'channels/tracking/v7tx7wGk7xWbDC6Cu_bYAw/feed.json',
+    privateFeedRelPath(),
   );
   const privateUrl = meta._sig.url;
   const targets = loadJson<TargetsDoc>('keryx/targets.json');
   const entry = targets.signed.custom!.private_feed_patterns![0];
 
   it('verifies the whole document (signature + channel + url + version)', () => {
-    const doc = loadJson<Record<string, any>>('channels/tracking/v7tx7wGk7xWbDC6Cu_bYAw/feed.json');
+    const doc = loadJson<Record<string, any>>(privateFeedRelPath());
     const result = verifyPrivateFeedDocument(doc, entry, privateUrl, undefined);
     expect(result.closed).toBe(false);
     expect(result.version).toBe(doc._sig.version);
   });
 
   it('rejects a tampered document (whole-doc signature breaks)', () => {
-    const doc = loadJson<Record<string, any>>('channels/tracking/v7tx7wGk7xWbDC6Cu_bYAw/feed.json');
+    const doc = loadJson<Record<string, any>>(privateFeedRelPath());
     const tampered = JSON.parse(JSON.stringify(doc)) as Record<string, any>;
     tampered.items[0].title = 'Tampered';
     expect(() => verifyPrivateFeedDocument(tampered, entry, privateUrl, undefined)).toThrow(ProtocolError);
   });
 
   it('rejects a version rollback (anti-rollback via version memory)', () => {
-    const doc = loadJson<Record<string, any>>('channels/tracking/v7tx7wGk7xWbDC6Cu_bYAw/feed.json');
+    const doc = loadJson<Record<string, any>>(privateFeedRelPath());
     expect(() => verifyPrivateFeedDocument(doc, entry, privateUrl, 99)).toThrow(/rollback/);
   });
 
   it('rejects a document served for the wrong URL (cross-order mix-up)', () => {
-    const doc = loadJson<Record<string, any>>('channels/tracking/v7tx7wGk7xWbDC6Cu_bYAw/feed.json');
+    const doc = loadJson<Record<string, any>>(privateFeedRelPath());
     expect(() => verifyPrivateFeedDocument(doc, entry, privateUrl + 'x', undefined)).toThrow(/url/);
   });
 
   it('rejects a document with the wrong channel label', () => {
-    const doc = loadJson<Record<string, any>>('channels/tracking/v7tx7wGk7xWbDC6Cu_bYAw/feed.json');
+    const doc = loadJson<Record<string, any>>(privateFeedRelPath());
     const clone = JSON.parse(JSON.stringify(doc)) as Record<string, any>;
     clone._sig.channel = 'marketing';
     expect(() => verifyPrivateFeedDocument(clone, entry, privateUrl, undefined)).toThrow(/channel/);
   });
 
   it('marks the feed closed on expired: true but keeps it verified', () => {
-    const doc = loadJson<Record<string, any>>('channels/tracking/v7tx7wGk7xWbDC6Cu_bYAw/feed.json');
+    const doc = loadJson<Record<string, any>>(privateFeedRelPath());
     const clone = JSON.parse(JSON.stringify(doc)) as Record<string, any>;
     clone.expired = true;
     clone._sig.signatures = [{ keyid: entry.keyids[0], sig: signJcs(clone, seedOf('tracking')) }];
@@ -402,7 +408,7 @@ describe('feed processing semantics (spec/feeds.md §1.2)', () => {
   it('withdrawn items are hidden and dropped from the cache (binary rule)', async () => {
     const { processFeedItems } = await import('./sync');
     const company = {
-      origin: 'http://localhost:8000',
+      origin: 'http://10.110.147.178:8000',
       channels: [],
       privateFeeds: [],
       prefs: { languages: [], tags: [], loadRemoteMedia: true },
@@ -413,9 +419,9 @@ describe('feed processing semantics (spec/feeds.md §1.2)', () => {
       { id: 'b', title: 'B', _sig: { channel: 'news', withdrawn: true } },
     ];
     // seed a cached copy of b (previously displayed)
-    existing.set('http://localhost:8000\u0000public:news\u0000b', {
-      id: 'http://localhost:8000\u0000public:news\u0000b',
-      origin: 'http://localhost:8000',
+    existing.set('http://10.110.147.178:8000\u0000public:news\u0000b', {
+      id: 'http://10.110.147.178:8000\u0000public:news\u0000b',
+      origin: 'http://10.110.147.178:8000',
       channel: 'news',
       feedUrl: '',
       isPrivate: false,
@@ -436,22 +442,22 @@ describe('feed processing semantics (spec/feeds.md §1.2)', () => {
     );
     expect(outcome.rejected).toBe(0);
     expect(toPut).toHaveLength(1);
-    expect(toDelete).toContain('http://localhost:8000\u0000public:news\u0000b');
+    expect(toDelete).toContain('http://10.110.147.178:8000\u0000public:news\u0000b');
   });
 
   it('a previously displayed item that no longer verifies is dropped', async () => {
     const { processFeedItems } = await import('./sync');
     const company = {
-      origin: 'http://localhost:8000',
+      origin: 'http://10.110.147.178:8000',
       channels: [],
       privateFeeds: [],
       prefs: { languages: [], tags: [], loadRemoteMedia: true },
     } as never;
     const existing = new Map<string, StoredItem>();
-    const key = 'http://localhost:8000\u0000public:news\u0000c';
+    const key = 'http://10.110.147.178:8000\u0000public:news\u0000c';
     existing.set(key, {
       id: key,
-      origin: 'http://localhost:8000',
+      origin: 'http://10.110.147.178:8000',
       channel: 'news',
       feedUrl: '',
       isPrivate: false,

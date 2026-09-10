@@ -23,7 +23,7 @@ PII, no per-user state anywhere.
 ## Run it
 
 ```bash
-cd ../demo && ./server.sh            # demo publisher at http://localhost:8000 (CORS-enabled)
+cd ../demo && ./server.sh            # demo publisher at http://10.110.147.178:8000 (CORS-enabled)
 cd ../app
 npm install
 npm run dev                          # web client (Vite prints the port)
@@ -31,12 +31,14 @@ npm run dev                          # web client (Vite prints the port)
 
 Then open the printed URL, tap **Add a company**, and paste the join URL from
 `demo/join.txt` (or scan `demo/join.png`). The flow: confirm the origin
-`localhost:8000` → choose channels (suggested ones preselected, you tap to
+`10.110.147.178:8000` → choose channels (suggested ones preselected, you tap to
 subscribe) → subscribe → verified inbox.
 
-> The demo artifact signs metadata for `http://localhost:8000` (a local-only
-> exception: the app requires HTTPS for private feeds everywhere except
-> loopback). A real deployment uses the company's HTTPS origin.
+> The demo artifact signs metadata for `http://10.110.147.178:8000` (a
+> local-dev exception: the app allows HTTP for private feeds on loopback and
+> RFC 1918 private addresses; Android permits cleartext only for this demo
+> host via `network_security_config.xml`). A real deployment uses the
+> company's HTTPS origin.
 
 ## Scripts
 
