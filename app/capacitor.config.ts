@@ -6,7 +6,11 @@ const config: CapacitorConfig = {
   webDir: 'dist',
   android: {
     // WebView-served app; no Play Services required (de-Googled friendly).
-    allowMixedContent: false,
+    // allowMixedContent: the demo artifact is served over plain HTTP on the
+    // local dev network — the WebView page runs at https://localhost, so
+    // http:// fetches are otherwise blocked as mixed content. Production
+    // traffic is HTTPS-only; this is a dev-only convenience.
+    allowMixedContent: true,
   },
   plugins: {
     BarcodeScanner: {
