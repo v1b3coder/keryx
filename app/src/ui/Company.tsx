@@ -1,34 +1,44 @@
 /**
  * Company detail: branded sticky header (logo + name + origin), one-way
- * inbox with square previews, channel toggles + filter sheet, suspension
- * and rebranding states per spec/core.md §2, §4.
+ * feed of FULL articles (big square picture, title, date/tags, content —
+ * no separate detail view), channel toggles + filter sheet, suspension and
+ * rebranding states per spec/core.md §2, §4.
  */
 
-import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, GearSix, ArrowClockwise, Trash, ShieldWarning } from '@phosphor-icons/react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, GearSix, ArrowClockwise, Trash, ShieldWarning, LockSimple } from '@phosphor-icons/react';
+import { Capacitor } from '@capacitor/core';
+import { Browser } from '@capacitor/browser';
 import type { CompanyRecord, StoredItem, ChannelState } from '../lib/store';
-import { formatRelative, matchesFilter } from '../lib/format';
+import { formatDate, matchesFilter } from '../lib/format';
 import { loadImage } from '../lib/media';
 import { CompanyLogo } from './CompanyLogo';
+import { SanitizedHtml, LinkConfirm } from './SanitizedHtml';
 import { useApp } from '../state';
+
+async function openExternal(url: string) {
+  if (Capacitor.isNativePlatform()) {
+    await Browser.open({ url });
+  } else {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+}
 
 export function CompanyView({
   company,
   items,
-  onOpenItem,
   onBack,
   onRepair,
 }: {
   company: CompanyRecord;
   items: StoredItem[];
-  onOpenItem: (feedKey: string, itemId: string) => void;
   onBack: () => void;
   /** re-pair flow for a company_name change (scan a fresh QR) */
   onRepair: (origin: string) => void;
 }) {
   const { actions, companies, syncing } = useApp();
   const [showSettings, setShowSettings] = useState(false);
-  const [ackBanner, setAckBanner] = useState(false);
+  const [pendingLink, setPendingLink] = useState<string | null>(null);
 
   const followed = new Set(company.channels.filter((c) => c.followed).map((c) => c.name));
   const visible = useMemo(() => {
@@ -49,7 +59,6 @@ export function CompanyView({
     return list;
   }, [items, followed, company.prefs]);
 
-  const unread = visible.filter((i) => !i.read).length;
   const anyFollowed = followed.size > 0;
 
   // --- suspension (spec/core.md §4): warning + Remove only, no re-pair ----
@@ -137,7 +146,7 @@ export function CompanyView({
         </div>
       </div>
 
-      {company.logoChangePending && !ackBanner && (
+      {company.logoChangePending && (
         <div className="screen-pad" style={{ paddingTop: 12 }}>
           <div className="alert" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
             <div style={{ flex: 1 }}>
@@ -180,76 +189,115 @@ export function CompanyView({
           </div>
         )}
         {visible.map((stored) => (
-          <FeedRow
+          <FeedArticle
             key={stored.id}
+            company={company}
             stored={stored}
-            channelName={channelLabel(company, stored)}
-            onOpen={() => {
-              if (!stored.read) void actions.markRead(company.origin, feedKeyOf(stored), stored.item.id!, true);
-              onOpenItem(feedKeyOf(stored), stored.item.id!);
+            onLinkTap={setPendingLink}
+            onRead={() => {
+              if (!stored.read) {
+                const feedKey = stored.isPrivate ? `private:${stored.feedUrl}` : `public:${stored.channel}`;
+                void actions.markRead(company.origin, feedKey, stored.item.id!, true);
+              }
             }}
           />
         ))}
+        {visible.length > 0 && (
+          <div className="footer-note" style={{ margin: '24px 20px 32px' }}>
+            <LockSimple size={16} weight="fill" style={{ flexShrink: 0, marginTop: 2 }} />
+            <span>This channel will never ask you for a password, seed, or code.</span>
+          </div>
+        )}
       </div>
 
-      {showSettings && (
-        <SettingsSheet company={company} items={items} onClose={() => setShowSettings(false)} />
+      {showSettings && <SettingsSheet company={company} items={items} onClose={() => setShowSettings(false)} />}
+
+      {pendingLink && (
+        <LinkConfirm
+          url={pendingLink}
+          onConfirm={() => {
+            void openExternal(pendingLink);
+            setPendingLink(null);
+          }}
+          onCancel={() => setPendingLink(null)}
+        />
       )}
     </div>
   );
 }
 
-function feedKeyOf(stored: StoredItem): string {
-  return stored.isPrivate ? `private:${stored.feedUrl}` : `public:${stored.channel}`;
-}
-
-function channelLabel(company: CompanyRecord, stored: StoredItem): string {
-  if (stored.isPrivate) {
-    const sub = company.privateFeeds.find((f) => f.url === stored.feedUrl);
-    return sub?.displayName ?? 'Delivery';
-  }
-  return company.channels.find((c) => c.name === stored.channel)?.displayName ?? stored.channel;
-}
-
-function FeedRow({
+/** One full article in the feed: big square picture, title, date/tags, content. */
+function FeedArticle({
+  company,
   stored,
-  channelName,
-  onOpen,
+  onLinkTap,
+  onRead,
 }: {
+  company: CompanyRecord;
   stored: StoredItem;
-  channelName: string;
-  onOpen: () => void;
+  onLinkTap: (url: string) => void;
+  onRead: () => void;
 }) {
+  const ref = useRef<HTMLElement>(null);
   const [img, setImg] = useState<string | null>(null);
+  const item = stored.item;
+
   useEffect(() => {
     let alive = true;
-    const url = stored.item.image;
+    const url = item.image;
     if (!url) return;
-    void loadImage(url, stored.origin).then((objectUrl) => {
+    void loadImage(url, stored.origin, item._sig?.resources?.[url]).then((objectUrl) => {
       if (alive) setImg(objectUrl);
     });
     return () => {
       alive = false;
     };
-  }, [stored.item.image, stored.origin]);
+  }, [item.image, item._sig, stored.origin]);
+
+  // mark as read when it scrolls into view (no detail view anymore)
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
+            onRead();
+            io.disconnect();
+          }
+        }
+      },
+      { threshold: 0.6 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [onRead]);
+
+  const date = item.date_published ? formatDate(item.date_published) : '';
 
   return (
-    <button className="feedrow" onClick={onOpen}>
-      {img ? (
-        <img className="feedrow-img" src={img} alt="" loading="lazy" />
-      ) : (
-        <div className="feedrow-img" aria-hidden />
-      )}
-      <div className="feedrow-body">
-        <div className="feedrow-title">{stored.item.title ?? 'Untitled'}</div>
-        {stored.item.summary && <div className="feedrow-summary">{stored.item.summary}</div>}
-        <div className="feedrow-meta">
-          <span className="chip">{channelName}</span>
+    <article className="article-card" ref={ref}>
+      {img && <img className="article-img" src={img} alt="" loading="lazy" />}
+      <div className="article-card-body">
+        <h2 className="article-card-title">{item.title ?? 'Untitled'}</h2>
+        <div className="article-card-meta">
+          {date && <span>{date}</span>}
           {stored.updated && <span className="chip chip-accent">Updated</span>}
-          <span>{stored.published ? formatRelative(stored.published) : ''}</span>
+          {(item.tags ?? []).slice(0, 4).map((tag) => (
+            <span key={tag} className="chip">
+              {tag}
+            </span>
+          ))}
         </div>
+        {item.content_html ? (
+          <SanitizedHtml html={item.content_html} origin={company.origin} item={item} onLinkTap={onLinkTap} />
+        ) : (
+          <div className="article-body" style={{ whiteSpace: 'pre-wrap' }}>
+            {item.content_text ?? ''}
+          </div>
+        )}
       </div>
-    </button>
+    </article>
   );
 }
 
@@ -299,7 +347,11 @@ function SettingsSheet({
           Channels
         </div>
         {company.channels.map((c) => (
-          <ChannelToggle key={c.name} channel={c} onToggle={(followed) => void actions.toggleChannel(company.origin, c.name, followed)} />
+          <ChannelToggle
+            key={c.name}
+            channel={c}
+            onToggle={(followed) => void actions.toggleChannel(company.origin, c.name, followed)}
+          />
         ))}
 
         {company.privateFeeds.length > 0 && (

@@ -124,7 +124,10 @@ subscribe) → subscribe → verified inbox.
   stripped — the "never asks for a password, seed, or code" promise is
   structural), links intercepted with their real destination domain shown
   before opening (no auto-open), media hash-verified against `_sig.resources`
-  when present, footer reminder on every article.
+  when present, footer reminder under the feed.
+- **Feed** — full articles inline (big square picture, title, date + tags,
+  complete content) — there is no separate detail view; articles are marked
+  read when they scroll into view.
 - **Offline-first** — IndexedDB cache of pinned metadata + verified items +
   media bytes; sync on open + manual refresh.
 
@@ -156,7 +159,7 @@ src/lib/            protocol core (framework-free, unit-tested)
                     jsQR (web)
 src/state.tsx       app state + sync orchestration
 src/ui/             screens: AddCompany (input → confirm → consent), Contacts,
-                    Company (inbox + settings sheet), Article, SanitizedHtml
+                    Company (full-article feed + settings sheet), SanitizedHtml
 src/lib/protocol.test.ts  tests against the real ../demo artifacts
 ```
 
@@ -194,5 +197,5 @@ pill controls), adapted for mobile per the product brief: body 16px, muted
 text neutral gray, fast tap feedback, dark mode from the same palette. One
 semantic red for destructive actions only. The app's own branding is
 suppressed — the company identity (logo + name + join origin) carries the
-screen; square preview images in the feed; single-company shortcut (no
-contacts list when only one source is added).
+screen; the feed shows full articles with big square preview images; the
+single-company shortcut (no contacts list when only one source is added).

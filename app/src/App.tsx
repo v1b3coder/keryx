@@ -9,14 +9,12 @@ import { AppProvider, useApp } from './state';
 import { AddCompany } from './ui/AddCompany';
 import { Contacts } from './ui/Contacts';
 import { CompanyView } from './ui/Company';
-import { ArticleView } from './ui/Article';
 import { getCompany, getItems, type CompanyRecord, type StoredItem } from './lib/store';
 
 type View =
   | { t: 'start' }
   | { t: 'contacts' }
   | { t: 'company'; origin: string }
-  | { t: 'article'; origin: string; feedKey: string; itemId: string }
   | { t: 'add'; from: 'start' | 'contacts'; repairOrigin?: string };
 
 export default function App() {
@@ -60,15 +58,12 @@ export default function App() {
     );
   }
 
-  if (view.t === 'company' || view.t === 'article') {
+  if (view.t === 'company') {
     return (
       <CompanyRoute
         origin={view.origin}
-        view={view}
         onBackToContacts={() => setView({ t: 'contacts' })}
-        onBackToCompany={(origin) => setView({ t: 'company', origin })}
         onRepair={(origin) => setView({ t: 'add', from: 'contacts', repairOrigin: origin })}
-        onOpenItem={(feedKey, itemId) => setView({ t: 'article', origin: view.origin, feedKey, itemId })}
       />
     );
   }
@@ -94,18 +89,12 @@ export default function App() {
 
 function CompanyRoute({
   origin,
-  view,
   onBackToContacts,
-  onBackToCompany,
   onRepair,
-  onOpenItem,
 }: {
   origin: string;
-  view: View;
   onBackToContacts: () => void;
-  onBackToCompany: (origin: string) => void;
   onRepair: (origin: string) => void;
-  onOpenItem: (feedKey: string, itemId: string) => void;
 }) {
   const { companies } = useApp();
   const [company, setCompany] = useState<CompanyRecord | null>(null);
@@ -134,25 +123,8 @@ function CompanyRoute({
     );
   }
 
-  if (view.t === 'article') {
-    const stored = companyItems.find(
-      (i) => i.id === `${company.origin}\u0000${view.feedKey}\u0000${view.itemId}`,
-    );
-    if (stored) {
-      return (
-        <ArticleView company={company} stored={stored} onBack={() => onBackToCompany(origin)} />
-      );
-    }
-  }
-
   return (
-    <CompanyView
-      company={company}
-      items={companyItems}
-      onOpenItem={onOpenItem}
-      onBack={onBackToContacts}
-      onRepair={onRepair}
-    />
+    <CompanyView company={company} items={companyItems} onBack={onBackToContacts} onRepair={onRepair} />
   );
 }
 
