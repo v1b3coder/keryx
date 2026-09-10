@@ -4,24 +4,36 @@ import { Capacitor } from '@capacitor/core';
 import { Root } from './App';
 import './styles.css';
 
-// Android 15+ draws the WebView edge-to-edge (under the status bar) and
-// the overlay flag is ignored. Keep the app below the system bars: read the
-// status bar height from the StatusBar plugin (dp = CSS px) and expose it as
-// --safe-top; iOS keeps using env(safe-area-inset-top).
-if (Capacitor.isNativePlatform()) {
-  void import('@capacitor/status-bar').then(async ({ StatusBar, Style }) => {
-    StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
-    const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    StatusBar.setStyle({ style: dark ? Style.Light : Style.Dark }).catch(() => {});
-    if (Capacitor.getPlatform() === 'android') {
-      try {
-        const info = await StatusBar.getInfo();
+// System bars. The app opts out of Android 15 edge-to-edge in the manifest
+// (windowOptOutEdgeToEdgeEnforcement) so the WebView is laid out below the
+// status bar; on Android 16+ the opt-out is ignored, so we also read the
+// real status bar height (dp = CSS px) and pad the sticky header via
+// --safe-top only when the bar actually overlays the WebView. Status bar
+// color and icon style follow the light/dark theme in both cases.
+async function syncSystemBars() {
+  const { StatusBar, Style } = await import('@capacitor/status-bar');
+  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  await StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
+  await StatusBar.setStyle({ style: dark ? Style.Light : Style.Dark }).catch(() => {});
+  await StatusBar.setBackgroundColor({ color: dark ? '#101013' : '#ffffff' }).catch(() => {});
+  if (Capacitor.getPlatform() === 'android') {
+    try {
+      const info = await StatusBar.getInfo();
+      if (info.overlays) {
         document.documentElement.style.setProperty('--safe-top', `${info.height}px`);
-      } catch {
-        /* env() fallback */
+      } else {
+        document.documentElement.style.removeProperty('--safe-top');
       }
+    } catch {
+      /* env() fallback */
     }
-  });
+  }
+}
+if (Capacitor.isNativePlatform()) {
+  void syncSystemBars();
+  window
+    .matchMedia('(prefers-color-scheme: dark)')
+    .addEventListener('change', () => void syncSystemBars());
 }
 
 // PWA service worker (registered by vite-plugin-pwa via virtual:pwa-register
