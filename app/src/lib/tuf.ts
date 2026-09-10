@@ -12,7 +12,7 @@
  */
 
 import { olpcCanonical } from './olpc';
-import { hexToBytes, bytesToHex, sha256Hex } from './bytes';
+import { hexToBytes, sha256Hex } from './bytes';
 import { ed25519Verify } from './ed';
 import { pathPatternMatches } from './pattern';
 
