@@ -223,8 +223,12 @@ a {
   position: sticky;
   top: 0;
   z-index: 10;
-  /* solid: scrolled content must never show behind the transparent status bar */
-  background: var(--bg);
+  /* frosted: the tint keeps the strip near the app background color, so the
+     themed status bar icons stay readable over any content (dark icons in
+     light mode, white in dark mode) */
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
   border-bottom: 1px solid var(--border);
   /* Android edge-to-edge: reserve the status bar height */
   padding-top: env(safe-area-inset-top, 0px);
