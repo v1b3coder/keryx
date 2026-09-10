@@ -1,0 +1,106 @@
+name: Build APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version for the release (e.g. v0.1.0); tag pushes use the pushed tag'
+        required: false
+        default: 'manual'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('app/android/**/*.gradle', 'app/android/gradle/wrapper/gradle-wrapper.properties', 'app/android/gradle.properties') }}
+
+      # Debug builds are signed with ~/.android/debug.keystore. Caching it makes
+      # every release share one signature, so users can update over previous
+      # CI builds instead of uninstalling first.
+      - name: Cache Android debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-debug-keystore
+
+      - name: Install npm dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Build web assets and sync to Android
+        working-directory: app
+        run: |
+          npm run build
+          npx cap sync android
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            TAG="$GITHUB_REF_NAME"
+            VERSION="${TAG#v}"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+            echo "apk_version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "code=$(( ${MAJOR:-0} * 10000 + ${MINOR:-0} * 100 + ${PATCH:-0} ))" >> "$GITHUB_OUTPUT"
+          else
+            TAG="${{ inputs.version }}"
+            VERSION="${TAG#v}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build debug APK
+        working-directory: app/android
+        env:
+          KERYX_VERSION_NAME: ${{ steps.version.outputs.apk_version }}
+          KERYX_VERSION_CODE: ${{ steps.version.outputs.code }}
+        run: ./gradlew assembleDebug
+
+      - name: Stage APK
+        run: |
+          mkdir -p dist-apk
+          cp app/android/app/build/outputs/apk/debug/app-debug.apk "dist-apk/keryx-${{ steps.version.outputs.version }}-debug.apk"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Keryx ${{ steps.version.outputs.version }}
+          files: dist-apk/*.apk
+          generate_release_notes: true

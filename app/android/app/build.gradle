@@ -7,8 +7,9 @@ android {
         applicationId "cz.v1b3coder.keryx"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // CI (GitHub Actions) injects the release version via env; local builds keep the defaults.
+        versionCode = (System.getenv("KERYX_VERSION_CODE") ?: "1").toInteger()
+        versionName = (System.getenv("KERYX_VERSION_NAME") ?: "1.0")
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
