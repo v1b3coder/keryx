@@ -307,9 +307,15 @@ var DEMO_JOIN = ` + jsonString(demoJoinURL) + `;
   }
   var m = window.location.search.match(/[?&]p=([A-Za-z0-9_-]+)/);
   if (m) {
-    // pass the join payload through to the PWA deep link (same p bytes)
-    var pl = document.getElementById('pwa-link');
-    if (pl) pl.href += '&p=' + m[1];
+    // pass the join payload through to the PWA deep link (same p bytes).
+    // The inline script runs before the <a id=pwa-link> is parsed, so wait
+    // for DOMContentLoaded before touching it.
+    function passPayload() {
+      var pl = document.getElementById('pwa-link');
+      if (pl) pl.href += '&p=' + m[1];
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', passPayload);
+    else passPayload();
   }
   if (!m) {
     root.appendChild(el('h2', 'Generic join link'));
