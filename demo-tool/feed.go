@@ -38,14 +38,14 @@ type feedAuthor struct {
 
 type feedSig struct {
 	About      string           `json:"about"`
-	Channel    string           `json:"channel,omitempty"`   // private feeds only
-	URL        string           `json:"url,omitempty"`       // private feeds only
-	Version    int64            `json:"version,omitempty"`   // private feeds only
-	Expires    string           `json:"expires,omitempty"`   // private feeds only
+	Channel    string           `json:"channel,omitempty"`    // private feeds only
+	URL        string           `json:"url,omitempty"`        // private feeds only
+	Version    int64            `json:"version,omitempty"`    // private feeds only
+	Expires    string           `json:"expires,omitempty"`    // private feeds only
 	Signatures []map[string]any `json:"signatures,omitempty"` // private feeds: whole document
 }
 
-const sigAbout = metadataOrigin + "/_sig" // extension identity (served locally by the demo)
+var sigAbout = metadataOrigin + "/_sig" // extension identity (served locally by the demo)
 
 // itemToMap renders a demoItem as the published JSON Feed item object
 // (without _sig.signatures; those are added by addSignature).
@@ -314,10 +314,10 @@ func verifyFeedFile(path string, keys map[string]*keyPair, channelKey *keyPair, 
 
 // privateFeedCheck carries what a private feed must satisfy (§10).
 type privateFeedCheck struct {
-	Channel     string // pattern entry's channel
-	Key         *keyPair
-	FetchedURL  string // the capability URL actually fetched (must equal _sig.url)
-	MaxVersion  int64  // client-side version memory (0 = none)
+	Channel    string // pattern entry's channel
+	Key        *keyPair
+	FetchedURL string // the capability URL actually fetched (must equal _sig.url)
+	MaxVersion int64  // client-side version memory (0 = none)
 }
 
 func verifyPrivateDocument(doc map[string]any, path string, check *privateFeedCheck) error {

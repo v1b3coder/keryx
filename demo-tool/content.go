@@ -4,15 +4,16 @@ package main
 // Trezor blog posts (https://trezor.io/blog, https://trezor.io/cs/blog).
 // Titles and publication dates are real; the excerpts are abridged and, for
 // the Czech items, translated by us for the demo. Every URL in the artifact
-// points at the demo server (http://10.110.147.178:8000 — the host's
-// tethering interface, a local-dev exception: HTTP is allowed only on
-// loopback/RFC 1918 and Android permits cleartext for this demo host only);
-// the original post URLs are kept in `source` for attribution (shown as
+// points at the demo server; the default is the host's tethering interface
+// (a local-dev exception: HTTP is allowed only on loopback/RFC 1918 and
+// Android permits cleartext for this demo host only) — pass -base to sign
+// the demo for a different public origin (e.g. https://keryx-demo.fly.dev).
+// The original post URLs are kept in `source` for attribution (shown as
 // plain text on the local permalink pages, never as links inside the signed
 // content).
 // This is demonstration data only — not published by Trezor.
 
-const (
+var (
 	companyName    = "Trezor Company s.r.o."
 	companyHome    = "http://10.110.147.178:8000/"
 	logoURL        = "http://10.110.147.178:8000/media/logo.png"
@@ -20,7 +21,7 @@ const (
 	// repoBase is the master-signed root.json custom.repo_base (PROTOCOL §3):
 	// the TUF repo location, discovered from the well-known root anchor on
 	// the join origin (/.well-known/keryx/root.json).
-	repoBase       = metadataOrigin + "/keryx/"
+	repoBase        = metadataOrigin + "/keryx/"
 	trackingPattern = metadataOrigin + "/channels/tracking/*/feed.json"
 )
 

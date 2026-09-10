@@ -16,7 +16,10 @@ import (
 func main() {
 	mode := flag.String("mode", "build", "build | verify")
 	site := flag.String("site", "../demo", "output directory for the demonstration site")
+	base := flag.String("base", "http://10.110.147.178:8000", "public origin of the demo site (signed into every artifact URL)")
 	flag.Parse()
+
+	setBase(*base)
 
 	keysDir := filepath.Join(*site, "keys")
 	keys, err := loadOrCreateKeys(keysDir, keyNames)
@@ -38,6 +41,19 @@ func main() {
 	default:
 		fatal(fmt.Errorf("unknown mode %q", *mode))
 	}
+}
+
+// setBase reconfigures every URL the generator signs into the demo
+// artifacts (join URL, TUF repo_base, feed/item URLs, logo, tracking
+// pattern, _sig identity). Must run before build/verify.
+func setBase(base string) {
+	base = strings.TrimSuffix(base, "/")
+	metadataOrigin = base
+	companyHome = base + "/"
+	logoURL = base + "/media/logo.png"
+	repoBase = base + "/keryx/"
+	trackingPattern = base + "/channels/tracking/*/feed.json"
+	sigAbout = base + "/_sig"
 }
 
 func buildAll(keys map[string]*keyPair, site string) error {
@@ -330,12 +346,12 @@ readers ignore the extension; the Keryx app enforces it.</p>
 	if err := os.WriteFile(filepath.Join(site, "_sig", "index.html"), []byte(sigPage), 0o644); err != nil {
 		return err
 	}
-	index := strings.Replace(`<!doctype html>
+	index := strings.Replace(strings.Replace(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Keryx demo — Trezor</title></head>
 <body style="font-family:sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem">
 <h1>Keryx protocol — local demo</h1>
 <p>Demonstration of a signed company-to-user broadcast channel, served from this
-directory. All URLs point at <code>http://10.110.147.178:8000</code>; this demo is not
+directory. All URLs point at <code>{{ORIGIN}}</code>; this demo is not
 published by Trezor.</p>
 <ul>
 <li><a href="join/">Generic join link</a> — no payload, static, for anyone
@@ -351,7 +367,7 @@ a private capability feed (QR code rendered on the page; the URL is also in
 <li><a href="blog/">Announcements</a></li>
 </ul>
 </body></html>
-`, "{{JOIN}}", joinQuery, 1)
+`, "{{ORIGIN}}", metadataOrigin, 1), "{{JOIN}}", joinQuery, 1)
 	if err := os.WriteFile(filepath.Join(site, "index.html"), []byte(index), 0o644); err != nil {
 		return err
 	}
