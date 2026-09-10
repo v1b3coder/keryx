@@ -223,12 +223,11 @@ a {
   position: sticky;
   top: 0;
   z-index: 10;
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  /* solid: scrolled content must never show behind the transparent status bar */
+  background: var(--bg);
   border-bottom: 1px solid var(--border);
-  /* Android 15+ edge-to-edge: keep the header below the status bar */
-  padding-top: var(--safe-top, env(safe-area-inset-top, 0px));
+  /* Android edge-to-edge: reserve the status bar height */
+  padding-top: env(safe-area-inset-top, 0px);
 }
 
 .appbar-inner {

@@ -4,30 +4,18 @@ import { Capacitor } from '@capacitor/core';
 import { Root } from './App';
 import './styles.css';
 
-// System bars. The app opts out of Android 15 edge-to-edge in the manifest
-// (windowOptOutEdgeToEdgeEnforcement) so the WebView is laid out below the
-// status bar; on Android 16+ the opt-out is ignored, so we also read the
-// real status bar height (dp = CSS px) and pad the sticky header via
-// --safe-top only when the bar actually overlays the WebView. Status bar
-// color and icon style follow the light/dark theme in both cases.
+// System bars. On Android the WebView stays edge-to-edge (the manifest
+// opt-out is honored on Android 15 only; Android 16 ignores it), so the
+// sticky header reserves the status bar height via env(safe-area-inset-top)
+// and is fully opaque — scrolled content never shows behind the bar. Icon
+// style follows the theme; the Android plugin maps Style.DARK to white
+// icons and Style.LIGHT to black icons (verified against the plugin source).
 async function syncSystemBars() {
   const { StatusBar, Style } = await import('@capacitor/status-bar');
   const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
   await StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
-  await StatusBar.setStyle({ style: dark ? Style.Light : Style.Dark }).catch(() => {});
+  await StatusBar.setStyle({ style: dark ? Style.Dark : Style.Light }).catch(() => {});
   await StatusBar.setBackgroundColor({ color: dark ? '#101013' : '#ffffff' }).catch(() => {});
-  if (Capacitor.getPlatform() === 'android') {
-    try {
-      const info = await StatusBar.getInfo();
-      if (info.overlays) {
-        document.documentElement.style.setProperty('--safe-top', `${info.height}px`);
-      } else {
-        document.documentElement.style.removeProperty('--safe-top');
-      }
-    } catch {
-      /* env() fallback */
-    }
-  }
 }
 if (Capacitor.isNativePlatform()) {
   void syncSystemBars();
