@@ -129,6 +129,16 @@ describe('join payload (spec/core.md §3)', () => {
     expect(() => parseJoinUrl(`${origin}/join?p=`)).toThrow();
   });
 
+  it('normalizes a bare domain to https (entry field convenience)', () => {
+    for (const input of ['company.example', 'company.example/join', 'company.example/join/']) {
+      const parsed = parseJoinUrl(input);
+      expect(parsed.origin).toBe('https://company.example');
+      expect(parsed.payload).toEqual({ v: 1, channels: [], privateFeeds: [] });
+    }
+    // an explicit scheme is honored (the local-dev HTTP exception)
+    expect(parseJoinUrl(`${origin}/join`).origin).toBe(origin);
+  });
+
   it('accepts a payload-less join (spec: public channels only)', () => {
     const expected = { v: 1, channels: [], privateFeeds: [] };
     for (const url of [`${origin}/join`, `${origin}/join/`, origin, `${origin}/`]) {

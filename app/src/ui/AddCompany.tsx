@@ -115,7 +115,7 @@ export function AddCompany({
               <input
                 className="input"
                 autoFocus
-                placeholder="Paste the company link"
+                placeholder="Paste the company link or domain"
                 value={pasteValue}
                 onChange={(e) => setPasteValue(e.target.value)}
                 onKeyDown={(e) => {

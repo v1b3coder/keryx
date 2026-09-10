@@ -49,7 +49,11 @@ const CHANNEL_RE = /^[a-z0-9-_]+$/;
 export function parseJoinUrl(input: string): ParsedJoin {
   let url: URL;
   try {
-    url = new URL(input.trim());
+    // Entry-field convenience: a bare domain (no scheme) is normalized to
+    // https — the protocol is HTTPS; the local-dev HTTP exception requires
+    // an explicit http:// prefix.
+    const text = input.trim();
+    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `https://${text}`);
   } catch {
     throw new PayloadError('This does not look like a join link.');
   }
