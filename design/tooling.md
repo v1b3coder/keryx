@@ -200,6 +200,51 @@ The repo round-trips through git between roles; the SDK never transports —
 transport (git, rsync, CDN push) is the operator's existing tooling, which
 is also why `deploy` stays a thin interface.
 
+### 3.7 CI as the server (the standard server–client shape, without the server)
+
+"A server that collects new items, re-signs channels and publishes the repo
+to the CDN" is the right topology — it is exactly what the web app will be,
+and it is RSTUF's model. The question is only what *runs* it in v1:
+
+- **Running a bespoke service in v1 is too heavy.** It would be an
+  application server + database, against the protocol's core value
+  proposition: passive static files, no application server, weekend deploy
+  ([`why.md` §4.14](why.md)). The protocol does not require the publisher
+  side to be trusted more than CI anyway — the repo host is already
+  untrusted by design, so a "publisher server" adds orchestration, not
+  security.
+- **CI is the server.** Editors push `signed.json` (PR/upload) → CI runs
+  `pub publish` → `pub validate` → `pub deploy` → CDN. Same client–server
+  topology, zero new infrastructure, and the channel publisher / ops / deploy
+  roles are just CI jobs with scoped secrets.
+- **The web app is the server later.** Its backend consumes the same SDK
+  (`Publisher.Publish`, `ceremony.Apply`, `Deployer`, `KeyStore`), so nothing
+  in the SDK assumes a CLI. If the app ever needs RSTUF-style HTTP
+  semantics, the SDK's interfaces map 1:1 onto RSTUF's layers (repository
+  service ↔ `Publisher`+`Repo`, offline signer ↔ `ceremony`/`KeyStore`,
+  storage backend ↔ `Deployer`).
+
+### 3.8 Standard TUF tooling — what exists, what we adopt, what we don't
+
+Recorded so the decision is not re-litigated. TUF standardizes the *role
+model* (root/targets/snapshot/timestamp, delegated roles, thresholds) — no
+publishing *workflow*. The ecosystem's workflow tooling:
+
+| Tool | Shape | Why not adopted as our engine | What we borrow |
+|---|---|---|---|
+| **RSTUF** (official repository service) | HTTP API + worker + PostgreSQL + storage backends; offline metadata-update ceremony; delegated target roles (since 1.0.0); per-target `custom` | Python service + DB to operate (vs. no-app-server posture); key/threshold/expiry ceremony is root-shaped; our load-bearing master-signed `custom` (`repo_base`, `mode`, `company_name`, `logo`, `editor_mode`, `private_feed_patterns`) is not expressible through its ceremony | Its *workflow shape*: repository service computes updates, offline signers sign, publish to storage — mirrored by `Publisher` + `ceremony` + `Deployer`; per-target `custom` (we use it for channel display metadata) |
+| **tuf-on-ci** (TUF repo + signing tool on GitHub Actions) | Guided signing events; delegations with thresholds; hardware/Sigstore/cloud signers; automated online signing | Built for signing *events* on trust-root-style repos (Sigstore), not per-publish delegated-role re-signing by channel keys + our custom fields; Python/GHA-shaped | The "signing event" model = our `ceremony stage/apply`; signer abstraction = our Sigstore `signature.Signer` adapter |
+| **go-tuf v1 CLI** | `tuf init/gen-key/add-key/sign/commit`; `keys/` + `staged/` + `repository/` dirs; `--consistent-snapshot=false` | No delegated roles; no custom fields; v1; v2 (which we use) is the metadata library | The file-based offline-root + staged-commit pattern (Sigstore runs it in production) — our workspace/atomic-swap is the same shape; we use go-tuf v2's metadata package as the crypto core |
+
+Adopted: the TUF **role model** via **go-tuf v2** (metadata sign/verify) and
+**Sigstore's signer interface** — the same foundations RSTUF/tuf-on-ci
+build on, so the door stays open (a future `Deployer`/`Repo` adapter could
+push into an RSTUF instance without protocol changes). Not adopted: any
+whole-workflow tool — none covers per-channel publish cadence with channel
+keys in CI, JCS item signing, private capability feeds, or the
+master-signed `custom` payload, and all are Python/service-shaped against
+the project's Go + static-file posture.
+
 ---
 
 ## 4. Architecture
