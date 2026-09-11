@@ -53,23 +53,23 @@ disable it (the relay still runs and reports `0` for it).
 ## API
 
 - `POST /v1/publish` — `Authorization: Bearer <api-key>`,
-  `{"v":1,"kind":"channel|order","h":"<43-char base64url source hash>","n":3,"seq":7}`.
+  `{"v":1,"h":"<43-char base64url source hash>","n":3,"seq":7}`.
   `n`/`seq` are optional and independent. Returns
-  `{"topic":"n-b-…","delivered":{"fcm":0|1,"ntfy":0|1,"webpush":{"sent":…,"failed":…,"removed":…}}}`;
+  `{"topic":"n-…","delivered":{"fcm":0|1,"ntfy":0|1,"webpush":{"sent":…,"failed":…,"removed":…}}}`;
   `202` when queued under load; `401` bad key, `400` schema violation,
   `429` rate limited.
-- `POST /v1/registrations` — `{"endpoint":"https://…","keys":{"p256dh":"…","auth":"…"},"topics":["n-b-…"]}`
+- `POST /v1/registrations` — `{"endpoint":"https://…","keys":{"p256dh":"…","auth":"…"},"topics":["n-…"]}`
   → `{"id":"<uuid>"}`. Optional `X-App-Key` gate. HTTPS endpoints only;
-  derived `n-b-`/`n-o-` topics only; ≤ 200 topics; throttled by IP.
+  derived `n-` topics only; ≤ 200 topics; throttled by IP.
 - `PUT /v1/registrations/{id}` — replace the followed-topic set.
 - `DELETE /v1/registrations/{id}` — remove (uninstall / company deletion).
 
 ## Layout
 
 - `internal/topic` — two-stage derivation: source hash
-  `base64url(sha256("b|" + company + "|" + channel))` /
-  `base64url(sha256("o|" + order_token))`, then topic
-  `"n-b-"/"n-o-" + base64url(sha256("keryx/relay/v1|" + h))` (47 chars).
+  `base64url(sha256(company + "|" + channel))` /
+  `base64url(sha256(order_token))`, then topic
+  `"n-" + base64url(sha256("keryx/relay/v1|" + h))` (45 chars).
 - `internal/store` — SQLite (WAL): publishers, registrations,
   registration_topics, event_log; versioned schema (refuses to start on a
   mismatch).

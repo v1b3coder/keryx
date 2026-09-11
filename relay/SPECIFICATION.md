@@ -89,11 +89,10 @@ client-side) and the relay (which publishes) agree without any exchange.
 Derivation is **two-stage**:
 
 ```
-h = base64url_nopad(sha256("b|" + company_id + "|" + channel))  // channel wake-up
-h = base64url_nopad(sha256("o|" + order_token))                 // order wake-up
+h = base64url_nopad(sha256(company_id + "|" + channel))  // channel wake-up
+h = base64url_nopad(sha256(order_token))                 // order wake-up
 
-topic = "n-b-" + base64url_nopad(sha256("keryx/relay/v1|" + h))
-topic = "n-o-" + base64url_nopad(sha256("keryx/relay/v1|" + h))
+topic = "n-" + base64url_nopad(sha256("keryx/relay/v1|" + h))
 ```
 
 - `h` is the **source hash** — `base64url_nopad(sha256(...))` over the
@@ -107,12 +106,20 @@ topic = "n-o-" + base64url_nopad(sha256("keryx/relay/v1|" + h))
 - `"keryx/relay/v1|"` is a **static, public salt** (domain separator): it
   keeps the topic distinct from `h` itself and from other SHA-256 uses in
   the protocol. It is not secret.
-- Output is 47 chars (`n-b-` / `n-o-` + 43). Base64url (RFC 4648 §5
-  alphanumerics, `-`, `_`) is valid in both FCM topic names
-  (`[a-zA-Z0-9-_.~%]`) and ntfy topic names (`[-_A-Za-z0-9]`, ≤ 64 chars) —
-  no provider-specific escaping.
-- The domain separator (`b|` / `o|`) prevents cross-type collisions; the
-  `n-` prefix namespaces the relay's topics on shared providers (e.g. a
+- Output is 45 chars (`n-` + 43). Base64url (RFC 4648 §5 alphanumerics,
+  `-`, `_`) is valid in both FCM topic names (`[a-zA-Z0-9-_.~%]`) and ntfy
+  topic names (`[-_A-Za-z0-9]`, ≤ 64 chars) — no provider-specific escaping.
+- **No type marker.** Neither `h` nor the topic distinguishes channel from
+  order wake-ups, and none is needed: the two derivation inputs can never
+  be the same string (an order token is exactly 22 chars from
+  `[A-Za-z0-9_-]`; a channel input always contains `|`, and in practice the
+  host's `.`), so a cross-type match would require an actual SHA-256
+  collision (infeasible). The type is resolved client-side from the app's
+  own subscription state: the app keeps a topic → item map
+  (company/channel or order), and the item's type is inherent in that map.
+  The relay and providers see only opaque hashes — they cannot even tell
+  whether a wake-up concerns a channel or an order.
+- The `n-` prefix namespaces the relay's topics on shared providers (e.g. a
   self-hosted ntfy server used by several apps).
 
 **Why two-stage:** callers (publisher tooling, order engine) know the
@@ -141,11 +148,11 @@ A single JSON object. **What it carries depends on the leg** (§1):
 // FCM data (native) — identity comes from the message's topic
 { "v": 1, "n": 3 }           // channel wake-up
 { "v": 1, "seq": 7 }         // order wake-up
-{ "v": 1, "n": 3, "seq": 7 } // either kind, both counters
+{ "v": 1, "n": 3, "seq": 7 } // either wake-up, both counters
 
 // WebPush payload — no topic at delivery, so carry it
-{ "v": 1, "t": "n-b-<43 chars>", "n": 3 }
-{ "v": 1, "t": "n-o-<43 chars>", "seq": 7 }
+{ "v": 1, "t": "n-<43 chars>", "n": 3 }
+{ "v": 1, "t": "n-<43 chars>", "seq": 7 }
 ```
 
 - `v` — schema version (1). Unknown versions: drop the wake-up.
@@ -187,7 +194,6 @@ Request:
 ```json
 {
   "v": 1,
-  "kind": "channel",
   "h": "<43-char base64url>",
   "n": 3
 }
@@ -198,30 +204,27 @@ or, for an order thread:
 ```json
 {
   "v": 1,
-  "kind": "order",
   "h": "<43-char base64url>",
   "seq": 7
 }
 ```
 
-or both counters on either kind:
+or both counters:
 
 ```json
 {
   "v": 1,
-  "kind": "channel",
   "h": "<43-char base64url>",
   "n": 3,
   "seq": 8
 }
 ```
 
-- `kind` — `"channel"` or `"order"`; selects the topic prefix (`n-b-` /
-  `n-o-`). Counters are independent of `kind`.
-- `h` — the source hash (§3): `base64url_nopad(sha256("b|" + company_id + "|" + channel))`
-  for channels, `base64url_nopad(sha256("o|" + order_token))` for orders.
-  The caller computes it; the relay never sees the input. MUST be exactly 43
-  chars of base64url (32 bytes).
+- `h` — the source hash (§3): `base64url_nopad(sha256(company_id + "|" + channel))`
+  for channels, `base64url_nopad(sha256(order_token))` for orders. The
+  caller computes it; the relay never sees the input. MUST be exactly 43
+  chars of base64url (32 bytes). No type marker: `h` is opaque and the
+  relay cannot (and need not) tell a channel hash from an order hash.
 - `n` / `seq` — optional, independent; forwarded to the payload (§4).
   `n` is the unread hint (UI), `seq` the monotonic wake-up counter
   (debugging). Either, both, or neither may be present.
@@ -230,7 +233,7 @@ Response `200 OK` (synchronous fan-out, concurrent across providers):
 
 ```json
 {
-  "topic": "n-b-<…>",
+  "topic": "n-<…>",
   "delivered": { "fcm": 1, "ntfy": 1,
                  "webpush": { "sent": 0, "failed": 0, "removed": 0 } }
 }
@@ -245,8 +248,8 @@ Response `200 OK` (synchronous fan-out, concurrent across providers):
 - `202 Accepted` MAY be returned when the relay is under load; the request
   is then queued (implementation detail — ordering between the response and
   delivery is not part of the contract).
-- Errors: `401` bad/unknown key; `400` schema violation (bad `kind`, `h`
-  not 43-char base64url); `429` rate limit (see §5.3).
+- Errors: `401` bad/unknown key; `400` schema violation (`h` not 43-char
+  base64url); `429` rate limit (see §5.3).
 
 Duplicate wake-ups are harmless (the app diffs content anyway); no
 idempotency key is required.
@@ -265,7 +268,7 @@ mappings in SQLite.
 
 | Method + path | Body | Meaning |
 |---|---|---|
-| `POST /v1/registrations` | `{ "endpoint": "https://…", "keys": { "p256dh": "…", "auth": "…" }, "topics": ["n-b-…", …] }` | Register (or replace by `endpoint`). Returns `{ "id": "<uuid>" }`. |
+| `POST /v1/registrations` | `{ "endpoint": "https://…", "keys": { "p256dh": "…", "auth": "…" }, "topics": ["n-…", …] }` | Register (or replace by `endpoint`). Returns `{ "id": "<uuid>" }`. |
 | `PUT /v1/registrations/{id}` | `{ "topics": [ … ] }` | Replace the followed-topic set (called on follow/unfollow). |
 | `DELETE /v1/registrations/{id}` | — | Remove (company deletion / uninstall). |
 
@@ -274,8 +277,8 @@ mappings in SQLite.
   (`X-App-Key`) embedded in the app build — endpoints are unguessable, but
   an open registration endpoint is a spam surface, so the app key SHOULD
   be configured.
-- `topics` are derived per §3; the relay accepts only `n-b-`/`n-o-` topics
-  (47 chars) and rejects others.
+- `topics` are derived per §3; the relay accepts only `n-` topics
+  (45 chars) and rejects others.
 - **Why the payload still needs `t` (§4):** the registration knows *which*
   topics it follows, but a delivered message carries no topic — so the
   wake-up payload must name it. The registry makes delivery *possible*;
@@ -338,7 +341,7 @@ subscription registration by IP.
 
 **Chosen: topic-based ntfy, registry-free** — the de-Googled leg has the
 same shape as FCM. The Keryx app embeds an ntfy client and subscribes to
-the `n-b-`/`n-o-` topics itself; the relay publishes once per topic.
+the `n-` topics itself; the relay publishes once per topic.
 
 - **Config:** a **single global** ntfy base in relay config (e.g. the
   operator's own ntfy server, or `https://ntfy.sh` as default); absent =
@@ -354,7 +357,7 @@ the `n-b-`/`n-o-` topics itself; the relay publishes once per topic.
   type) — the price of a registry-free de-Googled leg.
 - **Bare ntfy app:** users who follow via ntfy directly get the generic
   display path (publish `{ "title": "Keryx", "message": "New
-  message" }`); not part of the app's verified flow. Unguessable `n-o-`
+  message" }`); not part of the app's verified flow. Unguessable `n-`
   names are the capability; ntfy read/write keys MAY be added later (§11).
 
 **Rejected at this stage — UnifiedPush.** UnifiedPush is endpoint-based:
@@ -403,7 +406,6 @@ CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
 CREATE TABLE event_log (
   id          INTEGER PRIMARY KEY,
   publisher_id INTEGER NOT NULL,           -- publishers.id; rows outlive the record
-  kind        TEXT NOT NULL,               -- channel | order
   topic       TEXT NOT NULL,
   fcm         INTEGER, ntfy INTEGER,
   webpush_sent INTEGER, webpush_failed INTEGER, webpush_removed INTEGER,
@@ -445,7 +447,7 @@ CREATE TABLE event_log (
 |---|---|
 | publisher identity (API key → publisher record) | user identity, email, phone |
 | PWA device ↔ topic mapping (registration registry, targeted model) | device ↔ topic mapping on topic legs (FCM, ntfy — anonymous) |
-| opaque source hashes and topic hashes, wake-up volume/timing | company, channel, order identity (inputs never transit) |
+| opaque source hashes and topic hashes, wake-up volume/timing | company, channel, order identity (inputs never transit); even whether a wake-up concerns a channel or an order |
 | WebPush payloads (it encrypts them — server-side only) | order capability tokens (only their SHA-256), content, anything the app fetches afterwards |
 
 - **Bounded power (the load-bearing property):** the relay can spam or
@@ -502,11 +504,12 @@ CREATE TABLE event_log (
    on it need read/write keys or just unguessable names?
 3. **TTLs** — WebPush default 1 h; FCM/ntfy default (FCM stores up to 4
    weeks; ntfy ephemeral unless configured). What cadence matches the
-   protocol's freshness model?
+   protocol's freshness model? (With the §3 single namespace the relay
+   cannot distinguish channel from order wake-ups, so any TTL policy is
+   uniform.)
 4. **Order wake-ups through the relay** — the relay is publisher-facing;
-   do order events go through the same `/v1/publish` (`kind: "order"`, they
-   have no publisher tooling, they come from the order engine)? Confirm the
-   engine gets its own publisher record/API key, possibly with tighter
-   limits.
+   do order events go through the same `/v1/publish` (they have no
+   publisher tooling, they come from the order engine)? Confirm the engine
+   gets its own publisher record/API key, possibly with tighter limits.
 5. **Relay identity** — who operates it (the app publisher), and what
    governance applies if more than one app ships against it?
