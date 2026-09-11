@@ -117,12 +117,12 @@ func decode[T any](t *testing.T, resp *http.Response) T {
 
 func goodH(t *testing.T) string {
 	t.Helper()
-	return topic.SourceHash(topic.Channel, "company.example|marketing")
+	return topic.SourceHash("company.example|marketing")
 }
 
 func TestPublishAuth(t *testing.T) {
 	e := newEnv(t, Options{}, &apiFakeFCM{}, &apiFakeNtfy{}, nil, 60)
-	body := map[string]any{"v": 1, "kind": "channel", "h": goodH(t)}
+	body := map[string]any{"v": 1, "h": goodH(t)}
 
 	resp := e.do("POST", "/v1/publish", body, "", "")
 	if resp.StatusCode != 401 {
@@ -147,9 +147,8 @@ func TestPublishValidation(t *testing.T) {
 		name string
 		body map[string]any
 	}{
-		{"missing v", map[string]any{"kind": "channel", "h": goodH(t)}},
-		{"wrong v", map[string]any{"v": 2, "kind": "channel", "h": goodH(t)}},
-		{"bad kind", map[string]any{"v": 1, "kind": "foo", "h": goodH(t)}},
+		{"missing v", map[string]any{"h": goodH(t)}},
+		{"wrong v", map[string]any{"v": 2, "h": goodH(t)}},
 		{"short h", map[string]any{"v": 1, "kind": "channel", "h": "short"}},
 		{"bad h charset", map[string]any{"v": 1, "kind": "channel", "h": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"}},
 		{"negative n", map[string]any{"v": 1, "kind": "channel", "h": goodH(t), "n": -1}},
@@ -167,7 +166,7 @@ func TestPublishValidation(t *testing.T) {
 
 func TestPublishRateLimit(t *testing.T) {
 	e := newEnv(t, Options{}, &apiFakeFCM{}, &apiFakeNtfy{}, nil, 1) // 1/min, burst 2
-	body := map[string]any{"v": 1, "kind": "channel", "h": goodH(t)}
+	body := map[string]any{"v": 1, "h": goodH(t)}
 	for i := 0; i < 2; i++ {
 		resp := e.do("POST", "/v1/publish", body, e.apiKey, "")
 		if resp.StatusCode != 200 {
@@ -191,12 +190,12 @@ func TestPublishHappyPath(t *testing.T) {
 	}}
 	e := newEnv(t, Options{}, fcm, ntfy, wp, 60)
 	h := goodH(t)
-	tpc, _ := topic.Topic(topic.Channel, h)
+	tpc, _ := topic.Topic(h)
 	e.store.UpsertRegistration("https://push.example/a", "p", "a", "", []string{tpc})
 	e.store.UpsertRegistration("https://push.example/b", "p", "a", "", []string{tpc})
 
 	resp := e.do("POST", "/v1/publish", map[string]any{
-		"v": 1, "kind": "channel", "h": h, "n": 3, "seq": 8,
+		"v": 1, "h": h, "n": 3, "seq": 8,
 	}, e.apiKey, "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -230,7 +229,7 @@ func TestPublish202UnderLoad(t *testing.T) {
 	fcm := &apiFakeFCM{gate: gate, started: started}
 	e := newEnv(t, Options{MaxConcurrent: 1, QueueSize: 8}, fcm, &apiFakeNtfy{}, nil, 60)
 
-	body := map[string]any{"v": 1, "kind": "channel", "h": goodH(t)}
+	body := map[string]any{"v": 1, "h": goodH(t)}
 	firstDone := make(chan int, 1)
 	go func() {
 		resp := e.do("POST", "/v1/publish", body, e.apiKey, "")
@@ -252,9 +251,9 @@ func TestPublish202UnderLoad(t *testing.T) {
 
 func TestRegistrationLifecycle(t *testing.T) {
 	e := newEnv(t, Options{}, &apiFakeFCM{}, &apiFakeNtfy{}, nil, 60)
-	t1 := deriveTopic(t, topic.Channel, "company.example|a")
-	t2 := deriveTopic(t, topic.Order, "tok1")
-	t3 := deriveTopic(t, topic.Channel, "company.example|b")
+	t1 := deriveTopic(t, "company.example|a")
+	t2 := deriveTopic(t, "tok1")
+	t3 := deriveTopic(t, "company.example|b")
 	reg := map[string]any{
 		"endpoint": "https://push.example/abc",
 		"keys":     map[string]string{"p256dh": p256dhB64(t), "auth": authB64(t)},
@@ -308,7 +307,7 @@ func TestRegistrationValidation(t *testing.T) {
 	valid := map[string]any{
 		"endpoint": "https://push.example/abc",
 		"keys":     map[string]string{"p256dh": p256dhB64(t), "auth": authB64(t)},
-		"topics":   []string{validTopic("n-b-")},
+		"topics":   []string{validTopic("n-")},
 	}
 	cases := []struct {
 		name string
@@ -319,7 +318,7 @@ func TestRegistrationValidation(t *testing.T) {
 		{"bad p256dh", func(m map[string]any) { m["keys"] = map[string]string{"p256dh": "AAAA", "auth": authB64(t)} }},
 		{"bad auth", func(m map[string]any) { m["keys"] = map[string]string{"p256dh": p256dhB64(t), "auth": "AAAA"} }},
 		{"bad topic", func(m map[string]any) { m["topics"] = []string{"n-x-" + strings.Repeat("a", 43)} }},
-		{"topic too long", func(m map[string]any) { m["topics"] = []string{"n-b-" + string(bytes.Repeat([]byte("a"), 43)) + "x"} }},
+		{"topic too long", func(m map[string]any) { m["topics"] = []string{"n-" + string(bytes.Repeat([]byte("a"), 43)) + "x"} }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -339,7 +338,7 @@ func TestRegistrationValidation(t *testing.T) {
 	// Too many topics.
 	topics := make([]string, store.MaxTopicsPerRegistration+1)
 	for i := range topics {
-		topics[i] = "n-b-" + fmt.Sprintf("%043d", i)
+		topics[i] = "n-" + fmt.Sprintf("%043d", i)
 	}
 	resp := e.do("POST", "/v1/registrations", map[string]any{
 		"endpoint": "https://push.example/abc",
@@ -399,10 +398,10 @@ func TestRegistrationIPThrottle(t *testing.T) {
 
 func validTopic(prefix string) string { return prefix + strings.Repeat("A", 43) }
 
-func deriveTopic(t *testing.T, kind topic.Kind, input string) string {
+func deriveTopic(t *testing.T, input string) string {
 	t.Helper()
-	h := topic.SourceHash(kind, input)
-	tpc, err := topic.Topic(kind, h)
+	h := topic.SourceHash(input)
+	tpc, err := topic.Topic(h)
 	if err != nil {
 		t.Fatal(err)
 	}

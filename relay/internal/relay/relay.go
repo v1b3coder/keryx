@@ -65,9 +65,11 @@ func New(st *store.Store, fcm FCMLeg, ntfy NtfyLeg, webpush WebPushLeg, wpConc i
 	return &Dispatcher{store: st, fcm: fcm, ntfy: ntfy, webpush: webpush, wpConc: wpConc, logger: logger}
 }
 
-// Publish fans out one wake-up (validated h, kind) and records the event.
-func (d *Dispatcher) Publish(ctx context.Context, publisherID int64, kind topic.Kind, h string, n, seq *int) (Result, error) {
-	tpc, err := topic.Topic(kind, h)
+// Publish fans out one wake-up (validated h) and records the event.
+// h is opaque: the relay cannot (and need not) tell what kind of wake-up it
+// is — the type is resolved client-side (§3).
+func (d *Dispatcher) Publish(ctx context.Context, publisherID int64, h string, n, seq *int) (Result, error) {
+	tpc, err := topic.Topic(h)
 	if err != nil {
 		return Result{}, err
 	}
@@ -123,7 +125,7 @@ func (d *Dispatcher) Publish(ctx context.Context, publisherID int64, kind topic.
 	wg.Wait()
 
 	// Audit/abuse record (§7): hashes only, never payloads.
-	if err := d.store.LogEvent(publisherID, kind.String(), tpc, res.FCM, res.Ntfy,
+	if err := d.store.LogEvent(publisherID, tpc, res.FCM, res.Ntfy,
 		wpRes.Sent, wpRes.Failed, wpRes.Removed); err != nil {
 		return res, err
 	}

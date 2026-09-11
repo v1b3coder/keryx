@@ -45,7 +45,6 @@ type Server struct {
 type publishJob struct {
 	ctx         context.Context
 	publisherID int64
-	kind        topic.Kind
 	h           string
 	n, seq      *int
 }
@@ -111,7 +110,7 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) worker() {
 	for job := range s.queue {
 		s.sem <- struct{}{}
-		if _, err := s.dispatch(job.ctx, job.publisherID, job.kind, job.h, job.n, job.seq); err != nil {
+		if _, err := s.dispatch(job.ctx, job.publisherID, job.h, job.n, job.seq); err != nil {
 			s.logger.Error("queued publish failed", "err", err)
 		}
 		<-s.sem
@@ -121,11 +120,10 @@ func (s *Server) worker() {
 // --- publish ---
 
 type publishRequest struct {
-	V    int    `json:"v"`
-	Kind string `json:"kind"`
-	H    string `json:"h"`
-	N    *int   `json:"n"`
-	Seq  *int   `json:"seq"`
+	V   int    `json:"v"`
+	H   string `json:"h"`
+	N   *int   `json:"n"`
+	Seq *int   `json:"seq"`
 }
 
 func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
@@ -153,11 +151,6 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "v must be 1")
 		return
 	}
-	kind, err := topic.ParseKind(req.Kind)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
 	if err := topic.ValidateH(req.H); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -179,7 +172,6 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	job := &publishJob{
 		ctx:         r.Context(),
 		publisherID: pub.ID,
-		kind:        kind,
 		h:           req.H,
 		n:           req.N,
 		seq:         req.Seq,
@@ -187,13 +179,13 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	// Synchronous fan-out when capacity is available; queue (202) under load.
 	select {
 	case s.sem <- struct{}{}:
-		res, err := s.dispatch(job.ctx, job.publisherID, job.kind, job.h, job.n, job.seq)
+		res, err := s.dispatch(job.ctx, job.publisherID, job.h, job.n, job.seq)
 		<-s.sem
 		if err != nil {
 			s.internalError(w, err)
 			return
 		}
-		tpc, _ := topic.Topic(job.kind, job.h)
+		tpc, _ := topic.Topic(job.h)
 		writeJSON(w, http.StatusOK, map[string]any{"topic": tpc, "delivered": res})
 	case <-r.Context().Done():
 		return
@@ -208,8 +200,8 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 }
 
 // dispatch runs the fan-out and returns the §5.1 result.
-func (s *Server) dispatch(ctx context.Context, publisherID int64, kind topic.Kind, h string, n, seq *int) (relay.Result, error) {
-	return s.relay.Publish(ctx, publisherID, kind, h, n, seq)
+func (s *Server) dispatch(ctx context.Context, publisherID int64, h string, n, seq *int) (relay.Result, error) {
+	return s.relay.Publish(ctx, publisherID, h, n, seq)
 }
 
 func (s *Server) publisherLimiter(pub *store.Publisher) *ratelimit.Limiter {

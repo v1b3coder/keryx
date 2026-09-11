@@ -83,7 +83,7 @@ func TestPublishAllLegs(t *testing.T) {
 
 	key, _ := st.CreatePublisher("Acme", "company.example", 60)
 	pub, _ := st.LookupPublisher(key)
-	h := topic.SourceHash(topic.Channel, "company.example|marketing")
+	h := topic.SourceHash("company.example|marketing")
 	n, seq := 3, 7
 
 	_, err := st.UpsertRegistration("https://push.example/1", "p", "a", "", []string{})
@@ -91,12 +91,12 @@ func TestPublishAllLegs(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Register two devices on the topic: derive it first.
-	tpc, _ := topic.Topic(topic.Channel, h)
+	tpc, _ := topic.Topic(h)
 	st.UpsertRegistration("https://push.example/1", "p", "a", "", []string{tpc})
 	st.UpsertRegistration("https://push.example/2", "p", "a", "", []string{tpc})
 	wp.perEndpoint = map[string]error{"https://push.example/1": nil, "https://push.example/2": nil}
 
-	res, err := d.Publish(context.Background(), pub.ID, topic.Channel, h, &n, &seq)
+	res, err := d.Publish(context.Background(), pub.ID, h, &n, &seq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,8 +157,8 @@ func TestPublishLegErrors(t *testing.T) {
 			d, st := newTestDispatcher(t, fcm, ntfy, nil)
 			key, _ := st.CreatePublisher("Acme", "company.example", 60)
 			pub, _ := st.LookupPublisher(key)
-			h := topic.SourceHash(topic.Channel, "company.example|marketing")
-			res, err := d.Publish(context.Background(), pub.ID, topic.Channel, h, nil, nil)
+			h := topic.SourceHash("company.example|marketing")
+			res, err := d.Publish(context.Background(), pub.ID, h, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -173,8 +173,8 @@ func TestPublishNoLegs(t *testing.T) {
 	d, st := newTestDispatcher(t, nil, nil, nil)
 	key, _ := st.CreatePublisher("Acme", "company.example", 60)
 	pub, _ := st.LookupPublisher(key)
-	h := topic.SourceHash(topic.Channel, "company.example|marketing")
-	res, err := d.Publish(context.Background(), pub.ID, topic.Channel, h, nil, nil)
+	h := topic.SourceHash("company.example|marketing")
+	res, err := d.Publish(context.Background(), pub.ID, h, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,13 +192,13 @@ func TestPublishWebPushRemoval(t *testing.T) {
 	d, st := newTestDispatcher(t, nil, nil, wp)
 	key, _ := st.CreatePublisher("Acme", "company.example", 60)
 	pub, _ := st.LookupPublisher(key)
-	h := topic.SourceHash(topic.Channel, "company.example|marketing")
-	tpc, _ := topic.Topic(topic.Channel, h)
+	h := topic.SourceHash("company.example|marketing")
+	tpc, _ := topic.Topic(h)
 	st.UpsertRegistration("https://push.example/ok", "p", "a", "", []string{tpc})
 	st.UpsertRegistration("https://push.example/dead", "p", "a", "", []string{tpc})
 	st.UpsertRegistration("https://push.example/bad", "p", "a", "", []string{tpc})
 
-	res, err := d.Publish(context.Background(), pub.ID, topic.Channel, h, nil, nil)
+	res, err := d.Publish(context.Background(), pub.ID, h, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,21 +227,21 @@ func TestPublishEventLog(t *testing.T) {
 	d, st := newTestDispatcher(t, fcm, ntfy, nil)
 	key, _ := st.CreatePublisher("Acme", "company.example", 60)
 	pub, _ := st.LookupPublisher(key)
-	h := topic.SourceHash(topic.Order, "A9xQr5bDgWz4m2nPqK8tLc")
-	if _, err := d.Publish(context.Background(), pub.ID, topic.Order, h, nil, nil); err != nil {
+	h := topic.SourceHash("A9xQr5bDgWz4m2nPqK8tLc")
+	if _, err := d.Publish(context.Background(), pub.ID, h, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	var kind, tpc string
+	var tpc string
 	var fcmN, ntfyN int
 	e, err := st.LatestEvent()
 	if err != nil {
 		t.Fatal(err)
 	}
-	kind, tpc, fcmN, ntfyN = e.Kind, e.Topic, e.FCM, e.Ntfy
-	if kind != "order" || fcmN != 1 || ntfyN != 1 {
-		t.Fatalf("event log = kind %q fcm %d ntfy %d", kind, fcmN, ntfyN)
+	tpc, fcmN, ntfyN = e.Topic, e.FCM, e.Ntfy
+	if fcmN != 1 || ntfyN != 1 {
+		t.Fatalf("event log = fcm %d ntfy %d", fcmN, ntfyN)
 	}
-	if want, _ := topic.Topic(topic.Order, h); tpc != want {
+	if want, _ := topic.Topic(h); tpc != want {
 		t.Fatalf("event topic = %q, want %q", tpc, want)
 	}
 }

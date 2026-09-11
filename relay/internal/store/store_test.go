@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -209,11 +210,18 @@ func TestEventLogAndPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, _ := s.LookupPublisher(key)
-	if err := s.LogEvent(p.ID, "channel", "n-b-aaa", 1, 1, 3, 1, 2); err != nil {
+	if err := s.LogEvent(p.ID, "n-aaa", 1, 1, 3, 1, 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.LogEvent(p.ID, "order", "n-o-bbb", 0, 1, 0, 0, 0); err != nil {
+	if err := s.LogEvent(p.ID, "n-bbb", 0, 1, 0, 0, 0); err != nil {
 		t.Fatal(err)
+	}
+	e, err := s.LatestEvent()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Topic != "n-bbb" || e.FCM != 0 || e.Ntfy != 1 {
+		t.Fatalf("event = %+v", e)
 	}
 	// Prune with a huge retention keeps rows; zero retention removes all.
 	n, err := s.PruneEventLog(30 * 24 * time.Hour)
@@ -225,7 +233,59 @@ func TestEventLogAndPrune(t *testing.T) {
 	}
 	n, err = s.PruneEventLog(0)
 	if err != nil || n != 0 {
-		t.Fatalf("prune(0) = %d, %v", n, err)
+		t.Fatalf("prune(0) = %d, %v (0 = retention disabled)", n, err)
+	}
+}
+
+// TestMigrateV1ToV2 verifies an existing v1 database (with event_log.kind)
+// is upgraded in place: the column is dropped, rows survive, and the version
+// is stamped to the current one (§7 migration).
+func TestMigrateV1ToV2(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "relay-v1.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(schemaV1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO schema_version (version) VALUES (1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO event_log (publisher_id, kind, topic, fcm, ntfy, webpush_sent, webpush_failed, webpush_removed, at)
+		 VALUES (1, 'channel', 'n-Z720n4ivEXWSqHWBmeGxiryrFEd0BxzY2FdcX7E-A4E', 1, 1, 0, 0, 0, '2026-01-01T00:00:00Z')`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var version int
+	if err := s.db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != SchemaVersion {
+		t.Fatalf("version after migrate = %d, want %d", version, SchemaVersion)
+	}
+	e, err := s.LatestEvent()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Topic != "n-Z720n4ivEXWSqHWBmeGxiryrFEd0BxzY2FdcX7E-A4E" || e.FCM != 1 {
+		t.Fatalf("row after migrate = %+v", e)
+	}
+	// The kind column must be gone.
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('event_log') WHERE name = 'kind'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatal("event_log.kind still present after migration")
 	}
 }
 

@@ -19,7 +19,8 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = 1
+// v2: event_log.kind dropped (generic relay — no channel/order type marker).
+const SchemaVersion = 2
 
 // MaxTopicsPerRegistration is the per-subscription topic cap (§5.3).
 const MaxTopicsPerRegistration = 200
@@ -104,8 +105,8 @@ func (s *Store) migrate() error {
 		return fmt.Errorf("check schema: %w", err)
 	}
 	if exists == 0 {
-		// Fresh database: create the schema and stamp the version.
-		if _, err := s.db.Exec(schemaV1); err != nil {
+		// Fresh database: create the current schema and stamp the version.
+		if _, err := s.db.Exec(schemaV2); err != nil {
 			return fmt.Errorf("create schema: %w", err)
 		}
 		if _, err := s.db.Exec(`INSERT INTO schema_version (version) VALUES (?)`, SchemaVersion); err != nil {
@@ -117,13 +118,73 @@ func (s *Store) migrate() error {
 	if err := s.db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read schema version: %w", err)
 	}
-	if version != SchemaVersion {
+	if version > SchemaVersion {
 		return fmt.Errorf("%w: database is version %d, relay requires %d", ErrSchemaMismatch, version, SchemaVersion)
+	}
+	for v := version; v < SchemaVersion; v++ {
+		stmt, ok := migrations[v]
+		if !ok {
+			return fmt.Errorf("%w: no migration path from version %d", ErrSchemaMismatch, v)
+		}
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("migrate %d -> %d: %w", v, v+1, err)
+		}
+	}
+	if _, err := s.db.Exec(`UPDATE schema_version SET version = ?`, SchemaVersion); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
 	}
 	return nil
 }
 
-// schemaV1 creates the §7 schema and the schema_version table.
+// migrations maps a version to the SQL that upgrades it to version+1.
+var migrations = map[int]string{
+	1: `ALTER TABLE event_log DROP COLUMN kind`, // generic relay: no type marker
+}
+
+// schemaV2 is the current schema (§7, event_log.kind removed).
+const schemaV2 = `
+CREATE TABLE schema_version (
+  version INTEGER NOT NULL
+);
+
+CREATE TABLE publishers (
+  id            INTEGER PRIMARY KEY,
+  api_key_hash  TEXT NOT NULL UNIQUE,
+  name          TEXT NOT NULL,
+  company_id    TEXT NOT NULL,
+  rate_per_min  INTEGER NOT NULL DEFAULT 60,
+  created_at    TEXT NOT NULL
+);
+
+CREATE TABLE registrations (
+  id         TEXT PRIMARY KEY,
+  endpoint   TEXT NOT NULL UNIQUE,
+  p256dh     TEXT NOT NULL,
+  auth       TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_seen  TEXT NOT NULL,
+  user_agent TEXT
+);
+
+CREATE TABLE registration_topics (
+  registration_id TEXT NOT NULL REFERENCES registrations(id) ON DELETE CASCADE,
+  topic           TEXT NOT NULL,
+  PRIMARY KEY (registration_id, topic)
+);
+CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
+
+CREATE TABLE event_log (
+  id          INTEGER PRIMARY KEY,
+  publisher_id INTEGER NOT NULL,
+  topic       TEXT NOT NULL,
+  fcm         INTEGER, ntfy INTEGER,
+  webpush_sent INTEGER, webpush_failed INTEGER, webpush_removed INTEGER,
+  at          TEXT NOT NULL
+);
+`
+
+// schemaV1 is the v1 schema (event_log had a kind column); kept for the
+// migration path and its test.
 const schemaV1 = `
 CREATE TABLE schema_version (
   version INTEGER NOT NULL
@@ -387,11 +448,11 @@ func (s *Store) RegistrationsForTopic(topic string) ([]Registration, error) {
 }
 
 // LogEvent appends an event_log row (audit/abuse record: hashes only).
-func (s *Store) LogEvent(publisherID int64, kind, topic string, fcm, ntfy int, wpSent, wpFailed, wpRemoved int) error {
+func (s *Store) LogEvent(publisherID int64, topic string, fcm, ntfy int, wpSent, wpFailed, wpRemoved int) error {
 	_, err := s.db.Exec(
-		`INSERT INTO event_log (publisher_id, kind, topic, fcm, ntfy, webpush_sent, webpush_failed, webpush_removed, at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		publisherID, kind, topic, fcm, ntfy, wpSent, wpFailed, wpRemoved, nowString(),
+		`INSERT INTO event_log (publisher_id, topic, fcm, ntfy, webpush_sent, webpush_failed, webpush_removed, at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		publisherID, topic, fcm, ntfy, wpSent, wpFailed, wpRemoved, nowString(),
 	)
 	return err
 }
@@ -399,7 +460,6 @@ func (s *Store) LogEvent(publisherID int64, kind, topic string, fcm, ntfy int, w
 // EventLogEntry is one row of the bounded audit/abuse record (§7).
 type EventLogEntry struct {
 	PublisherID    int64
-	Kind           string
 	Topic          string
 	FCM, Ntfy      int
 	WebPushSent    int
@@ -410,12 +470,12 @@ type EventLogEntry struct {
 
 // LatestEvent returns the most recent event_log row (audit/inspection aid).
 func (s *Store) LatestEvent() (*EventLogEntry, error) {
-	row := s.db.QueryRow(`SELECT publisher_id, kind, topic, fcm, ntfy,
+	row := s.db.QueryRow(`SELECT publisher_id, topic, fcm, ntfy,
 		webpush_sent, webpush_failed, webpush_removed, at
 		FROM event_log ORDER BY id DESC LIMIT 1`)
 	var e EventLogEntry
 	var at string
-	if err := row.Scan(&e.PublisherID, &e.Kind, &e.Topic, &e.FCM, &e.Ntfy,
+	if err := row.Scan(&e.PublisherID, &e.Topic, &e.FCM, &e.Ntfy,
 		&e.WebPushSent, &e.WebPushFailed, &e.WebPushRemoved, &at); err != nil {
 		return nil, err
 	}
