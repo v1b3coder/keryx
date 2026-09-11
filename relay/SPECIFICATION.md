@@ -137,12 +137,13 @@ A single JSON object. **What it carries depends on the leg** (§1):
 | | Topic-based legs (FCM, ntfy topics) | Registry legs (WebPush) |
 |---|---|---|
 | identifier | **in the topic** — the payload carries none | **in the payload** as `t` (the derived topic string) |
-| counters | `n` (unread, optional) / `seq` (order, optional) | same |
+| counters | `n` (unread, optional) / `seq` (wake-up counter, optional) — independent; either, both, or neither | same |
 
 ```json
 // FCM data (native) — identity comes from the message's topic
-{ "v": 1, "n": 3 }          // channel wake-up
-{ "v": 1, "seq": 7 }        // order wake-up
+{ "v": 1, "n": 3 }           // channel wake-up
+{ "v": 1, "seq": 7 }         // order wake-up
+{ "v": 1, "n": 3, "seq": 7 } // either kind, both counters
 
 // WebPush payload — no topic at delivery, so carry it
 { "v": 1, "t": "n-b-<43 chars>", "n": 3 }
@@ -155,11 +156,18 @@ A single JSON object. **What it carries depends on the leg** (§1):
   topic-based legs the app knows the topic from its own subscription state
   (and on Android, FCM also exposes it as `from` = `/topics/<topic>` —
   an implementation aid, not a requirement).
-- `n` — unread counter hint (optional; informational only).
-- `seq` — monotonic per order (optional gap hint, not a delivery
-  guarantee). Useful for debugging and missed-wake-up detection. (Unrelated
-  to the `_sig.seq` dropped from the feed format —
-  [`../design/why.md` §8](../design/why.md).)
+- `n` — unread counter hint (optional; informational only). A UI aid: lets
+  the app show a badge without fetching. Never authoritative.
+- `seq` — monotonic counter of wake-ups for this topic, supplied by the
+  caller (optional; technical/internal, not content-derived). Primarily for
+  debugging and missed-wake-up detection: a gap in the sequence means a
+  wake-up was lost. Not a delivery guarantee, and never for ordering — the
+  app reconciles by fetching; feed ordering is editorial and dedup is
+  `(channel, id)`
+  ([`../spec/feeds.md`](../spec/feeds.md)). Unrelated to the `_sig.seq`
+  dropped from the feed format —
+  [`../design/why.md` §8](../design/why.md).
+- `n` and `seq` are independent: either, both, or neither may appear.
 - Nothing else. In particular: no title, no body, no URL, no company name,
   no status text, no raw order token.
 
@@ -198,13 +206,27 @@ or, for an order thread:
 }
 ```
 
+or both counters on either kind:
+
+```json
+{
+  "v": 1,
+  "kind": "channel",
+  "h": "<43-char base64url>",
+  "n": 3,
+  "seq": 8
+}
+```
+
 - `kind` — `"channel"` or `"order"`; selects the topic prefix (`n-b-` /
-  `n-o-`) and which counter applies.
+  `n-o-`). Counters are independent of `kind`.
 - `h` — the source hash (§3): `sha256hex("b|" + company_id + "|" + channel)`
   for channels, `sha256hex("o|" + order_token)` for orders. The caller
   computes it; the relay never sees the input. MUST be exactly 43 chars of
   base64url (32 bytes).
-- `n` / `seq` — optional counters, forwarded to the payload (§4).
+- `n` / `seq` — optional, independent; forwarded to the payload (§4).
+  `n` is the unread hint (UI), `seq` the monotonic wake-up counter
+  (debugging). Either, both, or neither may be present.
 
 Response `200 OK` (synchronous fan-out, concurrent across providers):
 
@@ -226,8 +248,7 @@ Response `200 OK` (synchronous fan-out, concurrent across providers):
   is then queued (implementation detail — ordering between the response and
   delivery is not part of the contract).
 - Errors: `401` bad/unknown key; `400` schema violation (bad `kind`, `h`
-  not 43-char base64url, both or neither counter present); `429` rate limit
-  (see §5.3).
+  not 43-char base64url); `429` rate limit (see §5.3).
 
 Duplicate wake-ups are harmless (the app diffs content anyway); no
 idempotency key is required.
