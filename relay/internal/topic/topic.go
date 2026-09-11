@@ -10,12 +10,8 @@
 // The relay receives only h (§5.1) and derives the topic; it never sees the
 // derivation input (company_id + channel, or the order token).
 //
-// Spec note: SPECIFICATION.md §3 still labels h as "sha256hex" in the
-// derivation formulas, but the normative wire format (§5.1 — "MUST be exactly
-// 43 chars of base64url (32 bytes)", the request schema, and the 47-char
-// topic length) pins h to base64url without padding. This package implements
-// the normative base64url form; the sha256hex label is a stale leftover of
-// the pre-audit one-stage derivation.
+// Source hashes are 43-char base64url (no padding) of the SHA-256 over the
+// derivation input (SPECIFICATION §3); topics are 47 chars.
 package topic
 
 import (
