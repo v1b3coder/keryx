@@ -89,19 +89,17 @@ client-side) and the relay (which publishes) agree without any exchange.
 Derivation is **two-stage**:
 
 ```
-h = sha256hex("b|" + company_id + "|" + channel)      // channel wake-up
-h = sha256hex("o|" + order_token)                     // order wake-up
+h = base64url_nopad(sha256("b|" + company_id + "|" + channel))  // channel wake-up
+h = base64url_nopad(sha256("o|" + order_token))                 // order wake-up
 
 topic = "n-b-" + base64url_nopad(sha256("keryx/relay/v1|" + h))
 topic = "n-o-" + base64url_nopad(sha256("keryx/relay/v1|" + h))
 ```
 
-- `sha256hex` = lowercase hex of SHA-256 over the UTF-8 bytes of the string.
-- `base64url_nopad` = RFC 4648 §5 base64url **without padding** (43 chars
-  for 32 bytes).
-- `h` is the **source hash** — what callers submit and the app computes
-  from its own knowledge. The relay derives the topic from `h` and never
-  sees the derivation input.
+- `h` is the **source hash** — `base64url_nopad(sha256(...))` over the
+  UTF-8 bytes of the derivation input: 43 chars (32 bytes). This is what
+  callers submit and the app computes from its own knowledge. The relay
+  derives the topic from `h` and never sees the derivation input.
 - `channel` = the bare channel name (`[a-z0-9-_]+`, per
   [`../spec/repository.md` §2](../spec/repository.md)).
 - `order_token` = the 128-bit base64url capability token (22 chars, no
@@ -220,10 +218,10 @@ or both counters on either kind:
 
 - `kind` — `"channel"` or `"order"`; selects the topic prefix (`n-b-` /
   `n-o-`). Counters are independent of `kind`.
-- `h` — the source hash (§3): `sha256hex("b|" + company_id + "|" + channel)`
-  for channels, `sha256hex("o|" + order_token)` for orders. The caller
-  computes it; the relay never sees the input. MUST be exactly 43 chars of
-  base64url (32 bytes).
+- `h` — the source hash (§3): `base64url_nopad(sha256("b|" + company_id + "|" + channel))`
+  for channels, `base64url_nopad(sha256("o|" + order_token))` for orders.
+  The caller computes it; the relay never sees the input. MUST be exactly 43
+  chars of base64url (32 bytes).
 - `n` / `seq` — optional, independent; forwarded to the payload (§4).
   `n` is the unread hint (UI), `seq` the monotonic wake-up counter
   (debugging). Either, both, or neither may be present.
