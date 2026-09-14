@@ -68,7 +68,8 @@ design questions live here together so they cannot drift apart.
    whether a channel should cap its published set.
 3. **Rich content format:** the exact HTML/CSS subset the sandboxed renderer
    allows (styles, buttons, tables); inline data-URL media and referencing
-   conventions — settled by [CONTENT.md](CONTENT.md) + the item model.
+   conventions — settled by the item model
+   ([spec/feeds.md §1.1](spec/feeds.md#11-item), [§1.4](spec/feeds.md#14-rendering-and-links)).
 4. **Thresholds in practice:** n-of-m signing (e.g. 2-of-3 for security
    alerts) is supported but off by default — how commonly will real companies
    use it?

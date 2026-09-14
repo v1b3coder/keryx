@@ -46,7 +46,7 @@ archives. One item = one TUF target.
 |---|---|
 | `id` | **REQUIRED.** Unique within the channel, stable across updates, one path segment, `[a-z0-9-_]+` (same alphabet as channel names — no dots, so no `.`/`..` ambiguity). Application-derived (e.g. the article slug); the spec defines no format. The item's TUF target path is `channels/<channel>/<id>.json`. |
 | `title` | **REQUIRED.** The only list-rendering text; there is no summary or perex. |
-| `content_html` | **REQUIRED.** Full HTML/CSS within the app's isolated, scriptless sandbox (CONTENT.md D1–D3): no scripts, no forms, no iframes/embeds, no top-level navigation; CSS cannot escape the container. Links are absolute URLs; images inline as data URLs. |
+| `content_html` | **REQUIRED.** Full HTML/CSS within the app's isolated, scriptless sandbox: no scripts, no forms, no iframes/embeds, no top-level navigation; CSS cannot escape the container. Links are absolute URLs; images inline as data URLs. |
 | `image` | OPTIONAL. Either an inline **data URL** (`data:<mediatype>;base64,…` — the self-contained preview, covered by the item's hash) or an **absolute HTTPS URL together with `image_sha256`** (linked, company-controlled origin). The preview is **never a mutable resource**: when `image` is a URL, `image_sha256` is REQUIRED — the app MUST verify the fetched bytes before rendering; mismatch → the image is unavailable (never shown), the item itself stays valid. A linked `image` without `image_sha256` is a schema violation → the item is rejected. |
 | `image_sha256` | REQUIRED when `image` is a linked URL (lowercase hex). Prohibited/ignored for an inline data URL. See `image`. |
 | `date_published` | **REQUIRED**, valid RFC 3339. The inbox ordering key. |
@@ -57,7 +57,7 @@ archives. One item = one TUF target.
 | `sig` | **REQUIRED.** Array of `{keyid, sig}` (base64url, no padding, raw 64-byte Ed25519). See §1.2. |
 
 **Deliberately absent:** `content_text` (no plain-text fallback — the content
-is self-contained HTML; decided, supersedes CONTENT.md D6), `summary`,
+is self-contained HTML), `summary`,
 `url` (the company's website remains the publisher's own surface; "read
 more" is part of `content_html`), `authors` (authorship is expressed by the
 signatures), and any `_sig` object (no extension namespace anywhere in the
@@ -143,11 +143,11 @@ never resolves through TUF ([repository.md §2](repository.md)).
 
 ### 1.4 Rendering and links
 
-- `content_html` renders in the app's isolated, scriptless container
-  (CONTENT.md D2); the app chrome (company name + confirmed origin, footer
+- `content_html` renders in the app's isolated, scriptless container;
+  the app chrome (company name + confirmed origin, footer
   reminder) is outside the container and cannot be painted over.
 - Links are intercepted and transparent: the real destination domain is
-  shown; no auto-open (CONTENT.md D5). There is no item-level `url` field —
+  shown; no auto-open. There is no item-level `url` field —
   the message body is self-contained.
 - Media is either inline (data URLs, covered by the item hash), a linked
   `image` (always hash-pinned via `image_sha256`), or an
@@ -155,7 +155,7 @@ never resolves through TUF ([repository.md §2](repository.md)).
   privacy preferences apply to linked media.
 - Footer reminder "This channel will never ask you for a password, seed, or
   code" stays **structurally true**: no forms, no reply paths, no
-  interactive content (CONTENT.md D3).
+  interactive content.
 
 ---
 
