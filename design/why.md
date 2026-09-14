@@ -330,13 +330,18 @@ an optional per-attachment `sha256`.
 
 ### 4.9 Capability-URL private feeds for per-order data
 
-Per-order delivery/invoice feeds need access control, but JSON Feed has no
-privacy semantics. We use a **capability-URL JSON Feed**: a 128-bit
+Per-order delivery/invoice feeds need access control. We use a
+**capability-URL signed document**: a 128-bit
 unguessable token in the URL, authorized by a master-signed pattern entry in
 `targets.json`. The master authorizes the namespace once; a feed engine
 creates feeds under it dynamically at checkout — no per-order TUF metadata, no
-mini repo lingering. The whole document is signed (wrapper + items) by the
-pattern entry's keys. Trade-offs accepted: the token travels in URLs (log
+mini repo lingering. The whole document is signed by the
+pattern entry's keys — **one authority by design**: no authors role, no
+channel role; the engine is both author and publisher and may rewrite the
+order's feed at any time (the deliberate simplification vs. public
+channels, stated in
+[`spec/feeds.md §3`](../spec/feeds.md#3-private-per-order-feeds)).
+Trade-offs accepted: the token travels in URLs (log
 redaction and Referrer-Policy are mandated); capability URLs are
 single-issuance with no rotation mechanism — long windows rely on 128-bit
 unguessability + signatures; the feed host sees device-level fetch telemetry.
@@ -623,7 +628,7 @@ the stated reason.
 | **Re-pair prompt on suspension** | Rejected — after a domain takeover the attacker controls the QR on that origin too; a "rescan to fix" affordance walks the user into TOFU at the worst moment ([spec/core.md §4](../spec/core.md)). |
 | **A curated tag/topic vocabulary** in v1 | Rejected for now — free-form `tags` + `language` suffice; a labeled vocabulary can be added later ([spec/feeds.md §1](../spec/feeds.md#1-public-channel-items)). |
 | **Per-feed sequence numbers (`seq`)** | Dropped — ordering is editorial; dedup is `(channel, id)`. |
-| **Per-item `_sig.expiresAt`** (auto-hide) | Deferred to v2, not rejected ([`../ROADMAP.md`](../ROADMAP.md)). |
+| **Per-item auto-hide (`expiresAt`)** | Deferred to v2, not rejected ([`../ROADMAP.md`](../ROADMAP.md)). |
 | **Per-user encryption (E2EE)** in v1 | Rejected — reintroduces key exchange, accounts, and onboarding for no gain on public broadcast content (§4.5). |
 
 **On Nostr specifically.** Nostr is the closest existing system to this one —

@@ -117,12 +117,13 @@ worker come from vite-plugin-pwa
 - **Private feeds (spec/feeds.md §3)** — capability URL (128-bit token)
   matched against an authorized pattern (origin-exact, segment-boundary
   wildcard) **before** subscribing (tampered QR → rejected) and on every sync;
-  whole-document verification: `_sig.channel` == entry.channel, `_sig.url` ==
-  fetched URL, Ed25519 over the OLPC canonical JSON of the document with top-level
-  `_sig.signatures` removed (threshold per entry), `_sig.version` monotonic
-  (anti-rollback via version memory), `_sig.expires` window (stale → keep
+  whole-document verification: `channel` == entry.channel, `url` ==
+  fetched URL, Ed25519 over the OLPC canonical JSON of the document with the
+  `sig` field removed (threshold per entry), `version` monotonic
+  (anti-rollback via version memory), `expires` window (stale → keep
   cache + retry), `expired: true` (or 404/410/pattern removal) closes the feed
-  while cached items stay visible; 1 MB document size limit; HTTPS only
+  while cached items stay visible; items use the public item format without
+  per-item signatures; 1 MB document size limit; HTTPS only
   (loopback exception for the local demo).
 - **Identity (spec/core.md §2)** — the app remembers the identity confirmed at
   pairing; `company_name` change → prominent rebranding warning, content

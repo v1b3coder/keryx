@@ -60,8 +60,9 @@ archives. One item = one TUF target.
 is self-contained HTML; decided, supersedes CONTENT.md D6), `summary`,
 `url` (the company's website remains the publisher's own surface; "read
 more" is part of `content_html`), `authors` (authorship is expressed by the
-signatures), and any `_sig` object (no extension namespace — the item is its
-own format; `_sig` remains a private-feed concept, §3).
+signatures), and any `_sig` object (no extension namespace anywhere in the
+protocol — private capability feed documents carry their fields at top
+level, §3).
 
 **Size:** per-item size limit is **app policy** — RECOMMENDED 1 MB per item
 (inline media included); the app MUST enforce a maximum and abort beyond it.
@@ -217,8 +218,9 @@ signing (§1.2) — the single-publisher model.
 
 ## 3. Private (Per-Order) Feeds
 
-JSON Feed has no privacy semantics; access control is transport-level.
-Per-order feeds use a **capability-URL JSON Feed**: a 128-bit unguessable
+Access control is transport-level; this is the one place where per-user data
+legitimately exists. Per-order feeds use a **capability-URL signed
+document**: a 128-bit unguessable
 token in the URL
 (`https://eshop.example.com/channels/tracking/<token>/feed.json`).
 **Token format (normative):** 22 chars, base64url (RFC 4648 §5, no padding)
@@ -228,13 +230,72 @@ characters whose **last character carries only 2 meaningful bits**, so just
 four alphabet values (`A`, `Q`, `g`, `w`) are valid in that position — a
 charset check MUST NOT reject a token on that basis.
 
-- **Document shape:** a private feed is a **full JSON Feed 1.1 document** —
-  `version`, `title`, `feed_url` (the capability URL), `items` — with the
-  `_sig` extension per this section. (Public channels do **not** use JSON
-  Feed documents or `_sig`; this asymmetry is intentional — private feeds
-  are not TUF targets and keep their own self-authenticating document.)
-  Generic readers can consume it via the capability URL (accepted risk, same
-  as the printed tracking number).
+**Trust model — one authority, by design (normative statement).** A private
+feed has **no authors role and no channel role**: the pattern entry's keys
+(the engine key, held by the eshop backend or the logistics partner) are the
+single authority, and the engine is both author and publisher — it can
+rewrite the whole document (items, removals, `version`, `expires`,
+`expired`) at any time. This is a deliberate simplification compared with
+public channels (channel key distributes, optional authors role authors): a
+per-order feed has one issuer per order, is small, short-lived, and
+PII-bearing, so author/publisher separation would add machinery without a
+matching threat. What bounds the engine:
+
+- the **master** authorizes the pattern (namespace + keys + threshold) once
+  in `targets.json` — the engine cannot widen its own pattern, change its
+  own keys, or reach outside its namespace;
+- each order is a **separate capability** (128-bit token), so a compromise
+  is scoped to one pattern entry — one engine/partner = one compromise
+  scope, never the whole company;
+- the `url` binding fails cross-order mix-ups, and clients verify strictly:
+  an unverifiable document is never displayed;
+- `expires` bounds the window, and `expired: true` ends the feed — after it
+  the engine cannot make clients re-poll.
+
+The residual risk, stated plainly: a **compromised engine can rewrite
+content within its own orders** (substitute items, remove items, extend
+within `expires`) — accepted, order-scoped, transient
+([`../design/threats.md`](../design/threats.md)).
+
+- **Document shape:** a single signed document — **not** a JSON Feed
+  document and **not** a TUF target. Items use the public item format
+  ([§1.1](#11-item)) **without** `sig` — the document signature covers
+  everything, and private items are never standalone.
+
+```json
+{
+  "v": 1,
+  "channel": "tracking",
+  "url": "https://eshop.example.com/channels/tracking/<token>/feed.json",
+  "version": 4,
+  "expires": "2026-03-21T00:00:00Z",
+  "expired": false,
+  "items": [ …public item fields, no `sig`… ],
+  "sig": [ { "keyid": "<K_engine>", "sig": "<base64url>" } ]
+}
+```
+
+- `v` — schema version (1). Unknown `v` → the document is dropped.
+- `channel` — MUST equal the pattern entry's `channel` (a label, see below).
+- `url` — the feed's canonical capability URL (token included). MUST
+  equal the URL the client actually fetched (origin + path, exact).
+  Binds the signed document to its capability URL/order, so a document
+  served for the wrong token (cross-order mix-up) fails the check.
+- `version` — monotonic per feed; anti-rollback / silent-removal
+  detection via client version memory.
+- `expires` — the order window end; anti-freeze. Refreshed whenever the
+  feed is updated (no per-feed cron needed).
+- `expired` — boolean, default `false`. `true` = finished, no further
+  updates; **MANDATORY** at window end (see below).
+- `items` — the published set of this order, in the public item format
+  (§1.1) minus `sig`. **Absence = removed**: the engine rewrites the
+  document (version+1, `expires` refreshed); the app replaces the item set
+  and drops absent ids — the same semantics as public channels (§1.3).
+- `sig` — Ed25519 over the **OLPC canonical JSON** of the whole document
+  with the `sig` field removed, by the entry's key(s) (threshold as in the
+  entry). Covers everything — byte integrity and authenticity in one
+  signature.
+
 - **Authorization:** a `custom.private_feed_patterns` entry in `targets.json`
   (master-signed): `{channel, pattern, keys, keyids, threshold}` (`keys` =
   key objects for the entry's keyids, normative,
@@ -257,33 +318,6 @@ charset check MUST NOT reject a token on that basis.
   boundaries (`*` = one segment; the token is its own segment; never in
   host/query). Example pattern:
   `https://eshop.example.com/channels/tracking/*/feed.json`.
-- **Self-authenticating document (one file, no mini repo):** the feed is a
-  single JSON Feed document signed **as a whole**. The top-level `_sig`
-  carries:
-  - `about` (extension identity),
-  - `channel` — MUST equal the pattern entry's `channel`,
-  - `url` — the feed's canonical capability URL (token included). MUST
-    equal the URL the client actually fetched (origin + path, exact).
-    Binds the signed document to its capability URL/order, so a document
-    served for the wrong token (cross-order mix-up) fails the check.
-  - `signatures` — Ed25519 over the **OLPC canonical JSON** of the whole
-    document with the **top-level** `_sig.signatures` field removed
-    (item-level `_sig.signatures` are covered by the signature), by the
-    entry's key(s) (threshold as in the entry). Covers wrapper *and*
-    items — byte integrity and authenticity in one signature.
-  - `version` — monotonic per feed; anti-rollback / silent-withdrawal
-    detection via client version memory.
-  - `expires` — the order window end; anti-freeze. Refreshed whenever the
-    feed is updated (no per-feed cron needed).
-
-  Per-item `_sig.signatures` MAY remain (uniform format, portability) but
-  are not load-bearing here. **The public item rules apply to the items
-  inside the document in shape only** (fields, in-place update = rewrite the
-  document with new bytes, absence = removed) — there is no public `sig`
-  requirement for them; the whole-document signature covers the updated
-  document, and the engine chooses per event. There is **no manifest, no
-  per-order TUF metadata** — the trust anchor is the master-authorized
-  pattern entry's key.
 - **App enforcement (normative sequence):** (0) the response is within the
   app's size limit — private feeds are **not** TUF targets, so no `length` is
   pinned anywhere; the app **MUST** enforce a maximum document size
@@ -291,9 +325,9 @@ charset check MUST NOT reject a token on that basis.
   engine could otherwise stream unbounded data; (1) URL matches an authorized
   pattern (origin-exact per pattern); (2) capability token present (from the
   join QR payload); (3) whole-document signature valid against the entry's
-  keys (OLPC rule above), `_sig.channel == entry.channel`, and `_sig.url`
-  equals the fetched URL; (4) `_sig.version` not older than last seen; (5)
-  `_sig.expires` not passed — stale means keep cache + retry; the feed
+  keys (OLPC rule above), `channel == entry.channel`, and `url`
+  equals the fetched URL; (4) `version` not older than last seen; (5)
+  `expires` not passed — stale means keep cache + retry; the feed
   closes only on `expired: true`, a later 404/410, or user removal (below).
 - **Pattern removal:** if the authorizing `private_feed_patterns` entry
   disappears (master-signed removal/rotation), the app **stops syncing the
@@ -302,7 +336,7 @@ charset check MUST NOT reject a token on that basis.
   on pattern removal.
 - **Not TUF targets** — dynamic per order, never hash-listed in the repo.
   `expired: true` at end of window is **MANDATORY** (the publisher MUST set
-  it; the app never closes on `_sig.expires` alone — it keeps the cache and
+  it; the app never closes on `expires` alone — it keeps the cache and
   retries until `expired: true`, 404/410, or the user removes the order).
   `expired` means *finished, no further updates*: the app stops polling the
   feed, marks it closed, and keeps the verified cached items (e.g. the
@@ -323,7 +357,7 @@ charset check MUST NOT reject a token on that basis.
   does **not** delete the cached items: the user keeps the final state
   (delivered, invoice) until they explicitly remove the order (the
   capability URL may then be dropped, or kept at user preference). Browser
-  history / paste-into-generic-reader exposure is an accepted risk (same as
+  history / paste-into-other-tools exposure is an accepted risk (same as
   the printed tracking number).
 - **PII:** this is the one place where PII legitimately exists (delivery
   address, tracking, invoice) — never in public feeds, transient only.

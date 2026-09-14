@@ -24,7 +24,7 @@ lite mode).
 | Trust/update framework | **Full TUF** — root/targets/snapshot/timestamp + delegated per-channel roles; `consistent_snapshot: false` (default; [repository.md §1](repository.md)); anti-rollback via `version` fields + the versioned `N.root.json` chain (an optional **lite mode** without snapshot/timestamp is defined in [clients.md §3](clients.md)) |
 | Distribution unit | The **TUF repo** = metadata + per-channel item files (targets). Hosted anywhere the publisher chooses (static host, CDN, bucket, CMS). The app discovers it via the root anchor: `/.well-known/keryx/root.json` on the join origin → `custom.repo_base` in root.json |
 | Metadata URLs | Root anchor: `https://<join-origin>/.well-known/keryx/root.json` (+ all `N.root.json`) — the **exclusive** source of root metadata, chain walk included. Repo base: `custom.repo_base` in the verified root.json (single URL) with optional `custom.mirrors` (array; Phase 2). Standard TUF layout inside the base — **no root files**: `timestamp.json`, `snapshot.json`, `targets.json`, `channels.<channel>.json`, and (only for authored channels) `channels.<channel>.authors.json` (version-prefixed metadata and hash-prefixed target files exist only if a publisher opts into `consistent_snapshot: true`) |
-| Channel names | `[a-z0-9-_]+` (lowercase, digits, hyphen, underscore) — used verbatim as path segments and `_sig.channel`, with no escaping anywhere. The TUF **role name** is the namespaced `channels.<channel>`: `.` is outside the channel alphabet, so the mapping is injective and no channel can collide with a top-level metadata filename |
+| Channel names | `[a-z0-9-_]+` (lowercase, digits, hyphen, underscore) — used verbatim as path segments and the private-feed `channel` field, with no escaping anywhere. The TUF **role name** is the namespaced `channels.<channel>`: `.` is outside the channel alphabet, so the mapping is injective and no channel can collide with a top-level metadata filename |
 | Public items | **One TUF target file per item** at `channels/<name>/<id>.json`; the channel's role metadata (`channels.<channel>.json`) is the published index — fetched by the client, each item hash-verified automatically (authenticity + anti-tamper; absence from the index means unpublished) |
 | MIME types | `application/json` for metadata and item files; `application/feed+json` for private capability feeds |
 | Encoding | UTF-8 |
@@ -58,12 +58,13 @@ an optional `channels.<channel>.authors` role), and the root anchor lives at
 
 **Key naming:** snake_case throughout TUF metadata, including `custom` (TUF's
 own style). Public item fields are the single lowercase words defined in
-[feeds.md](feeds.md) (`id`, `title`, `content_html`, `image`, `date_published`,
-`date_modified`, `tags`, `language`, `attachments`, `sig`). The `_sig`
-object is used only inside private capability feed documents, where its
-members are the lowercase words defined in
-[feeds.md §3](feeds.md#3-private-per-order-feeds) (`about`, `channel`, `url`,
-`version`, `expires`, `signatures`).
+[feeds.md](feeds.md) (`id`, `title`, `content_html`, `image`,
+`date_published`,
+`date_modified`, `tags`, `language`, `attachments`, `sig`); private
+capability feed documents use the same style (`v`, `channel`, `url`,
+`version`, `expires`, `expired`, `items`, `sig`,
+[feeds.md §3](feeds.md#3-private-per-order-feeds)). There is no `_sig`
+object anywhere in the protocol.
 
 ### 1.2 Metadata origin (normative)
 
@@ -230,8 +231,8 @@ valid join URL (payload-less join, below).
 - `private_feeds` (optional) — **URLs only**, not definitions: private
   capability feeds (per-order delivery, invoices…). All metadata (channel,
   display name, purpose, expiry) is resolved from the signed metadata
-  (`custom.private_feed_patterns`) and the feed itself (`_sig.channel`,
-  `_sig.version`, `_sig.expires`, standard `expired`). Each URL is
+  (`custom.private_feed_patterns`) and the feed itself (`channel`,
+  `version`, `expires`, `expired`). Each URL is
   unguessable and validated against an authorized pattern *after* pairing —
   a tampered QR cannot smuggle in an unauthorized feed. Multiple orders =
   multiple scans (the app appends) or multiple entries in one payload.
