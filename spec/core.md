@@ -11,8 +11,8 @@ renaming).
 
 This file defines conventions, the trust model, pairing, and suspension. The
 rest of the normative spec: [`repository.md`](repository.md) (TUF layout,
-authorization, key lifecycle), [`feeds.md`](feeds.md) (feed format, editor
-mode, private feeds), [`clients.md`](clients.md) (client flow, publisher tool,
+authorization, key lifecycle), [`feeds.md`](feeds.md) (item format, authors
+role, private feeds), [`clients.md`](clients.md) (client flow, publisher tool,
 lite mode).
 
 ---
@@ -22,45 +22,48 @@ lite mode).
 | Item | Rule |
 |---|---|
 | Trust/update framework | **Full TUF** — root/targets/snapshot/timestamp + delegated per-channel roles; `consistent_snapshot: false` (default; [repository.md §1](repository.md)); anti-rollback via `version` fields + the versioned `N.root.json` chain (an optional **lite mode** without snapshot/timestamp is defined in [clients.md §3](clients.md)) |
-| Distribution unit | The **TUF repo** = metadata + per-channel feed files (targets). Hosted anywhere the publisher chooses (static host, CDN, bucket, CMS). The app discovers it via the root anchor: `/.well-known/keryx/root.json` on the join origin → `custom.repo_base` in root.json |
-| Metadata URLs | Root anchor: `https://<join-origin>/.well-known/keryx/root.json` (+ all `N.root.json`) — the **exclusive** source of root metadata, chain walk included. Repo base: `custom.repo_base` in the verified root.json (single URL) with optional `custom.mirrors` (array; Phase 2). Standard TUF layout inside the base — **no root files**: `timestamp.json`, `snapshot.json`, `targets.json`, `channels.<channel>.json` (version-prefixed metadata and hash-prefixed target files exist only if a publisher opts into `consistent_snapshot: true`) |
+| Distribution unit | The **TUF repo** = metadata + per-channel item files (targets). Hosted anywhere the publisher chooses (static host, CDN, bucket, CMS). The app discovers it via the root anchor: `/.well-known/keryx/root.json` on the join origin → `custom.repo_base` in root.json |
+| Metadata URLs | Root anchor: `https://<join-origin>/.well-known/keryx/root.json` (+ all `N.root.json`) — the **exclusive** source of root metadata, chain walk included. Repo base: `custom.repo_base` in the verified root.json (single URL) with optional `custom.mirrors` (array; Phase 2). Standard TUF layout inside the base — **no root files**: `timestamp.json`, `snapshot.json`, `targets.json`, `channels.<channel>.json`, and (only for authored channels) `channels.<channel>.authors.json` (version-prefixed metadata and hash-prefixed target files exist only if a publisher opts into `consistent_snapshot: true`) |
 | Channel names | `[a-z0-9-_]+` (lowercase, digits, hyphen, underscore) — used verbatim as path segments and `_sig.channel`, with no escaping anywhere. The TUF **role name** is the namespaced `channels.<channel>`: `.` is outside the channel alphabet, so the mapping is injective and no channel can collide with a top-level metadata filename |
-| Public feeds | **Per-channel TUF target files** at `channels/<name>/feed.json` — fetched by the client, hash-verified automatically (authenticity + anti-withdrawal + anti-tamper) |
-| MIME types | `application/json` for metadata; `application/feed+json` for feeds |
+| Public items | **One TUF target file per item** at `channels/<name>/<id>.json`; the channel's role metadata (`channels.<channel>.json`) is the published index — fetched by the client, each item hash-verified automatically (authenticity + anti-tamper; absence from the index means unpublished) |
+| MIME types | `application/json` for metadata and item files; `application/feed+json` for private capability feeds |
 | Encoding | UTF-8 |
 | Keys | Ed25519 (RFC 8032), 32-byte public / 64-byte signature; algorithm declared by the key object (`keytype`/`scheme`) |
 | Keyid | SHA-256 hex of the canonical JSON of the key object `{"keytype":"ed25519","scheme":"ed25519","keyval":{"public":"<hex>"}}` (TUF standard) |
-| TUF metadata canonicalization | **securesystemslib canonical JSON (OLPC)** — delegated to the TUF library; never hand-rolled |
-| Feed-item canonicalization | **JCS (RFC 8785)** — implemented in the publisher tool and app (small, testable) |
+| Canonicalization | **securesystemslib canonical JSON (OLPC)** — one canonicalization for both TUF metadata and item signing; delegated to the TUF library; never hand-rolled |
 | Metadata signature encoding | hex (`sig` per TUF spec) |
 | Item signature encoding | base64url (no padding) of the raw 64-byte Ed25519 signature |
 | Freshness | Publisher refreshes `timestamp.json` on a short cadence (cron/CI, default 24–72 h) — the standard TUF anti-freeze mechanism; all metadata also carries `expires` |
-| No encryption | authenticity only (public feeds are broadcast; private feeds are access-controlled by capability token, [feeds.md §3](feeds.md)) |
+| No encryption | authenticity only (public items are broadcast; private feeds are access-controlled by capability token, [feeds.md §3](feeds.md)) |
 
-**Two canonicalizations, on purpose:** TUF metadata is canonicalized and
-verified by the TUF library (OLPC); feed items use JCS. Both are standard;
-they serve different layers and MUST NOT be mixed.
+**One canonicalization, on purpose:** TUF metadata and item files are
+canonicalized the same way (securesystemslib canonical JSON, OLPC), so the
+app and the publisher tool share one canonicalization path for the whole
+protocol.
 
 ### 1.1 Naming and wire identifiers
 
 The project is under a working title, so wire-level identifiers are
-deliberately codename-neutral: the JSON Feed extension is `_sig`, and no
-project name appears in any field, path, or key — with **one deliberate
-exception**: the well-known location `/.well-known/keryx/` (RFC 8615
-registered name), which MUST be a stable protocol name (it is printed into
-every QR; renaming it later breaks all printed payloads).
+deliberately codename-neutral: no project name appears in any field, path,
+or key — with **one deliberate exception**: the well-known location
+`/.well-known/keryx/` (RFC 8615 registered name), which MUST be a stable
+protocol name (it is printed into every QR; renaming it later breaks all
+printed payloads).
 
 Metadata layout follows standard TUF conventions, with documented path
-conventions: public feeds live at `channels/<channel>/feed.json` (one feed
-file per channel), each channel's TUF role is named `channels.<channel>`, and
-the root anchor lives at `/.well-known/keryx/root.json` on the join origin.
+conventions: public item files live at `channels/<channel>/<id>.json` (one
+file per item), each channel's TUF role is named `channels.<channel>` (with
+an optional `channels.<channel>.authors` role), and the root anchor lives at
+`/.well-known/keryx/root.json` on the join origin.
 
 **Key naming:** snake_case throughout TUF metadata, including `custom` (TUF's
-own style). `_sig` members inside a JSON Feed document are the single
-lowercase words defined in [feeds.md](feeds.md) (`about`, `channel`,
-`withdrawn`, `resources`, `signatures`, `url`, `version`, `expires`); a future
-multi-word member would be camelCase, matching JSON Feed's own style for
-extension content.
+own style). Public item fields are the single lowercase words defined in
+[feeds.md](feeds.md) (`id`, `title`, `content_html`, `image`, `date_published`,
+`date_modified`, `tags`, `language`, `attachments`, `sig`). The `_sig`
+object is used only inside private capability feed documents, where its
+members are the lowercase words defined in
+[feeds.md §3](feeds.md#3-private-per-order-feeds) (`about`, `channel`, `url`,
+`version`, `expires`, `signatures`).
 
 ### 1.2 Metadata origin (normative)
 
@@ -80,8 +83,9 @@ allowed; cross-origin redirects stay blocked.
 
 One **master key** (offline; `root` + `targets`), one **online ops key**
 (`snapshot` + `timestamp`), and **one key per channel** (`channels.<channel>`
-role; signs that channel's feed-pinning metadata). Optional: **editor keys**
-(`custom.editor_mode`, [feeds.md §2](feeds.md)), a **private-feed engine key**
+role; signs that channel's item index metadata). Optional: an **authors role**
+per channel (`channels.<channel>.authors` delegation,
+[feeds.md §2](feeds.md#2-authors-role)), a **private-feed engine key**
 (`custom.private_feed_patterns`, [feeds.md §3](feeds.md)), and additional keys
 per threshold.
 
@@ -158,8 +162,8 @@ change).
 |---|---|
 | Root key (offline, threshold) | master key |
 | Root metadata | `root.json` (pinned; versioned for chain walk; served only from the well-known anchor) |
-| Targets role (offline) | `targets.json` — channel delegations + master-signed `custom` (company, editor mode, private patterns) |
-| Delegated roles | channel keys (one role per channel, named `channels.<name>`; signs that channel's feed pinning) |
+| Targets role (offline) | `targets.json` — channel delegations (incl. optional authors roles) + master-signed `custom` (company, channel display metadata, private patterns) |
+| Delegated roles | channel keys (one role per channel, named `channels.<name>`; signs that channel's item index) + optional authors roles (`channels.<name>.authors`; authorizes item signing) |
 | Delegation paths | `channels/<name>/*` (channel namespace) |
 | Role keyids + threshold | `delegations[].keyids` + `threshold` |
 | Snapshot/timestamp | freshness + anti-freeze (publisher-side cadence; consumed by the standard client) |

@@ -11,11 +11,14 @@ UX/design rationale into [DESIGN.md](DESIGN.md) (§8.1, §4 threat model).
 Nothing here is normative yet; the current normative text (PROTOCOL §8.2:
 *sanitized HTML subset*) stands until this supersedes it.
 
-**Provenance:** discussion outcome. JSON Feed 1.1 already carries the **full
-article body** (`content_html` / `content_text`; `summary` is the optional short
-form, i.e. the perex) — so the open question was not *where* the body lives, but
-**how expressive the authenticated body may be** and **what remains outside the
-trust model**.
+**Provenance:** discussion outcome. The protocol no longer uses a JSON Feed
+document for public channels — each item is its own signed TUF target
+(`channels/<channel>/<id>.json`), with `content_html` carrying the full
+article body; `content_text` and `summary` are gone (D6). The open question
+was **how expressive the authenticated body may be** and **what remains outside
+the trust model** — settled here; the normative rules moved into
+[spec/feeds.md](../spec/feeds.md) (§1) and the design rationale into
+[design/why.md](../design/why.md) (§4.3).
 
 ---
 
@@ -28,23 +31,27 @@ trust model**.
 | D3 | **Forms and iframes/embeds stay excluded** (even though they are HTML, not JS) — this keeps "the channel never asks for a password/seed/code" a **structural** property, not a heuristic. |
 | D4 | The app **MUST always display the confirmed origin** next to `company_name`/`logo` (contact card + message header). Name/logo are publisher-controlled decoration; the **origin is the identity anchor**. |
 | D5 | Links stay intercepted and transparent (real destination domains shown, no auto-open); a "leaving the secure area" notice via a master-signed `custom.web_origins` allowlist is **proposed** (open question, not locked). |
-| D6 | `content_text` fallback stays mandatory; media stays **referenced, not inlined** (accepted device-level telemetry at the company's CDN). |
+| D6 | No `content_text` fallback — the item is self-contained HTML; inline media (data URLs) means the feed renders from the repo alone; external attachments are the only fetch-on-demand resources (with optional per-attachment hashes). |
 
 ---
 
 ## 1. What the authenticated body already is
 
-- The feed document carries the whole article body — `content_html` (full
-  content in HTML) and `content_text` (full content in plain text, always
-  present as fallback). `summary` is optional and is the perex if a publisher
-  chooses to use one (PROTOCOL §8.2).
-- The whole document (wrapper + items) is covered by the TUF target hash pinned
-  in the channel role metadata — nothing in the body is forgeable by a feed
-  host (PROTOCOL §8.1).
-- Per-item signatures are **load-bearing only in editor mode**; in default mode
-  they are attribution-only (PROTOCOL §8.2).
-- **Not covered by the trust model:** the bytes at `image`,
-  `attachments[].url`, and any link target. The signed item vouches for the
+- Each item file carries the whole article body — `content_html` (full
+  content in HTML), `title`, inline `image` (data URL), `date_*`, `tags`,
+  `language`, `attachments`, `sig`
+  ([spec/feeds.md §1](../spec/feeds.md)). There is no feed document, no
+  `summary`, no `content_text` (D6), and no item `url` — the message is
+  self-contained; "read more" is part of the content.
+- The item file is covered by the TUF target hash pinned in the channel role
+  metadata — nothing in the body is forgeable by a host
+  ([spec/repository.md §3](../spec/repository.md)).
+- Item signatures are **always load-bearing**: by the channel role keys, or by
+  the channel's authors role when one exists
+  ([spec/feeds.md §1.2](../spec/feeds.md)).
+- **Not covered by the trust model:** the bytes at un-hashed `attachments[].url`
+  and any link target inside the content. An attachment with a `sha256` is
+  covered; a link is not. The signed item vouches for the
   *URL*, not for the *bytes* behind it (§3).
 
 ## 2. Expressiveness: HTML/CSS, no JS
@@ -94,33 +101,35 @@ abuse vectors with HTML/CSS only:
 
 | What | Covered by | Guarantee |
 |---|---|---|
-| Article body (text/HTML/CSS in feed) | TUF target hash (+ item signatures in editor mode) | Authentic bytes |
-| `image` / `attachments[].url` / CSS-loaded resources (`url()`, `@font-face`) | **Nothing** (media is NOT a TUF target; JSON Feed has no hash field; `size_in_bytes` is advisory) | Authentic *URL*, not bytes |
-| Link targets | **Nothing** (by design: "as trustworthy as a link on the company's own website", DESIGN §3.1) | Web-origin trust only |
+| Article body (title/content HTML/inline image in the item file) | TUF target hash + item signature | Authentic bytes |
+| `attachments[].url` with `sha256` | The item's signed `sha256` | Authentic bytes |
+| `attachments[].url` without `sha256` / CSS-loaded external resources (`url()`, `@font-face`) | **Nothing** | Authentic *URL*, not bytes |
+| Link targets | **Nothing** (by design: "as trustworthy as a link on the company's own website") | Web-origin trust only |
 
-### Media integrity — open options
+### Media integrity
 
-1. **Document as residual risk** — threat-model row + open question; operational
-   guidance only (immutable media URLs, strict origin allowlist, sandboxed
-   rendering).
-2. **Content-addressed media URLs + client verification** *(recommended for
-   v1)* — convention: media URL embeds its own hash
-   (`/media/<sha256>/fw.jpg`); the app recomputes the hash of downloaded bytes
-   and compares it to the URL before rendering. Since the URL is inside the
-   signed feed, the hash becomes cryptographically bound. No wire-format or TUF
-   change; requires immutable media per URL (good practice anyway).
-3. **Pin media as TUF targets** *(full answer)* — media files hash-pinned in the
-   channel role metadata (same machinery as `next_url` archives, PROTOCOL §5);
-   fetched hash-verified via the TUF client. Strongest guarantee; heavier:
-   role metadata grows, publish cadence tied to media changes, media becomes
-   repo-versioned.
+Settled for v1:
+
+1. **Inline media (data URLs)** — covered by the item's TUF hash; the feed
+   renders from the repo alone. No external fetch, no telemetry, no hash
+   bookkeeping.
+2. **Attachments with `sha256`** *(RECOMMENDED for static downloads)* — the
+   hash lives inside the signed attachment object; the app verifies before
+   render/save; mismatch → resource unavailable, item unaffected. No
+   wire-format change; requires immutable media per URL.
+3. **Attachments without `sha256`** — ordinary web links (dynamic landing
+   pages); accepted as residual risk, documented as such.
+4. **Media as TUF targets** — rejected for v1 (role metadata growth, publish
+   cadence tied to media changes); not needed since inline media is
+   self-covered.
 
 ## 4. Threat model refinement (to add to DESIGN §4)
 
-- Row: **compromised feed host / CDN** — unchanged (feed files are TUF
+- Row: **compromised feed host / CDN** — unchanged (item files are TUF
   targets; harm = availability).
-- Row: **media-origin compromise** — images/PDFs at signed URLs can be swapped;
-  harm = content display (not feed integrity). Mitigated per §3 option 2/3.
+- Row: **media-origin compromise** — un-hashed attachment URLs can be swapped;
+  harm = content display (not feed integrity). Mitigated per §3 (attachment
+  `sha256`).
 - Row: **compromised *rightful* owner** — can socially engineer via text/links;
   cannot execute code (D1) or capture input structurally (D3); revocation =
   signed metadata update. Framed as *owner compromise*, not *phishing*: the
@@ -135,18 +144,19 @@ abuse vectors with HTML/CSS only:
 - Links: intercepted; real destination domains shown; no auto-open; optional
   "you are leaving \<company\> — external site" notice when the destination
   origin is not in `custom.web_origins` (if D5 is adopted).
-- Media: honor remote-media privacy preferences (block / tap-to-load);
-  per §3 option 2, verify content-addressed media hashes before rendering.
+- Media: inline media renders from the item (data URLs); attachments honor
+  remote-media privacy preferences (block / tap-to-load) and are
+  hash-verified before render when `sha256` is present.
 - Footer reminder "This channel will never ask you for a password, seed, or
   code" remains **structurally true** (D3) — not a heuristic.
 
 ## 6. Open items (before locking)
 
-1. **Media integrity decision** — §3 options; recommendation: option 2 for v1,
-   option 3 as follow-up; at minimum add the threat-model row.
+1. **Media integrity** — settled per §3 (inline = covered; attachment
+   `sha256` = recommended; no TUF media targets in v1).
 2. **`custom.web_origins` + leaving-secure-area notice** — include in v1?
    Schema if yes: master-signed array of origins in `targets.json` `custom`
-   (ignored by generic readers, TUF-preserved); app warns on links to origins
+   (TUF-preserved); app warns on links to origins
    outside the list; look-alike detection (typosquat of the confirmed origin)
    is a heuristic bonus, never crypto.
 3. **Content profile capability** — explicitly deferred: v1 is `rich`
@@ -156,20 +166,24 @@ abuse vectors with HTML/CSS only:
    company origin = extra fetches/telemetry), inline SVG (allowed? scriptless
    container neutralizes SVG scripts; external refs still fetch), tables;
    `<video>`/`<audio>` — keep as attachments, not embeds.
-5. **Feed size** — full HTML/CSS bodies inflate feeds vs summary-only;
-   re-check the ~250 KB soft cap and archive policy.
+5. **Item size** — full HTML/CSS + inline media inflate item files vs
+   summary-only; app policy cap (1 MB) replaces the old ~250 KB feed cap;
+   per-item diffing means this is per-file, not per-channel.
 6. **Rendering determinism** — CSS is declarative, so no renderer pinning
    needed; note only (no action).
 
 ## 7. Targets once locked
 
-- **PROTOCOL §8.2** — replace "sanitized HTML subset" with D1–D3, D5, D6 rules
-  (sandbox contract, exclusions, link handling, origin display MUST,
-  `content_text` fallback).
-- **PROTOCOL §4** — if D5: `custom.web_origins` (master-signed allowlist).
-- **DESIGN §8.1** — sandboxed rendering, origin display, link notice, media
-  hash verification (per §3).
-- **DESIGN §4** — threat-model rows (§4 of this document).
-- **DESIGN §3.1 goal 3** — rephrase "as trustworthy as a link on the company's
+- **[spec/feeds.md §1](../spec/feeds.md)** — the item format now carries D1–D3,
+  D5, D6 rules (sandbox contract, exclusions, link handling, origin display
+  MUST, no `content_text`).
+- **[spec/repository.md §2](../spec/repository.md)** — if D5: `custom.web_origins`
+  (master-signed allowlist).
+- **[design/products.md §1](../design/products.md)** — sandboxed rendering,
+  origin display, link notice, attachment hash verification (per §3).
+- **[design/threats.md](../design/threats.md)** — threat-model rows (§4 of
+  this document).
+- **[design/why.md §3.1 goal 3](../design/why.md)** — rephrase "as trustworthy
+  as a link on the company's
   own website" into the precise statement: body = authenticated; media =
   URL-authentic only; links = web-origin trust.

@@ -34,13 +34,15 @@ one deliberate exception: transient per-order data behind capability tokens,
 
 Messages are public announcements whose authenticity always traces to **keys
 the company authorizes** (master key and per-channel delegated keys): each
-channel's feed is hash-pinned by signed metadata, and in editor mode every
-item additionally carries its author's signature. Authenticity — not
+channel's items are hash-pinned by signed metadata (the channel role metadata
+is the published index), and every item additionally carries its author's
+signature. Authenticity — not
 confidentiality — is the property that matters against phishing, and
 signatures give it without any key exchange, accounts, or onboarding. The
-company distributes a **standard TUF repository** (metadata + signed feed
+company distributes a **standard TUF repository** (metadata + signed item
 files); the app verifies the metadata chain with a standard TUF client and
-verifies item signatures where the channel requires them (editor mode). The
+verifies item signatures always — by the channel role key, or by the
+channel's authors role when one exists. The
 trust anchor is a canonical `/.well-known/` location on the origin the user
 confirms; the repo itself may live anywhere (CDN, CMS). The server does not
 even need to know that the user exists.
@@ -53,7 +55,7 @@ compromising **both** the metadata origin *and* the root of trust (master
 key); delegated keys are scoped, so a single channel-key compromise cannot
 forge other channels.
 
-The protocol is deliberately boring: HTTPS + QR + TUF + Ed25519 + JSON Feed.
+The protocol is deliberately boring: HTTPS + QR + TUF + Ed25519.
 A small e-shop can adopt it in an afternoon with one tool; a company with
 strict key custody can keep the master key offline and delegate everything
 else. It is also cheap to keep running: because every file is signed and
@@ -147,15 +149,16 @@ phishing wave everywhere.
    capability-protected private feeds.
 3. **Phishing-resistant by construction, with no user judgment calls**:
    - Every message is covered by a signature chaining to the pinned metadata
-     — either through its feed's hash pin (signed by the channel key) or, in
-     editor mode, additionally per item. Verification is binary and
+     — either through its item's hash pin (signed by the channel key) or its
+     per-item signature. Verification is binary and
      automatic: chain verifies → show; anything fails → reject. There is no
      "maybe trust it" state.
    - The channel is **one-way** — no reply path, no forms, no interactive
      credential capture. It is an announcement feed, not a conversation.
    - **Rich content by default**: the channel is the *primary, trusted source*
-     for the company's content — links, blogs, marketing, media. A link inside
-     a signed message is as trustworthy as a link on the company's own
+     for the company's content — links, blogs, marketing, media. Items are
+     self-contained (content and preview inline); a link inside a signed
+     item is as trustworthy as a link on the company's own
      website; the app renders links **transparently** (real destination
      domains shown, no hidden redirects, no auto-open).
 4. **Simple trust model, no extra constructs**: the user confirms the
@@ -174,15 +177,16 @@ phishing wave everywhere.
    language, region, topic, or product line — without ever storing or
    learning a user profile. Content is tagged; the app filters locally.
 8. **Standards-first, no reinvention**: the metadata chain is **TUF** (full
-   repo, standard client); the data carrier is **JSON Feed 1.1** with our
-   data in a `_sig` extension other readers ignore; signatures are **raw
-   Ed25519 over JCS**. Our app *enforces* the scheme on top.
+   repo, standard client); the data carrier is **per-item signed JSON files**
+   (TUF targets, one item per file) with a `sig` field; signatures are **raw
+   Ed25519 over the TUF canonical JSON (OLPC)**. Our app *enforces* the
+   scheme on top.
 9. **Delegated keys are supported** (TUF-style delegations) — but they change
    *who signs*, never *how it is verified*: the app still makes a binary
    decision against the pinned root, with no trust states, no warnings, no
    user judgment. Thresholds (n-of-m) are optional, off by default.
-10. **Editor mode is optional**: per-channel editor keys sign items, the
-    channel key only publishes, and the app enforces both — still with a
+10. **The authors role is optional**: per-channel author keys sign items,
+    the channel key only publishes, and the app enforces both — still with a
     binary rule. It separates authoring from publishing; channels without it
     keep the simpler single-publisher model.
 
@@ -240,26 +244,36 @@ source of root metadata (chain walk included); the repo base is
 master-signed-linked from root.json and may live elsewhere (CDN, CMS,
 bucket), making it availability-only — it never serves root metadata.
 
-### 4.3 JSON Feed 1.1 as the carrier
+### 4.3 One signed item file per target, no feed document
 
-Feeds are plain JSON Feed 1.1 documents — consumable by any generic feed
-reader (NetNewsWire, Reeder, podcast apps), which is a free adoption path.
-Our data lives in the `_sig` extension, JSON Feed's first-class mechanism for
-custom objects: readers that don't understand it must ignore it. We accept
-the honest caveat that JSON Feed readers are a niche vs RSS — this is a bonus,
-not a headline.
+Each item is a small JSON file at `channels/<channel>/<id>.json`, hash-pinned
+as its own TUF target; the channel's role metadata is the index — the
+complete, signed snapshot of what is currently published. Why this shape
+rather than a feed document: a TUF target is hash-pinned as a whole file, so
+a feed document can never be partially fetched — every wake-up costs a full
+re-download. One item per target makes the diff cheap (fetch only new or
+changed items) and makes *absence unambiguous*: an item not in the index is
+unpublished, and every client converges on the same published set with no
+tombstones, no retention windows, and no archive machinery. The trade is
+that Keryx is a broadcast snapshot, not an archive: the company's own
+website remains the long-term home of old content, and published items do
+not need to be there forever.
 
-### 4.4 Ed25519 over JCS, no envelope
+We accept the loss of generic reader compatibility: a feed document was the
+only thing JSON Feed gave us, and JSON Feed readers are a niche vs RSS. No
+unsigned export is offered in v1.
 
-Item signatures are raw 64-byte Ed25519 over the JCS (RFC 8785) canonical
-bytes of the item. No signature envelope (JWS-style wrapper): an envelope
+### 4.4 Ed25519 over the TUF canonicalization, no envelope
+
+Item signatures are raw 64-byte Ed25519 over the OLPC canonical JSON of the
+item (the same canonicalization TUF metadata uses — one canonicalization for
+the whole protocol, shared by the app and publisher tool). No signature
+envelope (JWS-style wrapper): an envelope
 carries algorithm negotiation and header machinery that nothing here
 consumes — the algorithm is fixed and the keys come from signed metadata.
 Ed25519 over ECDSA for: deterministic nonces (no RNG-failure key leaks), ~2–4×
 faster verification, 64-byte signatures, non-malleability, audited
-constant-time implementations. TUF metadata uses the TUF library's own
-canonicalization (OLPC) — two canonicalizations on purpose; they serve
-different layers and must not be mixed.
+constant-time implementations.
 
 ### 4.5 Authenticity, not confidentiality (no E2EE in v1)
 
@@ -301,15 +315,15 @@ cryptography.
 
 ### 4.8 Zero per-user state, local filtering
 
-Companies target content with standard JSON Feed fields (`tags`,
-`language`) — no curated vocabulary, no user profiles; the app filters
+Companies target content with `tags` and `language` (item fields) — no
+curated vocabulary, no user profiles; the app filters
 locally. A shared catalog gives the server no signal about which topics are
-popular: every user fetches the same bytes per channel. Honest caveat: rich
-content is *referenced, not inlined*, so fetching media and per-channel feeds
-leaves device-level telemetry at the host — a transport property, not a
-protocol requirement, analysed in [`threats.md`](threats.md). Referenced bytes
-are also mutable by the media host unless the item pins them with the optional
-`_sig.resources` hashes.
+popular: every user fetches the same item files per channel. Honest caveats:
+the channel role metadata and item files leave device-level fetch telemetry
+at the host (which channels a device follows are visible to the CDN in the
+metadata fetch), and external
+`attachments` are mutable by the media host unless the item pins them with an
+optional `sha256` per attachment.
 
 ### 4.9 Capability-URL private feeds for per-order data
 
@@ -361,32 +375,38 @@ sees only random capability URLs and RFC 8291 ciphertext.
 component spec decides the transport shape; implementation and client
 integration remain WIP.
 
-### 4.11 Editor mode: authoring separated from publishing
+### 4.11 Authors role: authoring separated from publishing
 
-In editor mode, per-channel editor keys sign items and the channel key only
-publishes; the app enforces both with the same binary rule. Why: an editor
+An authored channel has a `channels.<channel>.authors` delegation
+(master-signed); author keys sign items and the channel key only
+publishes; the app enforces both with the same binary rule. Why: an author
 compromise can author items, but they reach users only if the publisher
 publishes them (CI review gate = policy, not protocol); a channel-key
-compromise can re-pin/withhold but cannot forge items. It is master-signed so
-the publisher cannot self-authorize, and the reference tool refuses to
-configure the same key as both channel key and editor key.
+compromise can re-pin/withhold/unpublish but cannot forge items. It is
+master-signed so
+the publisher cannot self-authorize (the channel key cannot nominate or
+withdraw authors — `targets.json` is master-signed), and the reference tool
+refuses to
+configure the same key as both channel key and author key.
 
 This is aimed at **larger publishers**, where authoring, review, and
 operations are already different people — which is why it stays in the Phase 1
 MVP despite adding machinery a one-person e-shop will never enable. Two
-properties follow from per-item signing and are worth naming: editor keys can
-live on **hardware signing devices** (an editor *is* a device the CI trusts,
+properties follow from per-item signing and are worth naming: author keys can
+live on **hardware signing devices** (an author *is* a device the CI trusts,
 rather than a credential on a build machine), and the signing UX stays
-proportionate — an editor signs the piece they wrote, not the whole feed. No
+proportionate — an author signs the piece they wrote, not a whole document. No
 wire-format change is implied: a device produces the same raw Ed25519
-signature over JCS as a software key, so what remains open is the signing
+signature over the TUF canonicalization as a software key, so what remains
+open is the signing
 *flow* around it ([`../ROADMAP.md`](../ROADMAP.md)) — chiefly how the device
-shows the editor what they are approving.
+shows the author what they are approving.
 
-Editor rotation requires re-signing the items that stay published: that is a
+Author rotation requires re-signing the items that stay published: that is a
 feature, not overhead — when someone leaves, a person still with the company
-puts their name on what remains live, instead of the feed carrying signatures
-nobody stands behind. Editor keys stay with editors; they do not belong in CI.
+puts their name on what remains published, instead of the index carrying
+signatures
+nobody stands behind. Author keys stay with authors; they do not belong in CI.
 
 ### 4.12 Boring key lifecycle, standard machinery
 
@@ -407,8 +427,8 @@ Full TUF requires the publisher to keep `timestamp.json` fresh (a cron/CI
 line) — the single biggest operational objection for small publishers. **Lite
 mode** ([spec/clients.md §3](../spec/clients.md)) is a formal extension that
 drops snapshot/timestamp and the online ops key while preserving
-authentication, authorization, feed hash-pinning, anti-rollback, binary
-verification, editor mode, and private feeds. It is not part of the Phase 1
+authentication, authorization, item hash-pinning, anti-rollback, binary
+verification, authors role, and private feeds. It is not part of the Phase 1
 MVP; graduation is one root re-sign (flip `custom.mode`, publish
 snapshot/timestamp, set up the cron).
 
@@ -432,7 +452,7 @@ not.
 ### 4.14 Passive infrastructure: a high cryptographic ceiling on a near-zero operational floor
 
 The honest first impression of this protocol is that it looks heavier than a
-mailing list: TUF roles, key custody, thresholds, two canonicalizations. That
+mailing list: TUF roles, key custody, thresholds, one canonicalization. That
 impression is about the **setup**, not the **running**. What a publisher
 operates after `init` is a directory of static files.
 
@@ -440,7 +460,7 @@ There is no sending, so there is no deliverability, no IP reputation, no
 bounce or complaint handling, no list hygiene, no unsubscribe plumbing, and no
 recipients to address — every subscriber fetches the same bytes. There is no
 per-user state, so there is no customer list to hold, to hand to a vendor, or
-to lose (§4.8). And because every file is signed and every feed is
+to lose (§4.8). And because every file is signed and every item is
 hash-pinned, the serving infrastructure is **explicitly not trusted**: the
 repo base can be any commodity CDN, bucket, or CMS — a host that can drop or
 delay files but cannot forge one, tamper with one, or silently withdraw one
@@ -468,7 +488,7 @@ tool's job ([`products.md`](products.md)).
 ┌──────────────┐  scan QR   ┌──────────────────────────────────┐
 │  User's app  │──────────▶ │  Company repo (TUF, static)      │
 │  (phone)     │            │  root/targets/<channel>/snapshot/ │
-│              │◀───────────│  timestamp + feed files          │
+│              │◀───────────│  timestamp + item files           │
 │              │  HTTPS     │  (verified by standard TUF client)│
 └──────┬───────┘            └──────────────────────────────────┘
        │
@@ -528,9 +548,11 @@ tool's job ([`products.md`](products.md)).
    brand from here on: the origin is the anchor, the brand is decoration
    under it.
 5. **Receive.** On wake-up or sync, the app refreshes metadata, fetches the
-   public feed files (hash-verified TUF targets), verifies each item
-   against its channel's authorization (strict: failing items are dropped,
-   even if previously shown), applies updates/withdrawals, filters by local
+   item files the index says changed (hash-verified TUF targets), verifies
+   each item's signature against its channel's authorization (strict:
+   failing items are dropped,
+   even if previously shown), drops items absent from the index
+   (unpublished), filters by local
    preferences, and shows messages. Anything that fails verification is
    simply not shown.
 6. **Manage.** Mute/leave channels or delete the company (keys and cached
@@ -546,8 +568,8 @@ codes, no trust dialogs.
 | Area | Existing standard | Verdict |
 |---|---|---|
 | Metadata chain | **TUF (The Update Framework)** — root/targets/snapshot/timestamp, delegations, thresholds, versioned files | **Adopted in full** (full mode; lite mode is a documented extension with its own verification path) — the publisher produces a standard TUF repo with standard tooling (go-tuf/python-tuf/RSTUF); the app consumes it with a standard client. The trust anchor is `/.well-known/keryx/root.json` (RFC 8615) and the exclusive source of root metadata (the client's fetcher routes root requests there — a supported extension point, not a fork); the repo base is the master-signed `custom.repo_base`. Channel keys are delegated roles; private feeds are authorized by a master-signed pattern list in `custom` (never TUF targets). |
-| Item/message schema | **JSON Feed 1.1** (`application/feed+json`) | **Adopted** — feeds are JSON Feed documents; our data lives in the `_sig` extension (ignored by other readers). |
-| Signatures | **EdDSA (RFC 8032)** — raw over **JCS (RFC 8785)** | **Adopted** — no signature envelope (JWS-style wrappers add algorithm negotiation and headers that nothing here consumes). Ed25519 over ECDSA: deterministic nonces, no RNG-failure key leaks, ~2–4× faster verification, 64-byte signatures, non-malleable, audited constant-time implementations. |
+| Item/message schema | **Per-item signed JSON files** (one TUF target per item; JSON Feed item fields without the document) | **Adopted** — each item is a small, self-contained file at `channels/<channel>/<id>.json`, hash-pinned by the channel role metadata (the index). No feed document, no `_sig` extension, no generic-reader compatibility (deliberately given up — Keryx is a broadcast snapshot, not a feed for generic readers). |
+| Signatures | **EdDSA (RFC 8032)** — raw over **securesystemslib canonical JSON (OLPC)**, the TUF canonicalization | **Adopted** — no signature envelope (JWS-style wrappers add algorithm negotiation and headers that nothing here consumes). One canonicalization for TUF metadata and item signing. Ed25519 over ECDSA: deterministic nonces, no RNG-failure key leaks, ~2–4× faster verification, 64-byte signatures, non-malleable, audited constant-time implementations. |
 | Domain binding | DNSSEC/DANE (RFC 6698), TLS certs | Optional hardening; a Phase-2 optional anchor (zone-published root key) is DNSSEC-required by design. |
 | Wake-up / push | **WebSub** (W3C) | **Rejected** — per-subscriber callback URLs are per-user state at the hub (the linkage this protocol eliminates). Wake-up is transport-agnostic; the relay uses FCM topics + UnifiedPush/WebPush endpoints ([relay spec](../relay/SPECIFICATION.md)), WIP. |
 | Signed public broadcast | Nostr; ActivityPub | Inspiring but rejected: Nostr treats a key as a permanent identity — no rotation, revocation, delegation, or threshold chain — and relays provide no freshness proof; ActivityPub is social and two-way. Reasoning in §8. |
@@ -557,9 +579,11 @@ codes, no trust dialogs.
 verified by a standard client with standard tooling — but a real
 implementation also carries a documented profile on top: root fetched from
 the well-known anchor via the client's fetcher hook, the app-level semantics
-living in master-signed `custom` blobs (company identity, editor mode,
-private-feed patterns, `repo_base`, `mode`), item signing in JCS alongside
-TUF's own canonicalization, and — from Phase 2 — lite mode's non-standard
+living in master-signed `custom` blobs (company identity, channel display
+metadata, private-feed patterns, `repo_base`, `mode`), item signing in the
+same canonicalization as TUF, an optional authors delegation (a standard TUF
+delegated role that pins no targets), and — from Phase 2 — lite mode's
+non-standard
 verification path. TUF carries the part it was built for (delegated, scoped,
 rotatable authorization with anti-rollback); the rest is ours, by necessity
 rather than preference, since TUF has no notion of company identity or
@@ -580,17 +604,21 @@ the stated reason.
 
 | Alternative | Verdict |
 |---|---|
+| **JCS (RFC 8785)** for item signing | Rejected — a second canonicalization buys nothing; one canonicalization (OLPC, the TUF one) is shared by metadata and items (§4.4). |
 | **JWS / signature envelope** for items | Rejected — algorithm negotiation and header machinery that nothing here consumes; the algorithm is fixed and keys come from signed metadata (§4.4). |
 | **ECDSA** instead of Ed25519 | Rejected — RNG-dependent nonces, slower verification, malleability (§4.4). |
 | **WebSub** for wake-up | Rejected — per-subscriber callback URLs are per-user state at the hub (§4.10). |
-| **Nostr** as the carrier | Rejected on key lifecycle, not on signing — no rotation/revocation chain, one key per identity (so no offline master, per-channel scoping, editor keys, or thresholds), and no anti-freeze bound. See the note below. |
+| **Nostr** as the carrier | Rejected on key lifecycle, not on signing — no rotation/revocation chain, one key per identity (so no offline master, per-channel scoping, author keys, or thresholds), and no anti-freeze bound. See the note below. |
 | **ActivityPub** as the carrier | Rejected — social and two-way; this channel is a one-way announcement feed with no reply path (§4.1). |
 | **Company name/logo on the origin confirmation screen** | Rejected — they are self-asserted, so any origin can claim any brand; showing them at the decision moment would anchor recognition on forgeable chrome instead of the domain, re-importing email's hidden-display-name failure. Shown only after the chain verifies, always beside the origin ([spec/core.md §2](../spec/core.md)). |
 | **A metadata URL in the QR payload** | Rejected — anything attacker-controllable in the payload that points at metadata weakens pairing; the anchor is derived from the confirmed origin instead (§4.6). |
 | **Lite mode as the default** | Rejected — tooling exists for full TUF today, and the target adopters can run a cron line; lite is an opt-in downgrade (§4.13). |
-| **`consistent_snapshot: true` as the default** | Rejected for this topology — unbounded accumulation of versioned metadata and hash-named feed copies on static hosts, and it splits the feed into two copies (TUF clients vs generic readers). Publishers may opt in ([spec/repository.md §1](../spec/repository.md)). |
+| **`consistent_snapshot: true` as the default** | Rejected for this topology — unbounded accumulation of versioned metadata and hash-named item copies on static hosts. Publishers may opt in ([spec/repository.md §1](../spec/repository.md)). |
+| **A feed document / JSON Feed carrier** | Rejected — the feed document was the only thing JSON Feed gave us, and it blocks incremental fetch (a whole-document hash pin) and makes withdrawal ambiguous; one item per target plus a signed index is simpler and every client sees the same published set (§4.3). |
+| **Per-target `custom` display metadata in the index** | Rejected — duplicates item fields (title/date/tags) and drifts from the signed item; the client fetches item files to render lists instead (§4.3). |
+| **`content_text` / `summary` / item `url`** | Dropped — the item is self-contained HTML; the website link is the publisher's own concern and belongs in the content (§1.1, feeds). |
 | **Re-pair prompt on suspension** | Rejected — after a domain takeover the attacker controls the QR on that origin too; a "rescan to fix" affordance walks the user into TOFU at the worst moment ([spec/core.md §4](../spec/core.md)). |
-| **A curated tag/topic vocabulary** in v1 | Rejected for now — free-form `tags` + `language` suffice; a labeled vocabulary can be added as an optional `_sig` field later ([spec/feeds.md §1.1](../spec/feeds.md)). |
+| **A curated tag/topic vocabulary** in v1 | Rejected for now — free-form `tags` + `language` suffice; a labeled vocabulary can be added later ([spec/feeds.md §1](../spec/feeds.md#1-public-channel-items)). |
 | **Per-feed sequence numbers (`seq`)** | Dropped — ordering is editorial; dedup is `(channel, id)`. |
 | **Per-item `_sig.expiresAt`** (auto-hide) | Deferred to v2, not rejected ([`../ROADMAP.md`](../ROADMAP.md)). |
 | **Per-user encryption (E2EE)** in v1 | Rejected — reintroduces key exchange, accounts, and onboarding for no gain on public broadcast content (§4.5). |
@@ -607,7 +635,7 @@ ends an identity: recovery means starting over and asking users to trust a new
 key by hand, which is the judgment call this protocol exists to remove, whereas
 rotation, revocation, and suspension are most of what Keryx is built out of.
 One key per identity also rules out the topology (§4.12): no offline master, no
-per-channel scoping, no editor keys, no thresholds — NIP-26 delegated signing
+per-channel scoping, no author keys, no thresholds — NIP-26 delegated signing
 saw little adoption and is effectively abandoned — so a company's identity key
 would sit on the publishing machine. Freshness is the other half: a relay can
 simply not return an event, absence is indistinguishable from withholding, and
@@ -624,8 +652,8 @@ company instead — a real advantage under a different threat model, since our
 adversary is a phisher imitating a company rather than a state seizing one;
 setup is far cheaper; addressable events give in-place update semantics
 comparable to ours (its deletion requests are weaker — relays may or may not
-honour them, where `_sig.withdrawn` is signed into the item and enforced by the
-client); and the curve choice is a wash, since BIP-340 Schnorr is sound and
+honour them, where unpublishing is enforced by the client from the signed
+index); and the curve choice is a wash, since BIP-340 Schnorr is sound and
 Ed25519 was picked for TUF-ecosystem fit, not because Nostr's is weak. The
 short version: Nostr is a good broadcast substrate with no key lifecycle and no
 freshness proof, and this protocol is mostly key lifecycle and freshness.

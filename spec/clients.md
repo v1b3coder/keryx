@@ -13,7 +13,7 @@ and the optional lite-mode extension (§3, Phase 2).
 ## 1. Client Verification Flow
 
 The app uses a standard TUF client for the metadata chain; item verification
-is ours (and editor-mode verification is protocol-mandated).
+is ours (and always protocol-mandated).
 
 ```
 payload = decode_qr(QR)                 // join URL -> base64url JSON (core §3)
@@ -33,8 +33,9 @@ client.refresh()                        // root chain (from anchor) -> timestamp
                                         // (all hash/signature/expiry verified)
 channels = delegated roles from verified targets.json
            // roles named "channels.<name>" whose paths stay inside
-           // channels/<name>/ ; other roles ignored (repository §2). Read from
-           // the client's verified metadata store.
+           // channels/<name>/ ; authors roles and other roles are not
+           // channels (repository §2). Read from the client's verified
+           // metadata store.
 
 // consent summary (core §3) — the chain is verified by this point, so the
 // summary can name things in the publisher's signed words. Nothing below
@@ -43,30 +44,28 @@ show_consent(origin  = origin,                          // stays on screen
              company = targets.custom.company_name,     // never shown earlier
              logo    = targets.custom.logo,             // logo_sha256 checked
              offered = payload.channels,                // display_name from
-                                                        //  channels.<name>.json
+                                                        //  custom.channels
              private = payload.private_feeds)
 user taps Subscribe                                     // explicit opt-in
 
 for name in followed_channels:          // from channels + local prefs
-    ti = client.getTargetInfo("channels/" + name + "/feed.json")
-                                        // TUF resolves the path to the role
-                                        // channels.<name> and verifies
-                                        // channels.<name>.json vs role keys
-    feed = client.downloadTarget(ti)    // hash-verified
-    for item in feed.items:
-        if item._sig.channel != name: reject (not shown)
-        if editor_mode[name] defined:
-            verify JCS(item, editor_mode[name].keys, item._sig.signatures,
-                       editor_mode[name].threshold)   // failure -> drop
-        else:
-            optional attribution verification (see feeds §1.2)
-        if item._sig.withdrawn: hide (never shown, not unread)
-        if (name, item.id) not in cache:              // new
-            if matches local prefs: display
-        elif content differs from cache:              // update
-            re-verified above; replace cache,
-            keep position (date_published) + read-state
-        // else: unchanged -> skip (already verified)
+    role = client.loadRole("channels." + name)
+                                        // TUF resolves the delegated role
+                                        // channels.<name> (vs its keyids);
+                                        // its targets map IS the index
+                                        // (repository §3)
+    for path, info in role.targets:     // path -> {length, hashes}
+        if info.hashes != cache[path].hashes:         // new or changed
+            item = client.downloadTarget(info)        // hash-verified bytes
+            verify_item_sig(item, authorizing_keys(role, name))  // feeds §1.2
+            if item.id != basename(path): reject      // path/id consistency
+            cache[path] = item                        // replace or add
+        else: item = cache[path]                      // unchanged, already verified
+    for path in cache[channel]:
+        if path not in role.targets: drop(path)       // ABSENCE = UNPUBLISHED
+
+    for item in cache[channel]:
+        if matches local prefs: display               // ordered by date_published
 
 for f in payload.private_feeds:         // private capability feeds from QR
     entry = pattern_match(targets.custom.private_feed_patterns, f)  // else reject
@@ -84,9 +83,10 @@ for f in payload.private_feeds:         // private capability feeds from QR
 - Root metadata only from the well-known anchor
   ([repository.md §1](repository.md)); malformed anchor data → retry, never
   suspension.
-- No signature → no display (editor mode); unknown `keyid` → reject (editor
-  mode); known `keyid` whose signature fails → item rejected (both modes,
-  [feeds.md §1.2](feeds.md)).
+- Every item MUST satisfy the item-signature rule before display: authored
+  channel → authors role threshold; single-author channel → channel role
+  threshold ([feeds.md §1.2](feeds.md)). Unknown `keyid` → ignore
+  (attribution only); known `keyid` whose signature fails → item rejected.
 - Unverifiable root change (validly signed, unchainable) → **company
   suspended** with a possible-compromise warning and no re-pair prompt
   ([core.md §4](core.md)).
@@ -94,10 +94,11 @@ for f in payload.private_feeds:         // private capability feeds from QR
 - `expired` private feed → stop polling, keep cache, mark closed.
 - Items signed by a removed key → dropped (publisher must re-sign,
   [repository.md §5](repository.md)).
-- Withdrawn items → hidden; items that merely left the live feed → kept in
-  cache (absence ≠ withdrawal, [feeds.md §1.2](feeds.md)).
-- A fetched resource that mismatches its `_sig.resources` hash → resource
-  unavailable, item unaffected.
+- Items absent from the index → dropped from display and cache (absence =
+  unpublished, [feeds.md §1.3](feeds.md)); there is no withdrawal flag and
+  no "absence ≠ withdrawal" exception.
+- An attachment that mismatches its `sha256` → resource unavailable, item
+  unaffected.
 - Company identity changed since pairing: `company_name` → prominent
   rebranding warning + **re-pair** (rescan QR) before content is shown;
   `logo` (cosmetic) → one-tap acknowledge; never silent, no auto-accept.
@@ -120,16 +121,28 @@ pub init --domain company.example --name "ACME s.r.o." [--base https://cdn.examp
        --logo also fetches the image once and records custom.logo_sha256
 pub channel add marketing              # public channel: delegation role
                                        #  channels.marketing + role metadata
-                                       #  channels.marketing.json
-pub editor add --channel marketing --keyid <id>
-pub editor revoke --channel marketing --keyid <id>
-pub publish --channel marketing --file msg.json
-     # appends item to channels/marketing/feed.json, updates the target,
-     # re-signs channels.marketing.json (channel key) + snapshot + timestamp;
-     # in editor mode: refuses to publish items that fail editor-mode
-     # verification (the tool verifies editor signatures — it never holds
-     # editor keys)
-pub rotate --channel marketing         # overlap (old+new, threshold 1)
+                                       #  channels.marketing.json + display
+                                       #  metadata in custom.channels (master)
+pub channel set --channel marketing --display-name "Offers" [--description …]
+pub author add --channel security --keyid <id>
+pub author revoke --channel security --keyid <id>
+                                     # (authored channels: channels.<ch>.authors)
+pub item sign --channel security --file draft.json --out signed.json
+                                     # author-side: signs the item file (OLPC)
+                                     # — needs only the author key + draft
+pub publish --channel marketing --file signed.json
+     # adds/replaces the item file channels/marketing/<id>.json, updates
+     # the target in the channel role metadata, re-signs
+     # channels.marketing.json (channel key) + snapshot + timestamp;
+     # in authored channels: refuses to publish items that fail the authors
+     # role threshold (the tool verifies author signatures — it never holds
+     # author keys); in single-author channels: signs the item with the
+     # channel key
+pub item unpublish --channel marketing --id <id>
+     # removes the target from the channel role metadata (absence =
+     # unpublished, feeds §1.3) + re-signs role/snapshot/timestamp
+pub rotate --channel marketing         # overlap (old+new, threshold 1); in
+                                       #  single-author channels re-signs items
 pub revoke --channel marketing --keyid <id> [--reissue]
 pub rotate-root                        # root.json v+1 signed by old master;
                                        #  written to the well-known anchor dir
@@ -148,21 +161,23 @@ pub qr --channels marketing,product --private-feed "https://…/tracking/<token>
 - Fail-safes: validates before write; deterministic output; bumps
   `version`/`expires` on metadata changes only; refuses to sign with a
   revoked key; refuses to publish an item whose `keyid` is unauthorized;
-  refuses to publish an unsigned item in an editor-mode channel; refuses
-  to configure the same key as both channel role key and editor key; rejects
+  refuses to publish an unsigned item or one below the authors role
+  threshold in an authored channel; refuses
+  to configure the same key as both channel role key and author key; rejects
   channel names outside `[a-z0-9-_]+` and always writes the role as
   `channels.<channel>`; recomputes `custom.logo_sha256` whenever `logo`
-  changes, and refuses to write a stale one; verifies every `_sig.signatures` entry it writes (a
+  changes, and refuses to write a stale one; verifies every `sig` entry it writes (a
   present-but-invalid signature is rejected by clients, so it must never
   leave the tool). Thresholds default to 1-of-1.
 - Key custody (MVP): software keys in OS keychain/encrypted file + one-time
-  backup printout. **Editor mode:** editor keys live with the editors — on
+  backup printout. **Authored channels:** author keys live with the authors — on
   their own machines or signing devices — and never in CI; the channel key
   lives in the publishing pipeline (CI); the master key offline. Advanced:
   cloud KMS / hardware ceremony (Phase 2+, additive via the Sigstore
   `signature.Signer` interface).
 - Crypto split: TUF metadata signing delegated to go-tuf/python-tuf (OLPC);
-  item signing (JCS + Ed25519) is ~50 lines in the tool and app.
+  item signing (OLPC canonical JSON + Ed25519) is ~50 lines in the tool and
+  app.
 
 ---
 
@@ -170,7 +185,7 @@ pub qr --channels marketing,product --private-feed "https://…/tracking/<token>
 
 Lite mode is a formal extension of the protocol for small publishers: it
 drops `snapshot.json` and `timestamp.json` (and the online ops key and its
-cron) while keeping authentication, authorization, feed hash-pinning,
+cron) while keeping authentication, authorization, item hash-pinning,
 anti-rollback, and binary verification. It is **not** part of the Phase 1
 MVP; the app and tool MUST implement full mode first, and MUST understand the
 `mode` flag ([repository.md §1](repository.md)) so a lite repo never breaks a
@@ -181,7 +196,7 @@ full-mode client.
 - **Layout:** identical to full mode minus snapshot/timestamp — root anchor
   at `/.well-known/keryx/root.json` (with `custom.repo_base`; root metadata
   only at the anchor), repo base with `targets.json`,
-  `channels.<channel>.json`, feed targets. Targets are served at their plain
+  `channels.<channel>.json`, item targets. Targets are served at their plain
   paths in both modes (`consistent_snapshot: false` default).
 - **Discovery (convention, no pointers):** the app reads channel role names
   (`channels.*`) from the verified `targets.json` `delegations.roles` and
@@ -190,21 +205,22 @@ full-mode client.
   channel key's per-publish signature (`targets.json` delegations define
   *who*, the role file pins *what*).
 - **Verification path:** root (well-known) → targets (master) → `<role>.json`
-  (channel key, vs delegation keys) → feed target (hash in role metadata).
+  (channel key, vs delegation keys) → item targets (hash in role metadata).
   This is a custom app path — TUF clients as-is do not verify lite repos.
 - **Freshness:** per-metadata `expires` only — targets (master-set, long),
   channel role metadata (publisher-set per publish), root; plus client-side
   version memory (anti-rollback). No timestamp anti-freeze: the staleness
   bound is the nearest metadata `expires` instead of the timestamp's hours.
-- **Preserved:** authentication, authorization (channel delegations, editor
-  mode, private-feed patterns), feed hash-pinning (anti-withdrawal/tamper),
-  anti-rollback (version memory), binary verification, editor mode, private
+- **Preserved:** authentication, authorization (channel delegations, authors
+  roles, private-feed patterns), item hash-pinning (anti-tamper; absence =
+  unpublished),
+  anti-rollback (version memory), binary verification, authors role, private
   feeds.
 - **Given up:** timestamp-hour anti-freeze precision; mix-and-match
   detection (theoretical in this topology — only one metadata author per
   role); standard-client (tuf-js as-is) verification. **Revocation latency
   (be aware):** without timestamp, the staleness bound on `targets.json` is
-  its own `expires`, so a revoked channel or editor key stays acceptable to
+  its own `expires`, so a revoked channel or author key stays acceptable to
   a client that can be served the old (still-unexpired) `targets.json` —
   a new subscriber, a device restored from backup, or one an attacker
   freezes — until that expiry. In full mode the same window is bounded by

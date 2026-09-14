@@ -14,8 +14,8 @@ screen) → pin the root anchor at `/.well-known/keryx/root.json` → read
 master-signed `custom.repo_base` → verify the TUF chain (root → timestamp →
 snapshot → targets) → per-channel delegated role metadata
 (`channels.<name>.json`) → channel consent → fetch followed channel feeds +
-private capability feeds → verify **every** item (JCS/RFC 8785 + Ed25519;
-editor-mode items need the editor threshold) → local filtering → offline
+private capability feeds → verify **every** item (OLPC canonicalization + Ed25519;
+authored channels need the authors-role threshold) → local filtering → offline
 cache. Anything that fails verification is **never displayed** (binary rule,
 spec/core.md §2), including items that were previously shown. No account, no
 PII, no per-user state anywhere.
@@ -88,33 +88,37 @@ worker come from vite-plugin-pwa
   > is implemented in-repo.
 - **Authorization (spec/repository.md §2)** — channels are delegated TUF
   roles named `channels.<channel>` (roles not starting with `channels.` and
-  roles whose paths fall outside their namespace are ignored); editor-mode
-  entries and private-feed patterns resolve keyids exclusively from their
+  roles whose paths fall outside their namespace are ignored); optional
+  `channels.<channel>.authors` roles are read as item-signature
+  authorization (their `keyids`/`threshold` from the verified `targets.json`
+  delegation; the role pins no targets); private-feed patterns resolve keyids
+  exclusively from their
   per-entry `keys` maps (key publication rule: a keyid without its key object
-  is a metadata error → reject); editor keyids must not be channel role
+  is a metadata error → reject); author keyids must not be channel role
   keyids.
-- **Public feeds** — one feed per channel at `channels/<name>/feed.json`, a
-  TUF target file pinned by the channel's own role metadata (length + sha256),
+- **Public items** — one item per channel per file at
+  `channels/<name>/<id>.json`, a
+  TUF target pinned by the channel's own role metadata (length + sha256),
   fetched through the TUF target URL and verified byte-exact before parsing.
-  Feed-level `expired: true` stops syncing that channel (verified cache kept).
-- **Items (spec/feeds.md §1.2)** — JCS canonical bytes with `_sig.signatures`
-  removed; Ed25519; base64url; `_sig.channel` cross-checked against the feed
-  path (mismatch → reject); dedup by (channel, id); in-place updates
+  The channel role metadata is the index; items absent from it are dropped
+  (absence = unpublished).
+- **Items (spec/feeds.md §1)** — OLPC canonical bytes with `sig`
+  removed; Ed25519; base64url; `id` matched against the path segment;
+  dedup by (channel, id); in-place updates
   (content differs → re-verified + replaced, position/read-state kept, marked
-  "updated"; signature-only re-signing is not an update); withdrawn items
-  (`_sig.withdrawn: true`) hidden **and dropped from the cache**; items that
+  "updated"; signature-only re-signing is not an update); items
   fail verification on a re-fetch are dropped even if previously displayed
-  (binary rule); items without a valid `date_published` order by feed
-  position.
-- **Editor mode (spec/feeds.md §2)** — per channel, master-signed: items MUST
-  carry `threshold` valid editor signatures; missing/insufficient/bad →
+  (binary rule); ordering by `date_published` (required).
+- **Authors role (spec/feeds.md §2)** — per channel, master-delegated: items
+  MUST
+  carry `threshold` valid author signatures; missing/insufficient/bad →
   reject, never shown; additional entries (channel-key signatures) are not
-  load-bearing. The demo security channel runs 2-of-2.
+  load-bearing. The demo security channel runs 2-of-2 authors.
 - **Private feeds (spec/feeds.md §3)** — capability URL (128-bit token)
   matched against an authorized pattern (origin-exact, segment-boundary
   wildcard) **before** subscribing (tampered QR → rejected) and on every sync;
   whole-document verification: `_sig.channel` == entry.channel, `_sig.url` ==
-  fetched URL, Ed25519 over the JCS of the document with top-level
+  fetched URL, Ed25519 over the OLPC canonical JSON of the document with top-level
   `_sig.signatures` removed (threshold per entry), `_sig.version` monotonic
   (anti-rollback via version memory), `_sig.expires` window (stale → keep
   cache + retry), `expired: true` (or 404/410/pattern removal) closes the feed
@@ -132,14 +136,14 @@ worker come from vite-plugin-pwa
   the company's website or signing keys were compromised", offered action is
   **Remove** only — no re-pair prompt. Network errors and malformed anchor
   data are **not** suspension (offline-first: cached content keeps serving).
-- **Filtering (spec/feeds.md §1.1)** — purely local; standard JSON Feed
-  `language` + free-form `tags` (stored locally, never sent); instant,
+- **Filtering (spec/feeds.md §1)** — purely local; item `language`
+  + free-form `tags` (stored locally, never sent); instant,
   offline.
 - **Rendering** — `content_html` sanitized (DOMPurify, script/forms/iframe
   stripped — the "never asks for a password, seed, or code" promise is
   structural), links intercepted with their real destination domain shown
-  before opening (no auto-open), media hash-verified against `_sig.resources`
-  when present, footer reminder under the feed.
+  before opening (no auto-open), attachments hash-verified when `sha256`
+  is present, footer reminder under the feed.
 - **Feed** — full articles inline (big square picture, title, date + tags,
   complete content) — there is no separate detail view; articles are marked
   read when they scroll into view.
@@ -160,15 +164,15 @@ src/lib/            protocol core (framework-free, unit-tested)
   payload.ts        join URL / QR payload (no metadata URL; anchor derived)
   tuf.ts            TUF client: root chain, timestamp/snapshot/targets,
                     delegated channel roles, keyids, target pinning,
-                    authorization model (channels + editor mode + patterns)
-  item.ts           JCS item verification (default + editor mode),
-                    withdrawal/update semantics, _sig.resources
+                    authorization model (channels + authors roles + patterns)
+  item.ts           OLPC item verification (authors-role threshold or
+                    channel-key), update/unpublish semantics, attachment hashes
   private.ts        private capability feed whole-document verification
   sync.ts           sync engine (metadata chain → channel roles → hash-pinned
-                    feeds → private feeds → verify → store)
+                    items → private feeds → verify → store)
   pair.ts           pairing flow (TOFU + consent summary + subscribe)
   store.ts          IndexedDB (companies, verified items, media) + prefs
-  media.ts          image loading with _sig.resources / logo_sha256 checks
+  media.ts          image loading with attachment hash / logo_sha256 checks
   format.ts         date/domain helpers + local filtering (language + tags)
   scan.ts           QR scan: Capacitor MLKit (native) / BarcodeDetector or
                     jsQR (web)
@@ -183,15 +187,15 @@ src/lib/protocol.test.ts  tests against the real ../demo artifacts
 `npm run test` validates the client against the **actual** Go-signed demo
 artifact: root anchor + repo_base discovery, full metadata chain and
 per-channel role verification, all public + private item signatures
-(editor-mode threshold), whole-document private-feed verification (signature,
+(authors-role threshold), whole-document private-feed verification (signature,
 channel, url, version, closed), tamper rejection (modified item, wrong
-channel key, missing editor signatures, channel mismatch), chain-break
+channel key, missing author signatures, id/path mismatch), chain-break
 detection (forged root rotations), rollback rejection (metadata + private-feed
 version memory), keyid verification, pattern matching with segment
 boundaries, join payload parsing (incl. newer-version refusal), and the
-binary drop semantics (withdrawn / no-longer-verifying items leave the
+binary drop semantics (unpublished / no-longer-verifying items leave the
 cache). This is the cross-check that the two implementations (Go publisher,
-TS client) agree on both canonicalizations.
+TS client) agree on the single canonicalization.
 
 ## Native
 

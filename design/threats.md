@@ -14,11 +14,11 @@ are specified in [`spec/`](../spec/core.md). Design rationale is in
 | Attacker prints a fake QR / look-alike origin | User confirms the exact origin (ASCII) before subscribing; the app pins the canonical `/.well-known/` root anchor on that origin (admin-controlled space — a user-content path on the origin cannot host it) and blocks cross-origin redirects. Pairing is the single-lock step (origin recognition); after pairing everything is two-lock |
 | Tampered QR payload (fake private feed URL; there is no metadata URL in the payload to tamper with) | Rejected by pattern authorization against the pinned metadata — no user judgment needed |
 | Attacker forges a message | Ed25519 signature by a key authorized in the signed `targets.json`; invalid signature → rejected, never displayed |
-| Compromised feed host / CDN | Feed files are **TUF targets** (hash-pinned): withdrawal, tampering, and wrapper forgery all fail hash verification; staleness is bounded by `timestamp.json` (anti-freeze) + client-side version memory (anti-rollback). Root metadata is never fetched from the repo base, so even a planted, validly-signed root rotation is never seen. Caveat: referenced media/attachments are **not** hash-pinned by default (mutable link targets are the norm) — a media host can swap bytes at a URL; high-stakes static downloads (PDFs, firmware) SHOULD be pinned per item via the optional `_sig.resources` hashes. Otherwise harm limited to availability |
-| Attacker who stole a *channel* key | Scoped to its own channel: can forge that channel's content and pin it; in editor mode only re-pin/withhold (cannot forge items); revocation = signed metadata update |
-| Attacker who stole an *editor* key (editor mode) | Can author items for channels where the key is listed; reaches users only if the publisher publishes them (CI review gate is policy, not protocol); revocation = master-signed update |
+| Compromised feed host / CDN | Item files are **TUF targets** (hash-pinned): tampering and wrapper forgery fail hash verification; staleness is bounded by `timestamp.json` (anti-freeze) + client-side version memory (anti-rollback). Root metadata is never fetched from the repo base, so even a planted, validly-signed root rotation is never seen. Caveat: un-hashed attachment URLs are **not** hash-pinned by default (mutable link targets are the norm) — a media host can swap bytes at a URL; high-stakes static downloads (PDFs, firmware) SHOULD carry a `sha256` per attachment. Otherwise harm limited to availability |
+| Attacker who stole a *channel* key | Scoped to its own channel: can publish, unpublish and re-pin that channel's content (availability + which content is shown); in an authored channel **cannot forge items** (item signatures are author-signed) — only re-pin/withhold/unpublish; in a single-author channel it is the content authority; revocation = signed metadata update |
+| Attacker who stole an *author* key (authors role) | Can author items for channels where the key is listed; reaches users only if the publisher publishes them (CI review gate is policy, not protocol); revocation = master-signed update (targets.json) |
 | Attacker who stole the online ops key (snapshot/timestamp) | Scoped to freshness: can roll back/freeze metadata (availability), cannot touch channel delegations or feed pinning (channel-key-signed) → no forgery |
-| **Suppression of a security warning** (freeze/rollback by whoever holds the ops key or the feed host) | Partly addressed, and worth publisher attention: forgery is impossible, but *silence* is achievable — freezing metadata withholds new items, and on a channel that carries security alerts the harm is not merely "availability", it is no warning during the incident the channel exists for. Bounded by the `timestamp` cadence + `expires`; publishers running such a channel should set those tighter than the 24–72 h default and may prefer a threshold or editor mode there. Not every publisher has a security channel — which channels are critical is the publisher's call |
+| **Suppression of a security warning** (freeze/rollback by whoever holds the ops key or the feed host) | Partly addressed, and worth publisher attention: forgery is impossible, but *silence* is achievable — freezing metadata withholds new items, and on a channel that carries security alerts the harm is not merely "availability", it is no warning during the incident the channel exists for. Bounded by the `timestamp` cadence + `expires`; publishers running such a channel should set those tighter than the 24–72 h default and may prefer a higher threshold or an authors role there. Not every publisher has a security channel — which channels are critical is the publisher's call |
 | Attacker who stole the master key | Root metadata — and therefore any rotation or `repo_base` change — is accepted only from the confirmed origin's admin-controlled `/.well-known/` space; a master-signed rotation planted on the repo base/CDN is never fetched. Key alone is not enough |
 | **Full forgery (origin + master key)** | The residual risk — see §3. Mitigated by offline/HSM custody and by the convention that messages never carry credential requests |
 | Company silently rebranding / acting as another company | Identity changes are never silent: `company_name` change → prominent warning + re-pair (rescan QR); logo change → one-tap acknowledge. An unverifiable root change (not a rename) → company **suspended** with a possible-compromise warning and no re-pair prompt; no silent trust |
@@ -30,7 +30,7 @@ are specified in [`spec/`](../spec/core.md). Design rationale is in
 Mechanisms referenced above: [spec/core.md](../spec/core.md) (trust model,
 pairing, suspension), [spec/repository.md](../spec/repository.md) (root
 anchor, role scoping, key lifecycle), [spec/feeds.md](../spec/feeds.md)
-(item verification, `_sig.resources`, editor mode, private feeds).
+(item verification, authors role, private feeds).
 
 ---
 
@@ -88,10 +88,11 @@ Accepted; mitigated but not eliminated.
   mobile risk).
 - **Relay metadata** → device-level wake-up timing; acceptable given content
   opacity.
-- **Remote-media telemetry** → fetching company-hosted images/attachments
+- **Remote-media telemetry** → fetching external attachment URLs
   reveals device-level telemetry (IP, UA, timing) to the company's CDN; not
-  identity, and whether to fetch is the app's privacy preference. The same
-  applies to metadata and feed fetches — fetching a per-channel feed reveals
+  identity, and whether to fetch is the app's privacy preference. Inline
+  media (data URLs) carries no telemetry at all. The same
+  applies to metadata and item fetches — fetching a channel's role metadata reveals
   which channels a device follows. How far an app goes to reduce this (fetch
   policies, an anonymising transport) is an **implementation** choice, not a
   protocol rule — the protocol only guarantees that there is no account or
@@ -104,9 +105,9 @@ Accepted; mitigated but not eliminated.
 **What we solve (short version):** email spoofing is impossible (key-anchored,
 not name-anchored); the public broadcast carries no PII and no customer list
 to breach; messages are authenticated against keys the signed metadata
-authorizes (and, in optional editor mode, signed by per-channel editor keys
-and verified by the app — authoring and publishing are separate); feed
-content is hash-pinned (no withdrawal/tampering); forgery needs the root of
+authorizes (channel keys, or per-channel author keys in an authored channel,
+verified by the app — authoring and publishing are separate); item
+content is hash-pinned (no tampering); forgery needs the root of
 trust *and* the confirmed origin's well-known space; rotations/revocations
 are automatic and chain-verified; identity changes are user-visible
 (warning/re-pair), never silent; chain breaks suspend deterministically,

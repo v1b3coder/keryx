@@ -6,13 +6,13 @@ Signed, one-way broadcast messaging from a company to its customers —
 designed to replace email as the company→customer channel.
 
 A user scans a QR code, confirms the company's **origin**, and subscribes to
-the channels they want. Messages arrive authenticated: either a channel key
-the signed metadata authorizes pinned the feed, or (in editor mode) each item
-carries its author's signature. Verification is binary — it verifies and is
+the channels they want. Messages arrive authenticated: each item file is
+signed and hash-pinned by signed metadata — by the channel key, or by the
+channel's authors role where one exists. Verification is binary — it verifies and is
 shown, or it is rejected. There is **no email, no phone number, no account, no
 PII in the public broadcast, and no per-user state on the company's servers**.
 
-The stack is deliberately boring: HTTPS + QR + TUF + Ed25519 + JSON Feed.
+The stack is deliberately boring: HTTPS + QR + TUF + Ed25519.
 
 **Working title:** Keryx (placeholder). **Version:** 0.1 (draft).
 
@@ -37,7 +37,7 @@ with the private tracking feed.
 |---|---|
 | [`spec/core.md`](spec/core.md) | Conventions and wire naming, trust model, join URL / QR payload, suspension |
 | [`spec/repository.md`](spec/repository.md) | TUF repository layout and root anchor, `targets.json` authorization, channel role metadata, channel and key lifecycle |
-| [`spec/feeds.md`](spec/feeds.md) | Public feed and item format, signing and verification rules, editor mode, private per-order feeds |
+| [`spec/feeds.md`](spec/feeds.md) | Item format, signing and verification rules, authors role, private per-order feeds |
 | [`spec/clients.md`](spec/clients.md) | Client verification flow, publisher tool contract, lite mode (Phase 2 extension) |
 
 RFC 2119 keywords apply throughout `spec/`. Nothing outside `spec/` is
@@ -59,11 +59,11 @@ security reviewers → `design/threats.md`; everyone else → `design/why.md`.
 
 ## Code in this repository
 
-- `demo-tool/` — reference publisher tooling (Go, go-tuf v2 + JCS + Ed25519)
+- `demo-tool/` — reference publisher tooling (Go, go-tuf v2 + OLPC + Ed25519)
 - `app/` — reference demo **web client** (Vite + React + TS): PWA +
   Capacitor Android/iOS; see `app/README.md`
 - `demo/` — a generated demonstration publisher artifact (full TUF repo +
-  per-channel signed JSON Feeds + private capability feed), fully local
+  per-channel signed item files + private capability feed), fully local
   (`http://localhost:8000`), based on real public Trezor blog content; not
   committed — regenerate it (below); see `demo/README.md`
 - `demo/server.sh` — serve the demo locally with CORS enabled (the browser

@@ -251,8 +251,9 @@ signature = Ed25519( "keryx/wakeup/v1|" ‖ JCS({ v, t, seq }) )
   `{v, t, seq}`. `t` is ALWAYS signed, whether carried in the payload or
   recovered from delivery. The `sig` array itself is excluded.
   JCS and domain separation are mandatory: Ed25519
-  signatures are reusable across message types, and the protocol's item
-  signatures use the same discipline ([`../spec/feeds.md`](../spec/feeds.md)).
+  signatures are reusable across message types, and the protocol applies the
+  same discipline (canonicalization + domain separation) to item signatures
+  — there in OLPC canonicalization ([`../spec/feeds.md`](../spec/feeds.md#12-signing-and-verification)).
 - `sig` is always a nonempty array of `{ "keyid": "<hex>",
   "sig": "<base64url>" }`, including threshold 1. Keyids are lowercase
   SHA-256 hex per the protocol's TUF key-object canonicalization; signatures
@@ -633,7 +634,7 @@ queue coalesce without consuming another queue slot.
 | `private_feed_patterns` entry keys (engine key) | signs wake-ups for orders under **that pattern** |
 | `root` / `targets` (master, offline) | none — authorizes metadata and its updates; master never signs wake-ups |
 | `snapshot` / `timestamp` (online ops key) | **none** — freshness key only; giving it wake-up authority would expand its blast radius to all channels |
-| `editor` keys | **none** — item-level signing only |
+| `channels.<channel>.authors` keys | **none** — item-level signing only |
 
 ### 5.3 Registration API (UnifiedPush endpoints)
 
