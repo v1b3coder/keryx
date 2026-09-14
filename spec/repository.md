@@ -269,22 +269,27 @@ Standard TUF targets metadata; signed by the master key.
 
 **`custom` (master-signed app data):**
 
-- `company_name`, `logo`, and optional `logo_sha256` — company identity.
+- `company_name`, and optional `logo` — company identity.
   These are **self-asserted**: master-signed, so bound to whoever holds the
   root, but attested by nobody outside the company — anyone controlling any
   origin can set them to anything. They are therefore shown only **after the
   chain verifies**, never on the origin confirmation screen, and always
   alongside the join origin, which is the actual trust anchor; the normative
   display rules are in [core.md §2](core.md).
-  `logo` is an absolute HTTPS URL. Its bytes are **not** a TUF target, so a
-  publisher **MAY** pin them with `logo_sha256` — the resource's SHA-256 as
-  a lowercase hex string, the same rule and algorithm as item attachment
-  hashes ([feeds.md §1](feeds.md#1-public-channel-items)). When present the
-  app **MUST** verify the
-  fetched bytes before rendering and, on mismatch, **MUST** fall back to a
-  neutral placeholder: a swapped logo is never displayed, and never suspends
-  the company or invalidates any content (a media host is not the trust
-  chain). When absent the logo is an ordinary mutable web resource.
+  `logo` is either an **inline data URL** (`data:<mediatype>;base64,…` — its
+  bytes are inside the master-signed `custom`, so the logo is authenticated
+  by the metadata signature itself and never fetched externally; SHOULD be
+  small, RECOMMENDED ≤ 64 KB, since it is embedded in `targets.json`) or an
+  **absolute HTTPS URL together with `logo_sha256`** (linked,
+  company-controlled origin). The logo is **never a mutable resource**: when
+  `logo` is a URL, `logo_sha256` (lowercase hex) is REQUIRED — the app
+  **MUST** verify the fetched bytes before rendering and, on mismatch,
+  **MUST** fall back to a neutral placeholder: a swapped logo is never
+  displayed, and never suspends the
+  company or invalidates any content (a media host is not the trust chain).
+  A linked `logo` without `logo_sha256` is a metadata error: the app MUST
+  NOT display the logo (placeholder), and the reference tool refuses to
+  write it. When the field is absent entirely the app shows no logo.
   (Top-level `custom` in targets metadata is an extension field; all three
   reference TUF implementations preserve unrecognized fields, and the app is
   the only consumer.)

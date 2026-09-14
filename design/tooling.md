@@ -32,7 +32,7 @@ defaults. The spec also leaves gaps that the tooling must fill:
   infrastructure; the SDK must expose it, the CLI optionally.
 - **Deployment** — the spec fixes the *outputs* (well-known anchor dir +
   repo base) but no command uploads them.
-- **Identity ceremony** — `custom.company_name`/`logo`/`logo_sha256`
+- **Identity ceremony** — `custom.company_name`/`logo` (inline data URL)
   changes are master-signed updates ([spec/repository.md §2](../spec/repository.md)).
 - **State** — there is no server-side state, so the tool must derive
   everything (versions, feed content, keyids) from the repo itself and be
@@ -319,7 +319,7 @@ keystore holds the required keys.
 
 ```
 pub init --domain company.example --name "ACME s.r.o."
-         [--base https://cdn.example.com/keryx] [--logo URL]
+         [--base https://cdn.example.com/keryx] [--logo URL|FILE]
          [--mode full] [--workspace .keryx]
 pub keys list | generate <name> [--role master|ops|channel|author|engine]
 pub keys export [--role …] [--name …] [--public] --out bundle   # (new) role-tagged, encrypted
@@ -340,7 +340,7 @@ pub item sign --channel <name> --file draft.json --out signed.json          # (n
 pub publish --channel <name> --file signed.json
 pub item unpublish --channel <name> --id <id>                       # (new)
 pub refresh-timestamp [--expires 48h]                              # the cron line
-pub company set [--name …] [--logo URL] [--stage out/]             # identity ceremony (master)
+pub company set [--name …] [--logo URL|FILE] [--stage out/]             # identity ceremony (master)
 pub rotate-root [--announce-next-key]
 pub private-feed new|update|expire …                               # (new) engine side
 pub validate [--strict]
@@ -354,7 +354,9 @@ pub deploy local --target /var/www/keryx | pub deploy s3 --bucket … --prefix �
 
 - `init` generates master + ops keys (channel/author/engine keys on demand),
   builds the full 4-role repo, writes the anchor dir and repo dir, prints
-  the one-time backup; `--logo` fetches once and records `logo_sha256`.
+  the one-time backup; `--logo` (URL or local file): a URL is stored linked
+  and fetched once to record `logo_sha256`; a local file is embedded as an
+  inline data URL in `custom.logo`.
 - `item sign` runs on the author's machine with the author's keystore only:
   takes a draft (id, title, content, dates, tags, attachments), fills
   nothing extra, signs the OLPC canonical bytes with
@@ -401,9 +403,9 @@ pub deploy local --target /var/www/keryx | pub deploy s3 --bucket … --prefix �
   length + sha256; every item (`id` == path segment; authors-role
   threshold strict, single-author channel-key strict; known-keyid failures
   reject); channel
-  name charset; author/channel key separation; `logo_sha256` freshness
-  (warning, not error); pattern glob integrity. `--strict` also verifies
-  that no signature was written without verification.
+  name charset; author/channel key separation; logo form validity (inline
+  data URL with media type + size, or linked HTTPS URL) and `logo_sha256`
+  presence/freshness when linked (required)
 - `qr` validates the payload before encoding: ≤ ~512 encoded bytes, ≤ 2
   private feeds, channel charset, HTTPS origin, base64url no padding, no
   identity in the payload; emits PNG (pure-Go QR encoder). `join-url` prints
@@ -415,8 +417,9 @@ version/expires bumped only on change, refuse revoked key, refuse
 unauthorized keyid, refuse unsigned item or below authors-role threshold,
 refuse channel
 role key == author key, reject non-`[a-z0-9-_]+` channel names, always
-`channels.<channel>` role names, recompute `logo_sha256` on logo change,
-verify every signature written.
+`channels.<channel>` role names, record `logo_sha256` for a linked logo /
+embed an inline data URL for a local file on logo change, verify every
+signature written.
 
 ---
 

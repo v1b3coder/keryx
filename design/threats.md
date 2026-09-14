@@ -14,7 +14,7 @@ are specified in [`spec/`](../spec/core.md). Design rationale is in
 | Attacker prints a fake QR / look-alike origin | User confirms the exact origin (ASCII) before subscribing; the app pins the canonical `/.well-known/` root anchor on that origin (admin-controlled space — a user-content path on the origin cannot host it) and blocks cross-origin redirects. Pairing is the single-lock step (origin recognition); after pairing everything is two-lock |
 | Tampered QR payload (fake private feed URL; there is no metadata URL in the payload to tamper with) | Rejected by pattern authorization against the pinned metadata — no user judgment needed |
 | Attacker forges a message | Ed25519 signature by a key authorized in the signed `targets.json`; invalid signature → rejected, never displayed |
-| Compromised feed host / CDN | Item files are **TUF targets** (hash-pinned): tampering and wrapper forgery fail hash verification; staleness is bounded by `timestamp.json` (anti-freeze) + client-side version memory (anti-rollback). Root metadata is never fetched from the repo base, so even a planted, validly-signed root rotation is never seen. Caveat: un-hashed attachment URLs are **not** hash-pinned by default (mutable link targets are the norm) — a media host can swap bytes at a URL; high-stakes static downloads (PDFs, firmware) SHOULD carry a `sha256` per attachment. Otherwise harm limited to availability |
+| Compromised feed host / CDN | Item files are **TUF targets** (hash-pinned): tampering and wrapper forgery fail hash verification; staleness is bounded by `timestamp.json` (anti-freeze) + client-side version memory (anti-rollback). Root metadata is never fetched from the repo base, so even a planted, validly-signed root rotation is never seen. Caveat: un-hashed attachment URLs are **not** hash-pinned by default (mutable link targets are the norm) — a media host can swap bytes at a URL; high-stakes static downloads (PDFs, firmware) SHOULD carry a `sha256` per attachment. The hardcoded `logo` and item `image` are never mutable (hash required when linked). Otherwise harm limited to availability |
 | Attacker who stole a *channel* key | Scoped to its own channel: can publish, unpublish and re-pin that channel's content (availability + which content is shown); in an authored channel **cannot forge items** (item signatures are author-signed) — only re-pin/withhold/unpublish; in a single-author channel it is the content authority; revocation = signed metadata update |
 | Attacker who stole an *author* key (authors role) | Can author items for channels where the key is listed; reaches users only if the publisher publishes them (CI review gate is policy, not protocol); revocation = master-signed update (targets.json) |
 | Attacker who stole the online ops key (snapshot/timestamp) | Scoped to freshness: can roll back/freeze metadata (availability), cannot touch channel delegations or feed pinning (channel-key-signed) → no forgery |
@@ -88,7 +88,8 @@ Accepted; mitigated but not eliminated.
   mobile risk).
 - **Relay metadata** → device-level wake-up timing; acceptable given content
   opacity.
-- **Remote-media telemetry** → fetching external attachment URLs
+- **Remote-media telemetry** → fetching linked media (logo, item `image`,
+  attachment URLs)
   reveals device-level telemetry (IP, UA, timing) to the company's CDN; not
   identity, and whether to fetch is the app's privacy preference. Inline
   media (data URLs) carries no telemetry at all. The same

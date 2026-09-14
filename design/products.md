@@ -56,10 +56,9 @@ implements a protocol rule, the rule itself is normative in
   silent ([spec/core.md §2](../spec/core.md)).
 - **Offline-first:** messages cached on-device; expired-but-unrefreshed
   metadata degrades to cache + retry, never a blackout.
-- **Self-contained feed:** every item file carries its content and preview
-  inline (data URLs), so the feed renders from the repo alone — no external
-  media fetch is needed to display it; attachments are the only
-  fetch-on-demand resources.
+- **Self-contained feed:** the publisher chooses per resource — inline
+  media (data URLs) renders from the repo alone, linked media (image,
+  attachments) is fetched on demand and hash-verified when pinned.
 - **Backup/restore:** export/import the local subscription list — join origin
   + pinned root keys + channel lists + private capability URLs (the repo base
   is re-derived from the root; capability URLs are otherwise unrecoverable) —

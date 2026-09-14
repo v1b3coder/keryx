@@ -157,7 +157,8 @@ phishing wave everywhere.
      credential capture. It is an announcement feed, not a conversation.
    - **Rich content by default**: the channel is the *primary, trusted source*
      for the company's content — links, blogs, marketing, media. Items are
-     self-contained (content and preview inline); a link inside a signed
+     self-contained (content, plus the publisher's choice of inline or linked
+     preview); a link inside a signed
      item is as trustworthy as a link on the company's own
      website; the app renders links **transparently** (real destination
      domains shown, no hidden redirects, no auto-open).
@@ -322,8 +323,10 @@ popular: every user fetches the same item files per channel. Honest caveats:
 the channel role metadata and item files leave device-level fetch telemetry
 at the host (which channels a device follows are visible to the CDN in the
 metadata fetch), and external
-`attachments` are mutable by the media host unless the item pins them with an
-optional `sha256` per attachment.
+media: the hardcoded `logo` and item `image` are **never mutable** (when
+linked they always carry `logo_sha256`/`image_sha256`), while
+`attachments` are mutable by the media host unless the item pins them with
+an optional per-attachment `sha256`.
 
 ### 4.9 Capability-URL private feeds for per-order data
 

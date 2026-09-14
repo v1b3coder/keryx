@@ -31,14 +31,15 @@ the trust model** — settled here; the normative rules moved into
 | D3 | **Forms and iframes/embeds stay excluded** (even though they are HTML, not JS) — this keeps "the channel never asks for a password/seed/code" a **structural** property, not a heuristic. |
 | D4 | The app **MUST always display the confirmed origin** next to `company_name`/`logo` (contact card + message header). Name/logo are publisher-controlled decoration; the **origin is the identity anchor**. |
 | D5 | Links stay intercepted and transparent (real destination domains shown, no auto-open); a "leaving the secure area" notice via a master-signed `custom.web_origins` allowlist is **proposed** (open question, not locked). |
-| D6 | No `content_text` fallback — the item is self-contained HTML; inline media (data URLs) means the feed renders from the repo alone; external attachments are the only fetch-on-demand resources (with optional per-attachment hashes). |
+| D6 | No `content_text` fallback — the item is self-contained HTML; media per resource: inline (data URLs, covered by the signature) or linked — `logo`/item `image` are **always hash-pinned** when linked (`logo_sha256`/`image_sha256`), attachments MAY be hash-pinned. |
 
 ---
 
 ## 1. What the authenticated body already is
 
 - Each item file carries the whole article body — `content_html` (full
-  content in HTML), `title`, inline `image` (data URL), `date_*`, `tags`,
+  content in HTML), `title`, `image` (inline data URL or linked URL),
+  `date_*`, `tags`,
   `language`, `attachments`, `sig`
   ([spec/feeds.md §1](../spec/feeds.md)). There is no feed document, no
   `summary`, no `content_text` (D6), and no item `url` — the message is
@@ -108,20 +109,23 @@ abuse vectors with HTML/CSS only:
 
 ### Media integrity
 
-Settled for v1:
+Settled for v1 (per resource, publisher's choice):
 
-1. **Inline media (data URLs)** — covered by the item's TUF hash; the feed
-   renders from the repo alone. No external fetch, no telemetry, no hash
+1. **Inline media (data URLs)** — covered by the item's TUF hash (or the
+   master signature, for the logo); no external fetch, no telemetry, no hash
    bookkeeping.
-2. **Attachments with `sha256`** *(RECOMMENDED for static downloads)* — the
-   hash lives inside the signed attachment object; the app verifies before
-   render/save; mismatch → resource unavailable, item unaffected. No
-   wire-format change; requires immutable media per URL.
-3. **Attachments without `sha256`** — ordinary web links (dynamic landing
-   pages); accepted as residual risk, documented as such.
-4. **Media as TUF targets** — rejected for v1 (role metadata growth, publish
-   cadence tied to media changes); not needed since inline media is
-   self-covered.
+2. **Hardcoded media when linked** (`logo`, item `image`) — **`logo_sha256` /
+   `image_sha256` are REQUIRED**; the app verifies before render; mismatch →
+   placeholder/unavailable, item unaffected. These two fields are never
+   mutable web resources.
+3. **Attachments with `sha256`** *(RECOMMENDED for static downloads)* — the
+   hash lives inside the signed attachment object; same verification rule.
+   Requires immutable media per URL.
+4. **Attachments without `sha256`** — ordinary web resources (dynamic
+   landing pages); accepted as residual risk, documented as such.
+5. **Media as TUF targets** — rejected for v1 (role metadata growth, publish
+   cadence tied to media changes); inline media is self-covered and linked
+   media uses per-resource hashes.
 
 ## 4. Threat model refinement (to add to DESIGN §4)
 
@@ -144,9 +148,11 @@ Settled for v1:
 - Links: intercepted; real destination domains shown; no auto-open; optional
   "you are leaving \<company\> — external site" notice when the destination
   origin is not in `custom.web_origins` (if D5 is adopted).
-- Media: inline media renders from the item (data URLs); attachments honor
-  remote-media privacy preferences (block / tap-to-load) and are
-  hash-verified before render when `sha256` is present.
+- Media: inline media renders from the item/logo (data URLs); linked media
+  (logo, image, attachments) honors remote-media privacy preferences (block
+  / tap-to-load) and is
+  hash-verified before render — always for logo/image (hash required), when
+  present for attachments.
 - Footer reminder "This channel will never ask you for a password, seed, or
   code" remains **structurally true** (D3) — not a heuristic.
 

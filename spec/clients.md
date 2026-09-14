@@ -42,7 +42,7 @@ channels = delegated roles from verified targets.json
 // was displayable on the confirmation screen.
 show_consent(origin  = origin,                          // stays on screen
              company = targets.custom.company_name,     // never shown earlier
-             logo    = targets.custom.logo,             // logo_sha256 checked
+             logo    = targets.custom.logo,             // logo_sha256 required when linked
              offered = payload.channels,                // display_name from
                                                         //  custom.channels
              private = payload.private_feeds)
@@ -104,8 +104,8 @@ for f in payload.private_feeds:         // private capability feeds from QR
   `logo` (cosmetic) → one-tap acknowledge; never silent, no auto-accept.
 - Company name and logo are never shown before the chain verifies, never
   without the join origin beside them, and never as externally verified
-  ([core.md §2](core.md)); a `logo_sha256` mismatch falls back to a
-  placeholder and affects nothing else.
+  ([core.md §2](core.md)); a linked `logo_sha256` mismatch falls back to a
+  placeholder and affects nothing else (hash is required when linked).
 - Nothing is ever shown with "lower trust".
 
 ---
@@ -118,7 +118,9 @@ pub init --domain company.example --name "ACME s.r.o." [--base https://cdn.examp
        full 4-role repo (root/targets/snapshot/timestamp + channel roles);
        emits /.well-known/keryx/root.json (with custom.repo_base) for the
        join origin + the repo at the base; prints one-time backup.
-       --logo also fetches the image once and records custom.logo_sha256
+       --logo (URL or local file): a URL is stored linked and fetched once
+       to record custom.logo_sha256; a local file is embedded as an inline
+       data URL in custom.logo
 pub channel add marketing              # public channel: delegation role
                                        #  channels.marketing + role metadata
                                        #  channels.marketing.json + display
@@ -165,8 +167,8 @@ pub qr --channels marketing,product --private-feed "https://…/tracking/<token>
   threshold in an authored channel; refuses
   to configure the same key as both channel role key and author key; rejects
   channel names outside `[a-z0-9-_]+` and always writes the role as
-  `channels.<channel>`; recomputes `custom.logo_sha256` whenever `logo`
-  changes, and refuses to write a stale one; verifies every `sig` entry it writes (a
+  `channels.<channel>`; records `logo_sha256` for a linked logo (fetched
+  once) / embeds an inline data URL for a local file; verifies every `sig` entry it writes (a
   present-but-invalid signature is rejected by clients, so it must never
   leave the tool). Thresholds default to 1-of-1.
 - Key custody (MVP): software keys in OS keychain/encrypted file + one-time

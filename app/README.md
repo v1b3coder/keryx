@@ -129,8 +129,9 @@ worker come from vite-plugin-pwa
   hidden until re-pair (rescan a fresh QR, same origin); `logo` change →
   one-tap acknowledgement (never silent, never auto-accept); name and logo are
   never shown before the chain verifies and always alongside the join origin;
-  `logo_sha256` is verified when present (placeholder on mismatch, nothing
-  else affected).
+  the logo is either an inline data URL in the master-signed metadata
+  (authenticated with it) or a linked URL pinned by the required
+  `logo_sha256` (placeholder on mismatch, nothing else affected).
 - **Suspension (spec/core.md §4)** — unverifiable root change (validly signed,
   unchainable) → suspended: content rejected, "identity changed; this can mean
   the company's website or signing keys were compromised", offered action is
@@ -172,7 +173,7 @@ src/lib/            protocol core (framework-free, unit-tested)
                     items → private feeds → verify → store)
   pair.ts           pairing flow (TOFU + consent summary + subscribe)
   store.ts          IndexedDB (companies, verified items, media) + prefs
-  media.ts          image loading with attachment hash / logo_sha256 checks
+  media.ts          image loading with image/attachment/logo hash checks
   format.ts         date/domain helpers + local filtering (language + tags)
   scan.ts           QR scan: Capacitor MLKit (native) / BarcodeDetector or
                     jsQR (web)
