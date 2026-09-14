@@ -33,7 +33,8 @@ the Android UnifiedPush connector — sharing one WebPush publish path
 **Hard rules:**
 
 1. **The relay carries no content. Ever.** A wake-up request contains the
-   **scope_id** (an authorization handle, §5.1), an opaque **source
+   **company_id** (the company domain), **scope_id** (an authorization handle,
+   §5.1), an opaque **source
    hash** (§3), a sequence number, and a **wake-up signature** (§4.1). **Identifiers
    are not content:** a wake-up may name *which* company/channel/order to
    refresh, never what a message says (no title, body, status, amount,
@@ -57,12 +58,13 @@ the Android UnifiedPush connector — sharing one WebPush publish path
    correctness.
 3. **Optional.** The system is fully functional without the relay
    (polling/background fetch). The relay is an optimization.
-4. **Publishers are registration-free.** One API key per publisher; no
-   Google/Apple account, no Firebase project, no VAPID key on the
-   publisher's side. All provider credentials live at the relay.
-   Registration with the relay is either operator-provisioned (§8) or
-   self-service when TUF-gated (§5.2); no relay operator action is needed
-   for the TUF path.
+4. **Publishers are registration-free.** No publisher accounts or production
+   API keys; no Google/Apple account, Firebase project, or VAPID key on the
+   publisher's side. All provider credentials live at the relay. One unsigned
+   company metadata synchronization endpoint (§5.2) bootstraps trust on first
+   use and refreshes it thereafter. Production publishes are authorized only
+   by signatures under the company's verified TUF authorization. Transport
+   debugging uses a separate runtime mode and URL endpoints (§5.7).
 
 **Out of scope:** content delivery (CDN/TUF), the protocol itself, company
 registration/directory, per-company Firebase projects (impossible in one
@@ -80,9 +82,11 @@ content reconciliation and presentation remain the app's contract.
 | **topic** | A delivery address derived from the verified company, scope_id, and source hash (§3). On the topic leg, devices subscribe to topics, not scopes or keys; endpoint clients register followed topics with the relay (§5.3). 43 chars, base64url, no prefix. |
 | **scope_id** | An opaque, stable identifier for one authorization scope: a public delegation or a private-pattern entry. Verified metadata maps it to keys and a threshold. Keys are not part of its identity; rotation does not change topics (§3.1). |
 | **source hash** | `hex(sha256(company_id + "|" + subject))`, where the subject is a channel name or an order token. The publish path treats it as opaque; raw order tokens never transit (§3). |
-| **wake-up signature** | Ed25519 signature over the canonical wake-up (§4.1), authorized by the topic's exact scope. Always verified by the relay and by the app. |
+| **wake-up signature** | Ed25519 signature over the canonical wake-up (§4.1), authorized by the topic's exact scope. Always verified by the production relay and by the app. |
 | **registration** | A delivery address on the endpoint leg, stored in the registry database: a UnifiedPush/WebPush subscription (`endpoint` + `keys.p256dh`/`keys.auth`), created by the PWA browser or by the Android connector via a distributor (§6.2). |
-| **publisher** | A company or partner engine with an API key bound to a company origin and rate limit. Operator provisioning and self-service differ only in admission; both use the same TUF authorization at publish. |
+| **publisher** | A company or partner engine holding the signing keys for a scope authorized by the company's TUF metadata. No relay account or production API key is required. |
+| **company synchronization** | An unsigned request to bootstrap or refresh the relay's TUF state for a company domain. TOFU applies only when no trusted state exists; subsequent updates use standard TUF verification, including root rotation (§5.2). |
+| **request_id** | A short-lived, unguessable bearer capability for reading one publish's dispatch status; it grants no publishing or registration-management rights (§5.1.1). |
 | **wake-up** | A data-only push message, never content. |
 | **company_id** | The canonical join origin: lowercase ASCII host, punycode for IDNs, no scheme, no port, no trailing slash (e.g. `company.example`), i.e. the confirmed origin after the single canonical redirect (http→https, www→apex) per [`../spec/core.md` §1.2](../spec/core.md). This is the same value the user confirms at pairing. |
 
@@ -115,10 +119,13 @@ topic = base64url_nopad(sha256("keryx/relay/v1|" + JCS({company_id, scope_id, h}
 - `"keryx/relay/v1|"` is a **static, public salt** (domain separator): it
   keeps the topic distinct from `h` itself and from other SHA-256 uses in
   the protocol. It is not secret.
-- **Company and scope binding (relay-side, normative).** The derivation includes
-  `company_id` as supplied by the **relay's verified publisher record**
-  (§5.2/§5.5), never by the caller. `scope_id` MUST resolve in that company's
-  verified authorization table (§3.1). Submitting another company's or
+- **Company and scope binding (relay-side, normative).** The caller supplies
+  canonical `company_id` to select the relay's persisted company TUF state
+  (§5.2/§5.5); that input alone grants no authority. `scope_id` MUST resolve
+  in that company's verified authorization table (§3.1). The relay derives
+  the topic using this company and verifies the signature over that topic.
+  Changing `company_id`, `scope_id`, or `h` therefore changes the signed
+  topic and requires an authorized signature for it. Submitting another company's or
   scope's source hash cannot reach that other namespace's topic. The
   publish path MUST NOT inspect the subject or branch on its type.
   JCS input is exactly the three string fields shown above, encoded as UTF-8.
@@ -135,7 +142,7 @@ topic = base64url_nopad(sha256("keryx/relay/v1|" + JCS({company_id, scope_id, h}
 
 **Why two-stage:** callers (publisher tooling, order engine) know the
 derivation input; the app knows it too; the relay knows only the company
-(from its verified record) and the scope_id (authorization handle) —
+(from its verified TUF state) and the scope_id (authorization handle) —
 never the order token and never content. The caller sends `h`; the relay
 wraps it with the verified company and resolved scope_id. `sha256` is one-way and the order
 token is 128-bit unguessable, so neither `h` nor the topic reveals it.
@@ -205,13 +212,18 @@ A single JSON object. **What it carries depends on the leg** (§1):
   An adapter without delivery-topic access MUST carry `t` in its payload;
   it MUST NOT guess. If both are present, they MUST match. The endpoint
   leg always carries `t`. In all cases, `t` is included in the signed bytes.
-- `seq` — monotonic counter of wake-ups for this topic, supplied by the
-  caller (**required**; integer from 1 through 9007199254740991). Because
-  `sig` covers `seq`, the app MUST reject a wake-up whose `seq` is ≤ the
-  persisted last accepted value for that topic (§4.2). A sequence gap may
-  indicate loss or reordering; it is not proof of loss. Never used for feed ordering —
-  the app reconciles by fetching; feed ordering is editorial and dedup is
-  `(channel, id)`
+- `seq` — monotonic sequence value for this topic, supplied by the caller
+  (**required**; integer from 1 through 9007199254740991). By convention it
+  is the event's Unix timestamp in seconds, but never less than one more
+  than the last value the caller emitted for that topic
+  (`seq = max(now_seconds, last_seq + 1)`, §4.2). Callers MUST NOT use it as
+  a timestamp (not a feed-order key, not an expiry); clients MUST NOT
+  compare it to their own clock. Because `sig` covers `seq`, the app MUST
+  reject a wake-up whose `seq` is ≤ the persisted last accepted value for
+  that topic (§4.2). A sequence gap is not proof of loss — with
+  timestamp-derived values it is merely elapsed time. Never used for feed
+  ordering — the app reconciles by fetching; feed ordering is editorial and
+  dedup is `(channel, id)`
   ([`../spec/feeds.md`](../spec/feeds.md)). Unrelated to the `_sig.seq`
   dropped from the feed format —
   [`../design/why.md` §8](../design/why.md).
@@ -219,7 +231,8 @@ A single JSON object. **What it carries depends on the leg** (§1):
 - Nothing else. In particular: no title, no body, no URL, no company name,
   no status text, no raw order token, no unread hint (`n`). Unread state is
   derived by the app from verified content and local read state. No payload
-  timestamps or authorization epochs are needed. Reject unknown fields,
+  timestamps or authorization epochs are needed (`seq` is a monotonic
+  sequence value, not a timestamp field). Reject unknown fields,
   duplicate JSON member names, malformed encodings, and non-integer counters.
 
 The app verifies against its locally trusted authorization for the topic's
@@ -250,7 +263,7 @@ signature = Ed25519( "keryx/wakeup/v1|" ‖ JCS({ v, t, seq }) )
   threshold (this permits rotation overlap).
 - **Key resolution:** use only the exact scope's authorized keys and
   threshold from verified TUF metadata (§3.1). Do not combine scopes.
-- **Who verifies:** the relay at publish (§5.5) and the app on delivery.
+- **Who verifies:** the production relay at publish (§5.5) and the app on delivery.
   The same `sig` is forwarded on both legs, so a malicious relay or push
   service cannot forge a wake-up — it can only spam or withhold. On the
   endpoint leg the relay additionally RFC 8291-encrypts the payload, so
@@ -304,25 +317,39 @@ the cooldown ends or independent refresh learns the update. Per-device limits
 bound, but do not eliminate, aggregate metadata traffic across many clients.
 Wake-ups do not guarantee immediate emergency delivery.
 
-**Sequence ownership:** publishers MUST persist and atomically allocate
-monotonic per-topic counters across concurrent writers, restarts, and key
-rotations. Retries reuse the same signed envelope. Clients persist their
-per-topic high-water marks; relay replay state is memory-only (§5.5).
-Counter loss requires recovery, not silently resetting `seq`. A fresh client
-or cleared client storage can accept an old signed wake-up; this is a known
-limit without retained replay state. A compromised signer can advance a
-counter excessively; ordinary content sync remains available, but this draft
-does not introduce an epoch/reset mechanism. Exhausted counters MUST NOT wrap.
+**Sequence ownership:** `seq` is the writer's event timestamp (Unix
+seconds) with a monotonic guard: `seq = max(now_seconds, last_seq + 1)`,
+where `last_seq` is the value the writer last emitted. This requires no
+per-topic state and no coordination between writers; each writer keeps at
+most **one** scalar, persisted across restarts to survive backward clock
+jumps (NTP correction, snapshot restore) — losing it degrades to `now`,
+which is safe unless the clock moved backwards. The guard absorbs
+same-second double publishes, forward clock jumps, and backward jumps
+while running. Cross-writer caveat: two writers publishing to the same
+topic with skewed clocks may drop a wake-up when both fall in the same
+second — a latency cost (the client reconciles by fetching; polling is
+the backstop), never a correctness cost. The relay rejects publishes
+whose `seq` is ahead of its clock by more than the configured tolerance
+(§5.1), so a compromised or buggy signer cannot poison a topic's
+high-water mark with an implausible future value. Retries reuse the same
+signed envelope. Clients persist their per-topic high-water marks; relay
+replay state is memory-only (§5.5). A fresh client or cleared client
+storage can accept an old signed wake-up; this is a known limit without
+retained replay state. A compromised signer can advance `seq` excessively;
+ordinary content sync remains available, but this draft does not introduce
+an epoch/reset mechanism.
 
 ---
 
 ## 5. Publisher API
 
-Base: `https://<relay-host>/v1/`. All requests and responses are JSON over
-HTTPS. Authentication: `Authorization: Bearer <api-key>`; the relay stores
-only the SHA-256 hash of the key (shown once at provisioning). Every publish
-also requires signature verification against verified, unexpired TUF
-authorization (§5.5), regardless of provisioning method.
+Base: `https://<relay-host>/v1/`. Requests and responses use JSON over HTTPS
+unless an endpoint specifies no body. Production publishing requires a
+wake-up signature under verified, unexpired TUF authorization (§5.5); there
+are no publisher API keys. Company synchronization is unsigned (§5.2), and
+dispatch status uses the returned `request_id` as a bearer capability
+(§5.1.1). Device registration management has its own ownership tokens (§5.3).
+Debug API keys are accepted only in the separate transport-debug mode (§5.7).
 
 ### 5.1 `POST /v1/publish` — fan out a wake-up
 
@@ -331,6 +358,7 @@ Request (one shape for channels and orders — no type marker):
 ```json
 {
   "v": 1,
+  "company_id": "company.example",
   "scope_id": "<64-char lowercase hex>",
   "h": "<64-char hex>",
   "seq": 7,
@@ -338,9 +366,11 @@ Request (one shape for channels and orders — no type marker):
 }
 ```
 
+- `company_id` — the canonical company domain (§2). Selects existing TUF
+  state; an unknown company must first be synchronized through §5.2. Publish
+  requests do not perform first-use TOFU or issue credentials.
 - `scope_id` — the opaque authorization handle (§3.1). Resolve it in the
-  verified company's authorization table (TUF mode; a key-mode publisher
-  sends it as submitted — §5.5); no type marker or channel label
+  verified company's authorization table; no type marker or channel label
   is accepted. It is not a key identifier and does not change on key rotation.
 - `h` — the source hash (§3): `hex(sha256(company_id + "|" + subject))`;
   the caller computes it, the relay never sees `subject` (for orders it
@@ -348,18 +378,16 @@ Request (one shape for channels and orders — no type marker):
   The relay MUST treat it as opaque and MUST NOT validate it against a
   channel name, pattern, or raw subject. The same derivation and authorization
   algorithm applies to every scope; there is no public/private branch.
-- `seq` — **required**; monotonic per topic, supplied by the caller,
-  forwarded to the payload (§4). Enables missed-wake-up detection and
-  replay protection (§4.1).
-- `sig` — the signature array (§4.1). The relay always verifies the exact
-  scope's threshold before replay-cache mutation or enqueue. Required for
-  every **TUF-mode** publisher — including operator-provisioned ones; there
-  is no unsigned path for them. A **key-mode** publisher record (§8; debug
-  only) MAY omit `sig`; the relay then skips signature verification and
-  scope resolution entirely (§5.5).
+- `seq` — **required**; monotonic per topic, supplied by the caller per
+  §4.2 (timestamp with monotonic guard), forwarded to the payload (§4).
+  Enables replay suppression (§4.1). The relay rejects a `seq` ahead of its
+  clock by more than the configured tolerance (`400`).
+- `sig` — the signature array (§4.1), required for every production publish.
+  The relay verifies the exact scope's threshold before replay-cache mutation
+  or enqueue. No API token can bypass or substitute for this verification.
 
-The uniform publish workflow is: authenticate API key → resolve scope →
-derive topic → verify signature threshold (TUF mode; §5.5) → check/update in-memory sequence
+The uniform publish workflow is: select company TUF state → resolve scope →
+derive topic → verify signature threshold (§5.5) → check/update in-memory sequence
 cache → enqueue for dispatch (below). The client independently derives the
 same topic when subscribing; neither keys nor scope identifiers are delivery
 subscriptions.
@@ -383,7 +411,8 @@ exceeds the fast-path threshold, the relay accepts the publish and returns
 immediately, before any dispatch:
 
 ```json
-{ "topic": "<43 chars>", "request_id": "<uuid>", "status": "accepted" }
+{ "topic": "<43 chars>", "request_id": "<43-char secret>", "status": "accepted",
+  "expires_at": "<RFC 3339 UTC timestamp>" }
 ```
 
 Dispatch continues in the background; the publisher follows it via
@@ -413,10 +442,12 @@ Dispatch continues in the background; the publisher follows it via
   again, and registrations already served receive a duplicate that clients
   drop by `seq` (§4.2).
   A saturated queue rejects new publishes with `503` (backpressure; §5.4).
-- Errors: `401` bad/unknown API key; `400` schema violation (`scope_id` or
-  `h` malformed, invalid `seq`, malformed `sig`); `403` unknown scope in the
+- Errors: `400` schema violation (noncanonical `company_id`, malformed `scope_id`
+  or `h`, invalid `seq` — including a value implausibly far in the future,
+  §4.2 — missing/malformed `sig`); `404` company not yet known
+  (synchronize through §5.2); `403` unknown scope in the
   verified company or signature threshold not satisfied; `503` required TUF
-  authorization unavailable/expired and refresh failed (§5.5), or dispatch
+  authorization unavailable/expired while refresh is pending or failed (§5.5), or dispatch
   queue saturated (§5.4); `429` rate limit (see §5.4).
 
 Duplicate wake-ups are harmless (the app diffs content anyway) and coalesce
@@ -424,16 +455,26 @@ in the dispatch queue; no idempotency key is required.
 
 ### 5.1.1 `GET /v1/publishes/{request_id}` — dispatch status
 
-Same `Authorization: Bearer <api-key>` as §5.1; the request MUST belong to
-the authenticated publisher — another publisher's `request_id` returns
-`403`. The endpoint reads `event_log` (§7).
+Possession of `request_id` is the only authorization required: no API key or
+request signature. Generate it from 32 cryptographically random bytes,
+encoded as canonical unpadded base64url (43 characters). It authorizes only
+reading this dispatch's status. Store only its SHA-256 hash in `event_log`
+(§7); the caller retains the secret returned at acceptance.
+
+Capabilities expire independently of audit retention: configurable TTL,
+default **1 hour from acceptance**, returned as `expires_at` in the `202`
+response. Expiry does not cancel dispatch. Invalid, unknown, and expired
+capabilities return `404`, even if the audit row still exists. Responses
+MUST use `Cache-Control: no-store`. Raw capabilities MUST NOT enter access
+logs, tracing, or analytics; redact the request-id path segment at the relay
+and any reverse proxy. Status reads are rate-limited by IP and globally.
 
 - `200` while dispatch is in progress:
-  `{ "request_id": "<uuid>", "topic": "<43 chars>", "status": "pending" }`
+  `{ "request_id": "<43-char secret>", "topic": "<43 chars>", "status": "pending" }`
 - `200` when complete (all enabled legs attempted):
 
 ```json
-{ "request_id": "<uuid>", "topic": "<43 chars>", "status": "complete",
+{ "request_id": "<43-char secret>", "topic": "<43 chars>", "status": "complete",
   "providers": { "fcm": "accepted",
                  "webpush": { "attempted": 1000, "sent": 950,
                               "failed": 20, "removed": 30 } } }
@@ -448,8 +489,8 @@ the authenticated publisher — another publisher's `request_id` returns
   message, not that a device received or displayed it; `fcm` reports
   provider acceptance only — per-device information does not exist on the
   topic leg (no registry, §1).
-- `404` unknown `request_id`, or the row is older than event-log retention
-  (§7). Probe reads are rate-limited per publisher.
+- `404` also applies when the audit row has been removed by retention (§7).
+  `429` indicates the probe's read budget is exhausted.
 
 Authorization is **company- and scope-bound for every publisher**. A signer
 can address hashes only within its authorized scope, not sibling scopes or
@@ -457,52 +498,100 @@ other companies. Withdrawn keys are rejected once the withdrawal is present
 in verified metadata; cached authorization remains usable only while required
 metadata is unexpired. This is not instantaneous global revocation (§5.5).
 
-### 5.2 `POST /v1/publishers` — TUF-gated self-service registration
+### 5.2 `POST /v1/companies/{company_id}/refresh` — synchronize company metadata
 
-Optional (enabled by config, §8). Binds a publisher record to a
-`company_id` using the company's own TUF metadata as the anchor — **no
-relay operator action**. This endpoint never sends notifications; it only
-creates/refreshes the binding. Records created here are always TUF-mode
-(`auth_mode = "tuf"`).
+One **unsigned** endpoint for first-use bootstrap and later refresh. No body,
+API token, request signature, or publisher account. The canonical domain in
+the path (§2) identifies the company; the request cannot supply keys,
+metadata, repository URLs, or a trust-reset instruction. It requests a check
+of authoritative metadata and never sends notifications. Publisher tooling
+calls it before its first publish and after changing metadata, including key
+rotation or withdrawal. No old signing key is needed to request recovery.
 
-Request: `{ "company_id": "company.example" }`
+The relay uses the [standard TUF client workflow](https://theupdateframework.github.io/specification/latest/#detailed-client-workflow)
+and the protocol's repository layout
+([`../spec/repository.md` §2](../spec/repository.md)). The only extra
+bootstrap step is **TOFU for a domain with no previously trusted state**:
 
-Flow:
+1. For an unknown company, fetch
+   `https://<company_id>/.well-known/keryx/root.json` with HTTPS certificate
+   validation, no redirects, and the outbound bounds in §5.6. Validate the
+   root's structure and self-signature threshold before persisting it as the
+   initial trust anchor. HTTPS delivery by this domain establishes the initial
+   domain-to-root binding; self-signatures alone do not prove domain ownership.
+2. For a known company, load its persisted trusted root. In both cases, continue
+   with standard TUF updates, including sequential `N.root.json` rotation from the existing
+   well-known anchor. Pinning preserves continuity of trust; it does **not**
+   freeze root keys. Root replacement must satisfy standard TUF rotation
+   verification, never fresh TOFU. Concurrent bootstrap/refresh operations
+   for one domain are serialized.
+3. From the verified root's `custom.repo_base`, refresh `timestamp.json`,
+   `snapshot.json`, and `targets.json` using standard TUF version, signature,
+   hash, expiry, and rollback checks (`consistent_snapshot: false`). Fetch
+   metadata only. Persist trusted-state transitions as required by the TUF
+   client, including valid root updates when a later step fails.
+4. After a successful update, atomically expose the authorization table (§3.1)
+   for the verified metadata. New keys, changed thresholds, and removed keys
+   or scopes take effect for subsequent publish authorization. Update
+   `refreshed_at` only after successful synchronization, including a successful
+   check that metadata is unchanged. Failure never extends authorization expiry.
 
-1. The relay validates the hostname and fetches
-   `https://<company_id>/.well-known/keryx/root.json` (HTTPS only, no
-   redirects, bounded size/timeout — SSRF hardening), plus the
-   `N.root.json` chain-walk, exclusively from the well-known anchor
-   (same rule as the app, [`../spec/repository.md` §2](../spec/repository.md)).
-   TOFU: the anchor is that this origin served valid root metadata.
-2. The relay reads `custom.repo_base`, fetches `timestamp.json`,
-   `snapshot.json`, `targets.json`, and verifies the chain (standard TUF,
-   `consistent_snapshot: false`). **Metadata only** — never feed files or
-   content.
-3. The relay binds: stores the pinned root + verified metadata state
-   (anti-rollback versions) and the authorization derived from
-   `targets.json` as the uniform scope table (§3.1), shared per company
-   across all publisher credentials (§5.5, §7).
-4. Returns the API key (shown once, hashed at rest) and the publisher id.
+Known-company trust state MUST survive expiry, partial bootstrap, refresh
+failure, process restart, and eviction of in-memory caches. These conditions
+must not make a domain eligible for TOFU again. Retain the TUF client's
+persisted root and verification state; apply any state resets required by
+standard TUF root rotation through that client, never by clearing the company
+record in response to an HTTP request. A pinned company without usable
+authorization remains known and fails publishing closed until synchronization
+succeeds.
 
-- Idempotent: re-POSTing the same `company_id` **refreshes** the binding
-  through the existing pinned TUF state. It MUST NOT reset trust, rollback
-  versions, or replace an API credential. The key is returned only on initial
-  creation; a repeat returns the publisher id, not the stored key hash.
-  Credential rotation/revocation is an explicit authenticated management
-  operation. Metadata refresh and key rotation do not require re-enrollment.
-  Public metadata establishes company authorization, not the caller's identity;
-  the publish signature is always required. No enrollment challenge is added.
-- Errors: `400` malformed `company_id`; `401` invalid/absent credentials
-  (endpoint may be gated by an operator token); `503` TUF metadata
-  unreachable or unverifiable.
+**Scheduling and abuse bounds:**
+
+- At most **one synchronization attempt starts per 60 seconds per canonical
+  company_id**, shared by this endpoint, scheduled updates, and stale-cache
+  recovery (§5.5). Failures and timeouts consume the interval too. Reserve
+  the next eligible time before networking; persist it for known companies.
+- Keep at most one running attempt and one pending follow-up per company.
+  Requests during cooldown schedule one attempt at the next eligible time;
+  repeated hints coalesce without moving that time later. A hint received
+  during an active attempt may reserve that single follow-up so changes
+  published during the current fetch are not missed. Global scheduling may
+  delay execution, but additional hints must not postpone it.
+- Use a bounded, fair queue plus global fetch-rate/concurrency limits. Unknown
+  company discovery has a separate, stricter global and per-IP admission budget
+  and bounded scheduling/storage capacity. Preserve unknown-domain cooldown
+  entries until their interval elapses; if capacity is full, reject new
+  discovery work instead of evicting an entry to bypass its cooldown.
+  Already-pinned companies retain their trust state when admission is full.
+- Bound each attempt's total requests, downloaded/decompressed bytes, and
+  elapsed time, including root-rotation chains. If a long chain needs more
+  than one attempt, continue from persisted TUF progress on a later attempt.
+- Scheduled refresh continues independently of hints. An unsigned hint cannot
+  clear trusted state, prolong metadata validity, or postpone ordinary refresh.
+  The one-minute interval bounds per-company amplification, not total traffic
+  across companies, and is not a guarantee of completion within one minute.
+
+Response: `202 Accepted` with
+`{ "company_id": "company.example", "status": "scheduled" }` for newly
+scheduled or coalesced work. This acknowledges scheduling, **not** successful
+TUF verification; there is no credential to return. Tooling retries publishing
+after synchronization: before a root is pinned it receives `404`, and a known
+company without usable authorization returns `503` (§5.5). A restart may lose
+pending work; scheduled refresh or another hint
+recovers it without resetting trust or the persisted cooldown.
+
+Errors: `400` malformed/noncanonical domain or unexpected request body; `429`
+admission/rate limit with `Retry-After`; `503` scheduling capacity unavailable.
+Fetch or verification failures after `202` are recorded in operational metrics
+and leave publishing governed by §5.5. Requests already represented in the
+queue coalesce without consuming another queue slot.
 - Role rights (who may sign wake-ups, enforced at publish — §5.5):
 
 | TUF role | Wake-up authority |
 |---|---|
 | `channels.<channel>` (channel key, CI) | signs wake-ups for **that channel** |
 | `private_feed_patterns` entry keys (engine key) | signs wake-ups for orders under **that pattern** |
-| `root` / `targets` (master, offline) | none — the metadata *is* the registration proof; master never signs wake-ups |
+| `root` / `targets` (master, offline) | none — authorizes metadata and its updates; master never signs wake-ups |
 | `snapshot` / `timestamp` (online ops key) | **none** — freshness key only; giving it wake-up authority would expand its blast radius to all channels |
 | `editor` keys | **none** — item-level signing only |
 
@@ -543,10 +632,15 @@ topics, so the relay stores registration ↔ topic mappings in the
 
 ### 5.4 Limits
 
-Per publisher (configurable): default 60 publishes/minute, burst 120.
+Per verified company (configurable): default 60 publishes/minute, burst 120,
+shared by its scopes and signing keys; rotation does not create a fresh
+company budget. Bound unauthenticated publish traffic by IP and globally
+before signature work. Invalid requests must not consume another company's
+authenticated publish budget merely by naming its domain.
 Per subscription: topic count ≤ 200. Global: the relay MUST rate-limit
-subscription registration by IP; TUF metadata refreshes are rate-limited
-per company (config; §5.5).
+subscription registration by IP. Company synchronization shares the
+one-attempt-per-minute scheduler and discovery limits in §5.2. Probe reads
+have separate IP/global budgets (§5.1.1).
 
 **Global outbound budgets (config, per provider).** Dispatch is paced by
 per-provider token buckets — FCM publish rate, endpoint-leg concurrency
@@ -560,27 +654,14 @@ saturated rejects new publishes with `503` (§5.1).
 
 ### 5.5 TUF authorization at publish
 
-For every TUF-mode publisher, the relay always verifies each publish against
-its verified, unexpired TUF authorization. Provisioning method does not
-change this check — operator-provisioned and self-service records are both
-TUF-mode. Cached authorization is not proof that no newer metadata exists.
+Every production publish verifies its own signature against the company's
+cached, verified, unexpired TUF authorization. This does **not** download or
+re-verify the metadata chain for every request. There is no API-key fallback.
+Cached authorization is not proof that no newer metadata exists.
 
-**Key-mode exception (debug).** An operator MAY provision a publisher record
-with `auth_mode = "key"` (§8): the API key alone authorizes the publish — no
-signature check, no per-company TUF client, no scope table. This is a
-debugging/development path, never a production configuration: clients verify
-wake-up signatures unconditionally (§4.1), so a key-mode wake-up is **never
-accepted by the app** — it can trigger only the bounded client recovery of
-§4.2 and generic-notification presentation (§6.2), the same residual as any
-forged wake-up. Key-mode records are an explicit operator choice, visible in
-`publishers.auth_mode`, and SHOULD be rate-limited low; they do not change
-the client-visible security model.
-
-- **Per-company TUF client:** root pinned at registration (§5.2/§8);
-  `timestamp → snapshot → targets` fetched from `custom.repo_base` and
-  verified with the standard chain walk (anti-rollback via versions,
-  anti-freeze via `expires`). Root updates use the versioned chain from the
-  existing well-known anchor, never fresh TOFU on refresh or re-registration.
+- **Per-company TUF client:** standard tooling maintains the trust state;
+  TOFU occurs only for an unknown domain and subsequent root rotations and
+  metadata updates follow §5.2. No separate publisher credential state exists.
 - **Resolution:** load the uniform scope table (§3.1) from verified metadata,
   then look up `(company_id, scope_id)`. The publish path knows only keys and
   threshold; it MUST NOT branch on public/private channel type. The signature
@@ -588,11 +669,19 @@ the client-visible security model.
 - **Cache/refresh:** verified metadata is cached per company with its
   version state (persisted in the main DB, §7) and refreshed in the
   background on a cadence (config; the protocol's own timestamp cadence is
-  24–72 h) and on demand when stale. The common publish is a pure
-  signature check against the cached authorization — no network.
+  24–72 h), through unsigned publisher hints (§5.2), and on demand when stale.
+  All triggers share §5.2's scheduler. The common publish is a signature and
+  expiry check against cached authorization — no network. An unknown company
+  returns `404` and must bootstrap via §5.2. An unknown scope or invalid
+  signature under otherwise usable cached authorization returns `403`;
+  tooling requests synchronization explicitly after metadata changes.
 - **Fail policy (fail closed):** cached metadata that is **unexpired** is
-  used; if it is expired or absent and the refresh fails, the publish is
-  **rejected** (503, alarm) rather than accepted on trust. Cost: a
+  used only while the TUF client's current trusted state permits that
+  authorization; a partially completed update must not resurrect authority
+  invalidated by a verified root rotation. If usable authorization is expired
+  or absent for a known company, schedule/coalesce refresh and **reject** the
+  publish with `503` while recovery is pending or failed. Refresh failure does
+  not extend expiry or erase trust history. Cost: a
   publisher's metadata outage temporarily blocks its wake-ups —
   acceptable, since wake-ups are best-effort and polling is the backstop.
 - **Replay:** after signature verification, atomically compare `seq` with a
@@ -623,6 +712,38 @@ services plus the default public ntfy instance and any operator-listed
 self-hosted ntfy servers, since UnifiedPush endpoints live on the user's
 chosen ntfy server. Signed `repo_base`
 metadata authenticates its source, not the safety of its network destination.
+
+### 5.7 Transport-debug mode (development/testing only)
+
+An explicit runtime flag `--debug-transport` selects a separate debugging
+mode. Production is the default. In debug mode, expose
+`POST /debug/v1/publish` and `GET /debug/v1/publishes/{request_id}`; do not
+mount the production publish or company-synchronization routes. In production,
+debug routes return `404`. The two publishing modes are mutually exclusive
+within an instance; no request or database record can switch authorization
+mode or fall back from production verification to debug authorization.
+
+Debug publish requires `Authorization: Bearer <debug-api-key>`, configured
+once for the test instance at startup. Missing configuration prevents debug
+startup; missing/invalid request credentials return `401`. There are no
+per-publisher debug accounts, provisioning flows, or credential tables.
+Use the §5.1 request shape, including `company_id`, but allow `sig` to be
+omitted. Validate routing fields and derive the topic normally, then bypass
+TUF lookup and signature verification. This exercises the shared queue,
+provider adapters, encryption, and result accounting. Debug status uses the
+same short-lived request-id capability contract as §5.1.1.
+
+Keep debug runs on separate test databases, provider projects/credentials,
+and subscriptions so they cannot mutate production replay state, trust,
+registrations, or dispatch work. Reuse the transport implementation; do not
+build a second production authorization architecture. Device registration
+routes (§5.3) remain available against the test registry with their ordinary
+management-token checks. Provider pacing and outbound validation still apply.
+
+Production client verification is unchanged. Unsigned or invalid debug
+envelopes are not accepted as wake-ups; a correctly signed envelope can be
+accepted by a test client through its normal verification path. Debug mode
+does not make unsigned messages trusted by clients.
 
 ---
 
@@ -738,8 +859,8 @@ The de-Googled path reuses §6.2 entirely; only the client side differs.
 WAL mode. **Two databases**, versioned independently (schema version
   tables; the relay refuses to start on a mismatched version):
 
-- **Main database** (`-db`): `publishers`, `company_tuf`, `event_log` —
-  occasional writes (provisioning, publishing, metadata refresh).
+- **Main database** (`-db`): `company_tuf`, `event_log` —
+  trust-state, publishing, and metadata-refresh writes. No publisher accounts.
 - **Registry database** (`-registry-db`): `registrations`,
   `registration_topics` — write-heavy (registration/follow/unfollow/
   heartbeat churn); kept separate so the endpoint registry's volume never
@@ -748,29 +869,21 @@ WAL mode. **Two databases**, versioned independently (schema version
 Main database schema:
 
 ```sql
-CREATE TABLE publishers (
-  id            INTEGER PRIMARY KEY,
-  api_key_hash  TEXT NOT NULL UNIQUE,      -- sha256hex of the key (shown once)
-  name          TEXT NOT NULL,
-  company_id    TEXT NOT NULL,             -- company origin the key is issued for
-  rate_per_min  INTEGER NOT NULL DEFAULT 60,
-  provisioned_by TEXT NOT NULL,            -- operator or self_service; admission only
-  auth_mode     TEXT NOT NULL DEFAULT 'tuf', -- tuf (production) | key (debug; no sig check, §5.5)
-  created_at    TEXT NOT NULL
-);
-
-CREATE TABLE company_tuf (                 -- shared by every credential for a company
+CREATE TABLE company_tuf (                 -- standard TUF trust state per domain
   company_id    TEXT PRIMARY KEY,
-  root          TEXT NOT NULL,             -- pinned root.json (TOFU anchor)
+  root          TEXT NOT NULL,             -- current trusted root, updated by TUF rotation
   root_version  INTEGER NOT NULL,
-  chain_state   TEXT NOT NULL,             -- verified metadata, expiry/version state + scope_id → keys/threshold
-  refreshed_at  TEXT NOT NULL
+  chain_state   TEXT NOT NULL,             -- persisted TUF state, possibly partial; usable scopes derived from it
+  refreshed_at  TEXT,                      -- last successful full sync; NULL until bootstrap completes
+  next_refresh_at TEXT NOT NULL            -- earliest next attempt; reserved before network access
 );
 
 CREATE TABLE event_log (
   id          INTEGER PRIMARY KEY,
-  request_id  TEXT NOT NULL UNIQUE,        -- uuid; backs the dispatch-status probe (§5.1.1)
-  publisher_id INTEGER NOT NULL,           -- publishers.id; rows outlive the record
+  request_id_hash TEXT NOT NULL UNIQUE,    -- sha256hex of the status capability (§5.1.1)
+  request_expires_at TEXT NOT NULL,        -- capability lifetime, independent of audit retention
+  company_id  TEXT NOT NULL,
+  scope_id    TEXT NOT NULL,
   status      TEXT NOT NULL,               -- pending | complete
   topic       TEXT NOT NULL,
   fcm         TEXT,                        -- disabled/accepted/failed/suppressed
@@ -779,8 +892,14 @@ CREATE TABLE event_log (
   at          TEXT NOT NULL,               -- acceptance time
   completed_at TEXT                        -- set when dispatch finishes
 );
-CREATE INDEX idx_event_log_request_id ON event_log(request_id);
 ```
+
+The TUF schema is a logical storage contract: an implementation MAY use its
+standard TUF library's persistent store in place of `root`/`chain_state`,
+provided trust continuity, partial-update recovery, and the synchronization
+cooldown survive restarts. Do not implement a second TUF verification engine
+to match these illustrative columns. A partial bootstrap may have a trusted
+root and no usable scope table; it is still a known company (§5.2).
 
 Registry database schema:
 
@@ -809,7 +928,8 @@ CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
   audit/abuse record; it contains hashes and topic names only, never
   content or tokens. Each publish writes a row at acceptance (`pending`)
   and updates it at completion; the dispatch-status probe (§5.1.1) reads it
-  by `request_id`, and rows older than retention return `404`. Rows left
+  by the hash of `request_id`. Expired capabilities and rows removed by
+  retention return `404`. Raw status capabilities are never persisted. Rows left
   `pending` by a restart are closed on startup with legs recorded as
   `failed` (the in-memory queue was lost; audit accuracy, not a delivery
   guarantee).
@@ -824,8 +944,10 @@ CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
   wake-up for longer than the TTL is swept (the PWA re-registers on next
   open, §5.3); this is the accepted hygiene trade.
 - Relay per-topic sequence state is deliberately absent from both databases.
-  Company trust state MUST survive credential replacement or removal; admission
-  changes cannot reset pinned roots or rollback protection.
+  Company trust state is durable and is not registry/event-log GC data. Cache
+  eviction, expiry, synchronization failure, and admission-policy changes
+  cannot reset a known domain to TOFU. Root rotation proceeds through the
+  standard TUF client (§5.2).
 - Migration: both databases have their own schema version table; the
   relay refuses to start on a mismatched version.
 
@@ -838,24 +960,29 @@ CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
   SQLite path, service-account JSON path, VAPID keys (or key file), VAPID
   `sub` contact, TTLs, concurrency caps, per-provider
   outbound budgets (§5.4), dispatch queue capacity, fast-path max
-  registrations (§5.1), rate limits, event-log retention, TUF-gated
-  registration on/off, TUF refresh cadence,
+  registrations (§5.1), company/IP/global rate limits, event-log retention,
+  dispatch-status capability TTL (default 1 hour), TUF refresh cadence,
+  synchronization queue/fetch limits, unknown-company discovery limits,
   registry GC TTL (default 30 days — `last_seen` advances only on client
   activity, so a short TTL sweeps live users on quiet channels), replay-cache
-  capacity, and approved push-service origins.
-- **Provisioning:** a subcommand (`relayctl`-style, or `relay
-  publishers add --name … --company company.example`) issues the API key
-  (shown once), verifies/pins the company's TUF metadata, and creates the
-  publisher record (`auth_mode = "tuf"` default). `--auth key` creates a
-  debug-only key-mode record: no TUF verification, no metadata — the API key
-  alone authorizes (§5.5). Self-service (§5.2) is config-gated and always
-  TUF-mode.
+  capacity, replay-seq future tolerance (default 5 min), approved push-service
+  origins, and the explicit debug-mode
+  flag/API-key configuration (§5.7). The per-company minimum synchronization
+  interval is 60 seconds (§5.2).
+- **Company synchronization:** no publisher provisioning or key issuance.
+  Tooling calls §5.2 for first-use TOFU and subsequent standard TUF updates.
+  Existing company trust state is retained across configuration changes.
+- **Transport debugging:** `--debug-transport` with a configured debug API key
+  enables only the alternate publishing routes (§5.7). Use test databases,
+  subscriptions, and provider credentials; never deploy this mode as the
+  production relay.
 - **Secrets** (highest to lowest sensitivity): FCM service account (can
   publish to every topic in the app's project), VAPID private key (can send
-  to every registered PWA subscription), API keys (per publisher, hashed at
-  rest), and registration management tokens (hashed at rest). Provider private
-  credentials stay in secret storage; raw API/management tokens never enter
-  the DB or logs.
+  to registered endpoint subscriptions), the debug API key (test mode only),
+  registration management tokens, and dispatch-status capabilities. Provider
+  private credentials and the debug key stay in secret configuration;
+  management tokens and status capabilities are hashed at rest. Raw bearer
+  secrets never enter logs, traces, or the database.
 - **Scale:** one instance; the publish API accepts quickly and dispatch is
   asynchronous (§5.1): a bounded, in-memory, per-topic coalescing queue
   drained by workers paced to the per-provider budgets (§5.4). The queue is
@@ -866,8 +993,9 @@ CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
   needed, requires a separate outbox contract and storage.
 - **TUF client — authorization metadata only.** The relay maintains a
   per-company TUF client for the publish-time authorization check (§5.5):
-  root pinned at registration, `timestamp/snapshot/targets` fetched from
-  `custom.repo_base`, verified and cached. It never fetches or verifies
+  root bootstrapped by domain TOFU once, then rotated by standard TUF tooling;
+  `timestamp/snapshot/targets` fetched from the verified `custom.repo_base`,
+  verified and cached through §5.2. It never fetches or verifies
   content — feed files and messages remain the app's TUF job.
 
 ---
@@ -876,7 +1004,7 @@ CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
 
 | What the relay knows | What it never learns |
 |---|---|
-| publisher identity (API key → publisher record, verified TUF company binding for every TUF-mode publisher) | user identity, email, phone |
+| verified company and scope authorization for a signed publish (not a separate caller account) | user identity, email, phone |
 | device ↔ topic mapping for endpoint registrations (PWA + de-Googled Android; targeted model) | device ↔ topic mapping on the topic leg (FCM — anonymous) |
 | scope identifiers, public authorization metadata, source/topic hashes, wake-up volume/timing | order capability tokens (only their hash), message content, anything the app fetches afterwards |
 | endpoint-leg payloads (it encrypts them — server-side only) | the wake-up *content* semantics — only that something changed |
@@ -896,13 +1024,17 @@ CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
   The relay's sequence cache can be lost on restart without weakening the
   client's persisted replay checks. Client state loss has the replay limit
   described in §4.2; content verification remains independent.
-- **Key-mode records (debug):** an operator-issued `auth_mode = "key"`
-  publisher skips signature verification (§5.5). Its wake-ups are never
-  accepted by clients (unconditional client verification, §4.1), so the
-  residual is bounded recovery traffic plus generic notices — but the key
-  is still a blast-capability handle for the company's topics and MUST NOT
-  be used in production; the operator audits `publishers.auth_mode`.
-- **Wake-up authenticity and recovery:** the relay always verifies before
+- **Transport debug mode:** the test-only routes (§5.7) bypass relay signature
+  verification and are never mounted in production. Client verification is
+  unconditional; debug mode does not establish client trust. Keep test
+  storage, subscriptions, and provider projects separate from production.
+- **Company trust:** anyone may request synchronization, including after old
+  keys have been withdrawn. The caller supplies no replacement trust. TOFU
+  applies only to unknown domains; known domains follow standard TUF updates,
+  including root rotation. A failed or expired cache never reopens TOFU.
+  One attempt per minute per company plus global/discovery limits bounds
+  refresh work; ordinary refresh and expiry checks remain the backstop.
+- **Wake-up authenticity and recovery:** the production relay verifies before
   dispatch. Clients verify before accepting a wake-up or fetching content.
   Unknown/invalid signatures may trigger one company-wide metadata refresh
   per persisted cooldown (§4.2). Forged messages cannot advance sequence state
@@ -924,7 +1056,8 @@ CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
   `event_log` never logs order tokens or payloads. Access to the relay's
   DBs is a privacy incident by itself (endpoint registry) — treat as
   sensitive.
-- **Abuse:** per-publisher rate limits, per-IP subscription throttling,
+- **Abuse:** per-company publish limits, IP/global unauthenticated-request limits,
+  per-IP subscription throttling,
   outbound destination validation, registration management tokens, VAPID `sub`
   contact for provider abuse contact, TUF metadata refresh rate limits,
   fail-closed relay authorization (§5.5), and client recovery cooldowns (§4.2).
@@ -933,13 +1066,26 @@ CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
 
 ## 10. Integration with the Protocol
 
+- Publisher tooling calls `POST /v1/companies/{company_id}/refresh` before
+  first use and after publishing metadata changes. The same unsigned call
+  bootstraps an unknown domain or updates a known one, including root-key
+  rotation. A `202` means scheduled/coalesced, not verified; tooling retries
+  publishing while authorization is unavailable or still lacks the new scope
+  or keys. No enrollment credential or retained old key is needed.
 - Publisher tooling (`pub`) gains a `push` step: after any publish/order
   event, resolve the scope_id from verified metadata, compute the source
-  hash and topic (§3), durably allocate `seq`, satisfy that scope's signature
-  threshold (§4.1), and call `POST /v1/publish`. The relay performs the same
+  hash and topic (§3), compute `seq` per §4.2 (timestamp with monotonic
+  guard), satisfy that scope's signature threshold (§4.1), and call
+  `POST /v1/publish` with `company_id` and no API
+  token. The relay performs the same
   algorithm for every scope. The call returns fast (acceptance, §5.1);
   tooling may follow dispatch status (§5.1.1) or ignore it. Failures are
   non-fatal; independent sync covers it.
+- Partner engines use the company's `company_id` and the authorized private
+  pattern's `scope_id` and signing keys. They need no publisher record or
+  company-issued relay sub-key. Per-company limits apply across engines/scopes.
+- Dispatch status requires only the short-lived `request_id` capability;
+  tooling keeps it secret until expiry. It is not a publishing credential.
 - When following an item, the app derives the same topic and stores its
   company/scope binding. It subscribes through FCM or adds the topic to
   its endpoint registration (PWA or Android). Delivery identifies that
@@ -977,14 +1123,7 @@ CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
 3. **TTLs** — endpoint leg default 1 h; FCM default (stores up to 4
    weeks). What cadence matches the protocol's freshness model? Any TTL
    policy is uniform (the relay does not rely on wake-up type).
-4. **Order wake-ups through the relay** — order events go through the same
-   `/v1/publish` (`scope_id` = that pattern entry's identifier). How does the partner engine
-   get its publisher record: TUF-gated registration binds the *company*
-   domain (§5.2), so does the engine register the same `company_id`
-   (subject to operator policy), or does the company issue sub-keys? The
-   engine's wake-up signature verifies against the company's pattern-entry
-   keys either way.
-5. **Relay identity** — who operates it (the app publisher), and what
+4. **Relay identity** — who operates it (the app publisher), and what
    governance applies if more than one app ships against it?
 
 ---
@@ -1005,16 +1144,43 @@ the same publish path:
   cannot satisfy a threshold; extra rotation signatures do not force refresh.
 - Invalid signatures never mutate relay/client sequence state. Relay restart
   loses only its cache; clients still reject previously accepted sequences.
+- Callers emit `seq` with the monotonic guard (§4.2): two wake-ups for one
+  topic within the same second get distinct values; a backward clock jump
+  does not decrease it; a restart continues above the previous value while
+  `last_seq` is persisted. Clients never compare `seq` to their own clock,
+  and the relay rejects values ahead of its clock beyond the configured
+  tolerance.
 - Concurrent invalid wake-ups across one company's topics cause at most one
   recovery attempt per cooldown. Timeouts consume it; client restarts preserve
   it; forged key IDs and different topics cannot bypass it.
 - A new authorized key verifies after successful recovery. Failed recovery
   suppresses only further recovery attempts; cached-key valid notifications
   continue. Unknown topics never trigger recovery or select metadata URLs.
-- All TUF-mode publishers, including operator-provisioned ones, fail closed
-  when signature thresholds or required TUF freshness checks fail; key-mode
-  (debug) records are the explicit exception and their wake-ups are never
-  accepted by clients (§4.1).
+- Production publishes require no API token and always fail closed when
+  signature thresholds or required TUF freshness checks fail. An API key
+  cannot bypass verification. Changing the request's company, scope, or source
+  hash invalidates its signature for the newly derived topic.
+- Unsigned synchronization bootstraps an unknown domain using HTTPS TOFU;
+  subsequent synchronization uses persisted standard TUF trust. Root rotation
+  succeeds through the versioned chain; an unrelated replacement root fails.
+  Expiry, process restart, cache eviction, and a partial/failed bootstrap or
+  refresh never reset an already-pinned domain to TOFU. Standard TUF updates
+  persist verified root progress even if a later metadata step fails.
+- Concurrent synchronization hints cause at most one attempt per minute per
+  company; timeouts consume the interval and known-company cooldowns survive
+  restart. Requests during cooldown coalesce into one pending attempt and
+  cannot postpone it. Scheduled/stale-cache updates share the same budget.
+  Unknown-domain admission is bounded without evicting active cooldowns to
+  bypass them, and cannot monopolize known-company refresh workers.
+- After metadata rotation or withdrawal, an unsigned hint can schedule refresh
+  without any old key. Successful refresh updates authorization, including
+  removed keys/scopes; failure does not extend expiry. Routine cached-key
+  publishes perform request-signature and expiry checks without fetching TUF.
+- Debug routes are absent in production. Explicit debug mode exposes only its
+  alternate publishing routes, requires its configured API key for publish,
+  and uses isolated test state and providers. It shares the transport code;
+  valid signed test envelopes verify normally, while unsigned/invalid ones
+  are never accepted as trusted client wake-ups.
 - Registration mutation requires its management token; destination validation
   covers delivery and metadata; registry GC is driven by `404/410` and
   `last_seen`, never by send attempts. PWA and Android endpoint
@@ -1031,6 +1197,9 @@ the same publish path:
   the latest wake-up per topic is sent. Provider budgets pace dispatch;
   saturation rejects new publishes with `503` instead of silently dropping
   queued work.
-- Probe semantics: `pending` → `complete` with per-leg results; another
-  publisher's `request_id` is `403`; results describe provider attempts,
-  never device delivery.
+- Probe semantics: `pending` → `complete` with per-leg results; possession of
+  the unexpired request-id capability suffices without an API key or signature.
+  Invalid/unknown/expired capabilities return `404`. Expiry does not cancel
+  dispatch, and audit retention does not extend capability lifetime. Raw
+  capabilities are neither persisted nor logged; responses are not cached.
+  Results describe provider attempts, never device delivery.
