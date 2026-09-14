@@ -17,27 +17,30 @@ import (
 )
 
 // repoDir is the TUF repo base (root.json custom.repo_base) relative to the
-// site directory: metadata + per-channel feed target files (PROTOCOL §3).
+// site directory: metadata + per-channel item files (spec/repository.md §1).
 const repoDir = "keryx"
 
-// channelFeedPath returns the TUF target path of a channel's public feed:
-// channels/<name>/feed.json (PROTOCOL §3/§8).
-func channelFeedPath(name string) string {
-	return "channels/" + name + "/feed.json"
+// itemTargetPath returns the TUF target path of one public item:
+// channels/<name>/<id>.json (spec/feeds.md §1.1 — one item = one target).
+func itemTargetPath(ch, id string) string {
+	return "channels/" + ch + "/" + id + ".json"
 }
 
 // buildRepo creates the full TUF repository (root/targets/snapshot/timestamp
-// + one delegated role per channel, consistent_snapshot: false — the spec
-// default) and writes it under siteDir/keryx/, plus the well-known root
-// anchor at siteDir/.well-known/keryx/root.json (spec/core.md §1, §3).
+// + one delegated role per channel + optional authors roles,
+// consistent_snapshot: false — the spec default) and writes it under
+// siteDir/keryx/, plus the well-known root anchor at
+// siteDir/.well-known/keryx/root.json (spec/core.md §1, spec/repository.md §1).
 //
 // Key split (spec/repository.md §1): the offline master key signs root +
 // targets (authorization); the online ops key signs snapshot + timestamp
 // (freshness) — no master involvement on any publish. Channel keys sign
 // their own role metadata (channels.<name>.json), which pins that channel's
-// feed target. Root metadata lives ONLY at the well-known anchor — never in
-// the repo base.
-func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte) error {
+// item targets; author keys sign the authors role metadata
+// (channels.<name>.authors.json) which authorizes item signing
+// (spec/feeds.md §2). Root metadata lives ONLY at the well-known anchor —
+// never in the repo base.
+func buildRepo(keys map[string]*keyPair, siteDir string, items map[string][]byte) error {
 	now := time.Now().UTC().Truncate(time.Second)
 	dir := filepath.Join(siteDir, repoDir)
 	// regenerate: drop stale metadata from previous runs
@@ -72,10 +75,12 @@ func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte
 		},
 	}
 
-	// --- targets.json: authorization (PROTOCOL §4). Channels = delegated
-	// TUF roles (one per channel, paths channels/<name>/*, terminating).
-	// custom carries company identity, editor mode (§9) and private-feed
-	// patterns (§10) — all master-signed.
+	// --- targets.json: authorization (spec/repository.md §2). Channels =
+	// delegated TUF roles (one per channel, paths channels/<name>/*,
+	// terminating); authored channels get a sibling non-terminating authors
+	// role (channels.<name>.authors) with the same paths — it authorizes
+	// item signing and pins no targets. custom carries company identity,
+	// channel display metadata and private-feed patterns — all master-signed.
 	targets := metadata.Targets(now.AddDate(1, 0, 0))
 	dlgKeys := map[string]*metadata.Key{}
 	var dlgRoles []metadata.DelegatedRole
@@ -83,7 +88,7 @@ func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte
 		kp := keys[ch.Name]
 		dlgKeys[kp.KeyID] = kp.Key
 		// Role name is namespaced `channels.<channel>` (spec/repository.md
-		// §2): the channel name is used verbatim in paths and _sig.channel,
+		// §2): the channel name is used verbatim in paths and the payload,
 		// the role name (and its <role>.json metadata file) is prefixed.
 		dlgRoles = append(dlgRoles, metadata.DelegatedRole{
 			Name:        "channels." + ch.Name,
@@ -93,21 +98,28 @@ func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte
 			Paths:       []string{"channels/" + ch.Name + "/*"},
 		})
 	}
-	targets.Signed.Delegations = &metadata.Delegations{Keys: dlgKeys, Roles: dlgRoles}
-
-	editorMode := map[string]any{}
-	for chName, ec := range editorChannels {
-		entryKeys := map[string]*metadata.Key{}
+	for chName, ac := range authorChannels {
 		var keyids []string
-		for _, name := range ec.KeyNames {
+		for _, name := range ac.KeyNames {
 			kp := keys[name]
-			entryKeys[kp.KeyID] = kp.Key
+			dlgKeys[kp.KeyID] = kp.Key
 			keyids = append(keyids, kp.KeyID)
 		}
-		editorMode[chName] = map[string]any{
-			"keys":      entryKeys,
-			"keyids":    keyids,
-			"threshold": ec.Threshold,
+		dlgRoles = append(dlgRoles, metadata.DelegatedRole{
+			Name:        "channels." + chName + ".authors",
+			KeyIDs:      keyids,
+			Threshold:   ac.Threshold,
+			Terminating: false,
+			Paths:       []string{"channels/" + chName + "/*"},
+		})
+	}
+	targets.Signed.Delegations = &metadata.Delegations{Keys: dlgKeys, Roles: dlgRoles}
+
+	channelsCustom := map[string]any{}
+	for _, ch := range channels {
+		channelsCustom[ch.Name] = map[string]any{
+			"display_name": ch.DisplayName,
+			"description":  ch.Description,
 		}
 	}
 	engine := keys["tracking"]
@@ -115,7 +127,8 @@ func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte
 		"custom": map[string]any{
 			"company_name": companyName,
 			"logo":         logoURL,
-			"editor_mode":  editorMode,
+			"logo_sha256":  logoSHA256(),
+			"channels":     channelsCustom,
 			"private_feed_patterns": []any{
 				map[string]any{
 					"channel":      trackingPatternEntry.Channel,
@@ -146,25 +159,22 @@ func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte
 	}
 
 	// --- per-channel role metadata (channels.<name>.json): signed by the
-	// channel key; pins that channel's feed target (length + hashes +
-	// display metadata). Delegations are always empty — a channel is a leaf
-	// (spec/repository.md §2).
+	// channel key; pins that channel's item files (length + hashes). No
+	// per-target custom (display metadata lives in master-signed
+	// custom.channels — spec/repository.md §2/§3). A channel is a leaf:
+	// delegations are always empty (spec/repository.md §2).
 	channelMeta := map[string]*metadata.Metadata[metadata.TargetsType]{}
 	for _, ch := range channels {
-		feedBytes := feeds[ch.Name]
-		sum := sha256.Sum256(feedBytes)
-		customRaw, err := json.Marshal(map[string]any{
-			"display_name": ch.DisplayName,
-			"description":  ch.Description,
-		})
-		if err != nil {
-			return err
-		}
 		role := metadata.Targets(now.AddDate(0, 6, 0))
-		role.Signed.Targets[channelFeedPath(ch.Name)] = &metadata.TargetFiles{
-			Length: int64(len(feedBytes)),
-			Hashes: metadata.Hashes{"sha256": sum[:]},
-			Custom: (*json.RawMessage)(&customRaw),
+		for path, itemBytes := range items {
+			if !strings.HasPrefix(path, "channels/"+ch.Name+"/") {
+				continue
+			}
+			sum := sha256.Sum256(itemBytes)
+			role.Signed.Targets[path] = &metadata.TargetFiles{
+				Length: int64(len(itemBytes)),
+				Hashes: metadata.Hashes{"sha256": sum[:]},
+			}
 		}
 		role.Signed.Delegations = &metadata.Delegations{Keys: map[string]*metadata.Key{}, Roles: []metadata.DelegatedRole{}}
 		signer, err := signature.LoadSigner(keys[ch.Name].Priv, crypto.Hash(0))
@@ -177,22 +187,45 @@ func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte
 		channelMeta[ch.Name] = role
 	}
 
+	// --- authors role metadata (channels.<name>.authors.json): signed by
+	// the author keys per threshold, pins NO targets — it authorizes item
+	// signing (spec/feeds.md §2). Pinned by snapshot.json.
+	authorsMeta := map[string]*metadata.Metadata[metadata.TargetsType]{}
+	for chName, ac := range authorChannels {
+		role := metadata.Targets(now.AddDate(0, 6, 0))
+		role.Signed.Delegations = &metadata.Delegations{Keys: map[string]*metadata.Key{}, Roles: []metadata.DelegatedRole{}}
+		for _, name := range ac.KeyNames {
+			signer, err := signature.LoadSigner(keys[name].Priv, crypto.Hash(0))
+			if err != nil {
+				return err
+			}
+			if err := signAndTag(role, signer, keys[name]); err != nil {
+				return fmt.Errorf("signing %s authors metadata: %w", chName, err)
+			}
+		}
+		authorsMeta[chName] = role
+	}
+
 	// --- snapshot/timestamp: pins metadata versions + hashes.
 	metaFiles := map[string]*metadata.MetaFiles{}
-	bytesOf := func(m *metadata.Metadata[metadata.TargetsType]) ([]byte, error) {
-		return m.ToBytes(true)
-	}
 	targetsBytes, err := targets.ToBytes(true)
 	if err != nil {
 		return err
 	}
 	metaFiles["targets.json"] = metaFilesFor(targets.Signed.Version, targetsBytes)
 	for _, ch := range channels {
-		b, err := bytesOf(channelMeta[ch.Name])
+		b, err := channelMeta[ch.Name].ToBytes(true)
 		if err != nil {
 			return err
 		}
 		metaFiles["channels."+ch.Name+".json"] = metaFilesFor(channelMeta[ch.Name].Signed.Version, b)
+	}
+	for chName := range authorsMeta {
+		b, err := authorsMeta[chName].ToBytes(true)
+		if err != nil {
+			return err
+		}
+		metaFiles["channels."+chName+".authors.json"] = metaFilesFor(authorsMeta[chName].Signed.Version, b)
 	}
 	snapshot := metadata.Snapshot(now.AddDate(0, 1, 0))
 	snapshot.Signed.Meta = metaFiles
@@ -227,6 +260,15 @@ func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte
 			return err
 		}
 	}
+	for chName, role := range authorsMeta {
+		b, err := role.ToBytes(true)
+		if err != nil {
+			return err
+		}
+		if err := write("channels."+chName+".authors.json", b); err != nil {
+			return err
+		}
+	}
 	if err := write("snapshot.json", snapshotBytes); err != nil {
 		return err
 	}
@@ -237,15 +279,14 @@ func buildRepo(keys map[string]*keyPair, siteDir string, feeds map[string][]byte
 	if err := write("timestamp.json", timestampBytes); err != nil {
 		return err
 	}
-	// target files: canonical path only (plain path serves TUF clients and
-	// generic JSON Feed readers from one file — spec/feeds.md §1.1)
-	for _, ch := range channels {
-		feedBytes := feeds[ch.Name]
-		chDir := filepath.Join(dir, "channels", ch.Name)
-		if err := os.MkdirAll(chDir, 0o755); err != nil {
+	// item target files: one file per item at its canonical path
+	// (channels/<name>/<id>.json — spec/feeds.md §1.1)
+	for path, itemBytes := range items {
+		targetPath := filepath.Join(dir, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(chDir, "feed.json"), feedBytes, 0o644); err != nil {
+		if err := os.WriteFile(targetPath, itemBytes, 0o644); err != nil {
 			return err
 		}
 	}
@@ -296,9 +337,11 @@ func metaFilesFor(version int64, data []byte) *metadata.MetaFiles {
 }
 
 // verifyRepo re-loads the repository from disk and checks the full metadata
-// chain (root → timestamp → snapshot → targets → per-channel role metadata),
-// every feed target hash/length, every feed item signature (editor mode
-// strict, default attribution) and the private capability feed as a whole.
+// chain (root → timestamp → snapshot → targets → per-channel role metadata
+// + authors role metadata), every item target hash/length, every item
+// signature (authors role strict, single-author channel-key strict), the
+// private capability feed as a whole, and the master-signed custom
+// (company identity, channel display metadata, logo hash, patterns).
 func verifyRepo(keys map[string]*keyPair, siteDir string) error {
 	dir := filepath.Join(siteDir, repoDir)
 
@@ -355,14 +398,25 @@ func verifyRepo(keys map[string]*keyPair, siteDir string) error {
 		return fmt.Errorf("snapshot references targets v%d, have v%d", got, targets.Signed.Version)
 	}
 
-	// targets.json: delegations = one role per public channel, terminating,
-	// paths channels/<name>/*; custom carries identity + editor mode +
+	// targets.json: one channel role per public channel (terminating, paths
+	// channels/<name>/*) + one non-terminating authors role per authored
+	// channel; custom carries identity + channel display metadata +
 	// private-feed patterns (all master-signed).
 	roles := targets.Signed.Delegations.Roles
-	if len(roles) != len(channels) {
-		return fmt.Errorf("targets.json: %d delegations, want %d", len(roles), len(channels))
+	custom, _ := targets.Signed.UnrecognizedFields["custom"].(map[string]any)
+	if custom == nil {
+		return fmt.Errorf("targets.json: custom missing")
 	}
-	editorMode, _ := targets.Signed.UnrecognizedFields["custom"].(map[string]any)["editor_mode"].(map[string]any)
+	if custom["company_name"] != companyName {
+		return fmt.Errorf("targets.json: custom.company_name = %v, want %s", custom["company_name"], companyName)
+	}
+	if custom["logo"] != logoURL {
+		return fmt.Errorf("targets.json: custom.logo = %v, want %s", custom["logo"], logoURL)
+	}
+	if got := asString(custom["logo_sha256"]); got != logoSHA256() {
+		return fmt.Errorf("targets.json: custom.logo_sha256 = %v, want %s", custom["logo_sha256"], logoSHA256())
+	}
+	channelsCustom, _ := custom["channels"].(map[string]any)
 	for _, ch := range channels {
 		role := findRole(roles, "channels."+ch.Name)
 		if role == nil {
@@ -378,41 +432,76 @@ func verifyRepo(keys map[string]*keyPair, siteDir string) error {
 		if role.Threshold != 1 || len(role.KeyIDs) != 1 {
 			return fmt.Errorf("delegation %q: expected 1-of-1", ch.Name)
 		}
-		if ec, ok := editorChannels[ch.Name]; ok {
-			entry, _ := editorMode[ch.Name].(map[string]any)
-			if entry == nil {
-				return fmt.Errorf("targets.json: editor_mode.%s missing", ch.Name)
-			}
-			keyids := asStringSlice(entry["keyids"])
-			if len(keyids) != len(ec.KeyNames) {
-				return fmt.Errorf("editor_mode.%s: %d keyids, want %d", ch.Name, len(keyids), len(ec.KeyNames))
-			}
-			if thr := asInt(entry["threshold"]); thr != ec.Threshold {
-				return fmt.Errorf("editor_mode.%s: threshold %v, want %d", ch.Name, entry["threshold"], ec.Threshold)
-			}
-			// key separation (§9): editor keyids MUST NOT be the channel role keyid
-			for _, kid := range keyids {
-				if kid == role.KeyIDs[0] {
-					return fmt.Errorf("editor_mode.%s: key %s is also the channel role key", ch.Name, kid)
+		entry, _ := channelsCustom[ch.Name].(map[string]any)
+		if entry == nil {
+			return fmt.Errorf("targets.json: custom.channels.%s missing", ch.Name)
+		}
+		if asString(entry["display_name"]) != ch.DisplayName {
+			return fmt.Errorf("custom.channels.%s: display_name = %v, want %s", ch.Name, entry["display_name"], ch.DisplayName)
+		}
+	}
+	for chName, ac := range authorChannels {
+		roleName := "channels." + chName + ".authors"
+		role := findRole(roles, roleName)
+		if role == nil {
+			return fmt.Errorf("targets.json: missing delegation %q", roleName)
+		}
+		if role.Terminating {
+			return fmt.Errorf("delegation %q: must not be terminating", roleName)
+		}
+		wantPath := "channels/" + chName + "/*"
+		if len(role.Paths) != 1 || role.Paths[0] != wantPath {
+			return fmt.Errorf("delegation %q: paths %v, want [%s]", roleName, role.Paths, wantPath)
+		}
+		if role.Threshold != ac.Threshold || len(role.KeyIDs) != len(ac.KeyNames) {
+			return fmt.Errorf("delegation %q: expected %d-of-%d", roleName, ac.Threshold, len(ac.KeyNames))
+		}
+		// key separation (spec/feeds.md §2): author keyids MUST NOT
+		// intersect the channel role's keyids.
+		chRole := findRole(roles, "channels."+chName)
+		if chRole == nil {
+			return fmt.Errorf("targets.json: missing delegation %q", "channels."+chName)
+		}
+		for _, kid := range role.KeyIDs {
+			for _, chKID := range chRole.KeyIDs {
+				if kid == chKID {
+					return fmt.Errorf("authors role %q: key %s is also the channel role key", roleName, kid)
 				}
 			}
-			// key publication (§4): every keyid has its key object in the entry
-			entryKeys, _ := entry["keys"].(map[string]any)
-			for _, kid := range keyids {
-				if entryKeys[kid] == nil {
-					return fmt.Errorf("editor_mode.%s: key object for %s missing", ch.Name, kid)
-				}
+		}
+		// key publication (spec/repository.md §2): every keyid has its key
+		// object in the delegation's keys map.
+		dlgKeys := targets.Signed.Delegations.Keys
+		for _, kid := range role.KeyIDs {
+			if dlgKeys[kid] == nil {
+				return fmt.Errorf("authors role %q: key object for %s missing", roleName, kid)
 			}
 		}
 	}
 
+	// private-feed patterns: entry present, key objects published.
+	patterns, _ := custom["private_feed_patterns"].([]any)
+	if len(patterns) != 1 {
+		return fmt.Errorf("targets.json: private_feed_patterns: %d entries, want 1", len(patterns))
+	}
+	entry, _ := patterns[0].(map[string]any)
+	if asString(entry["channel"]) != trackingPatternEntry.Channel {
+		return fmt.Errorf("private_feed_patterns: channel = %v, want %s", entry["channel"], trackingPatternEntry.Channel)
+	}
+	if asString(entry["pattern"]) != trackingPattern {
+		return fmt.Errorf("private_feed_patterns: pattern = %v, want %s", entry["pattern"], trackingPattern)
+	}
+	engine := keys["tracking"]
+	entryKeys, _ := entry["keys"].(map[string]any)
+	if entryKeys[engine.KeyID] == nil {
+		return fmt.Errorf("private_feed_patterns: key object for %s missing", engine.KeyID)
+	}
+
 	// per-channel role metadata: signed by the channel key, pinned by
-	// snapshot, pins the channel's feed target. Files are named
-	// channels.<channel>.json (spec/repository.md §2).
+	// snapshot, pins the channel's item files. Files are named
+	// channels.<channel>.json (spec/repository.md §2/§3).
 	type roleCheck struct {
 		meta *metadata.Metadata[metadata.TargetsType]
-		path string
-		info *metadata.TargetFiles
 	}
 	checks := map[string]roleCheck{}
 	for _, ch := range channels {
@@ -431,52 +520,91 @@ func verifyRepo(keys map[string]*keyPair, siteDir string) error {
 		if info.Version != role.Signed.Version {
 			return fmt.Errorf("snapshot references %s v%d, have v%d", roleName, info.Version, role.Signed.Version)
 		}
-		path := channelFeedPath(ch.Name)
-		tf := role.Signed.Targets[path]
-		if tf == nil {
-			return fmt.Errorf("%s.json: missing target %q", roleName, path)
+		if len(role.Signed.Targets) == 0 {
+			return fmt.Errorf("%s.json: no item targets", roleName)
 		}
-		checks[ch.Name] = roleCheck{meta: role, path: path, info: tf}
+		checks[ch.Name] = roleCheck{meta: role}
 	}
 
-	// feed target bytes: length + sha256 (plain path — consistent_snapshot
-	// is false, so exactly one copy serves TUF clients and generic readers)
-	for _, ch := range channels {
-		rc := checks[ch.Name]
-		feedBytes, err := os.ReadFile(filepath.Join(dir, rc.path))
+	// authors role metadata: signed by author keys per threshold, pinned by
+	// snapshot, pins no targets (spec/feeds.md §2).
+	for chName := range authorChannels {
+		roleName := "channels." + chName + ".authors"
+		role, err := metadata.Targets().FromFile(filepath.Join(dir, roleName+".json"))
 		if err != nil {
-			return err
+			return fmt.Errorf("loading %s.json: %w", roleName, err)
 		}
-		if rc.info.Length != int64(len(feedBytes)) {
-			return fmt.Errorf("%s: feed length %d != metadata %d", ch.Name, len(feedBytes), rc.info.Length)
+		if err := targets.VerifyDelegate(roleName, role); err != nil {
+			return fmt.Errorf("%s signature (by delegated role): %w", roleName, err)
 		}
-		sum := sha256.Sum256(feedBytes)
-		if !bytes.Equal(sum[:], rc.info.Hashes["sha256"]) {
-			return fmt.Errorf("%s: feed sha256 mismatch", ch.Name)
+		info := snapshot.Signed.Meta[roleName+".json"]
+		if info == nil {
+			return fmt.Errorf("snapshot: meta.%s.json missing", roleName)
 		}
-		fmt.Printf("  %s: %d bytes, sha256 %s\n", rc.path, len(feedBytes), hex.EncodeToString(sum[:]))
-
-		// item signatures (editor mode strict, default attribution)
-		var editorCfg *editorConfig
-		if ec, ok := editorChannels[ch.Name]; ok {
-			editorCfg = &ec
+		if info.Version != role.Signed.Version {
+			return fmt.Errorf("snapshot references %s v%d, have v%d", roleName, info.Version, role.Signed.Version)
 		}
-		if err := verifyFeedFile(filepath.Join(dir, rc.path), keys, keys[ch.Name], editorCfg, nil); err != nil {
-			return err
+		if len(role.Signed.Targets) != 0 {
+			return fmt.Errorf("%s.json: authors role must pin no targets", roleName)
 		}
 	}
 
-	// private capability feed: whole-document verification (§10)
+	// item target bytes: length + sha256 + item signature + path/id
+	// consistency (spec/feeds.md §1.1/§1.2).
+	for _, ch := range channels {
+		role := checks[ch.Name].meta
+		var authorsCfg *authorConfig
+		if ac, ok := authorChannels[ch.Name]; ok {
+			authorsCfg = &ac
+		}
+		for path, info := range role.Signed.Targets {
+			itemPath := filepath.Join(dir, filepath.FromSlash(path))
+			itemBytes, err := os.ReadFile(itemPath)
+			if err != nil {
+				return err
+			}
+			if info.Length != int64(len(itemBytes)) {
+				return fmt.Errorf("%s: length %d != metadata %d", path, len(itemBytes), info.Length)
+			}
+			sum := sha256.Sum256(itemBytes)
+			if !bytes.Equal(sum[:], info.Hashes["sha256"]) {
+				return fmt.Errorf("%s: sha256 mismatch", path)
+			}
+			fmt.Printf("  %s: %d bytes, sha256 %s\n", path, len(itemBytes), hex.EncodeToString(sum[:]))
+			var item map[string]any
+			if err := json.Unmarshal(itemBytes, &item); err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
+			id := asString(item["id"])
+			if id != filepath.Base(path[:len(path)-len(".json")]) {
+				return fmt.Errorf("%s: item id %q != path segment", path, id)
+			}
+			if err := verifyItemSignatures(item, keys, keys[ch.Name], authorsCfg); err != nil {
+				return fmt.Errorf("%s: item %s: %w", path, id, err)
+			}
+		}
+	}
+
+	// private capability feed: whole-document verification (spec/feeds.md §3)
 	privFeeds, err := filepath.Glob(filepath.Join(siteDir, "channels", "tracking", "*", "feed.json"))
 	if err != nil {
 		return err
 	}
 	for _, pf := range privFeeds {
 		url := metadataOrigin + strings.TrimPrefix(pf, siteDir)
-		check := &privateFeedCheck{Channel: trackingPatternEntry.Channel, Key: keys["tracking"], FetchedURL: url}
-		if err := verifyFeedFile(pf, keys, keys["tracking"], nil, check); err != nil {
+		check := &privateFeedCheck{Channel: trackingPatternEntry.Channel, Key: engine, FetchedURL: url}
+		data, err := os.ReadFile(pf)
+		if err != nil {
 			return err
 		}
+		var doc map[string]any
+		if err := json.Unmarshal(data, &doc); err != nil {
+			return fmt.Errorf("%s: %w", pf, err)
+		}
+		if err := verifyPrivateDocument(doc, pf, check); err != nil {
+			return err
+		}
+		fmt.Printf("  %s: document verified\n", strings.TrimPrefix(pf, siteDir))
 	}
 	return nil
 }
@@ -489,34 +617,4 @@ func findRole(roles []metadata.DelegatedRole, name string) *metadata.DelegatedRo
 		}
 	}
 	return nil
-}
-
-// asStringSlice normalizes a JSON-decoded value into a []string.
-func asStringSlice(v any) []string {
-	switch t := v.(type) {
-	case []string:
-		return t
-	case []any:
-		out := make([]string, 0, len(t))
-		for _, e := range t {
-			if s, ok := e.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
-}
-
-// asInt normalizes a JSON-decoded number (float64) into an int.
-func asInt(v any) int {
-	switch t := v.(type) {
-	case int:
-		return t
-	case float64:
-		return int(t)
-	default:
-		return 0
-	}
 }

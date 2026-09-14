@@ -28,12 +28,13 @@ type keyFile struct {
 
 // keyNames enumerates all demo keys: master (root+targets), ops
 // (snapshot+timestamp), one per public channel (delegated roles), the
-// private-feed engine key (tracking) and the editor keys (PROTOCOL §9).
+// private-feed engine key (tracking) and the author keys for authored
+// channels (spec/feeds.md §2).
 var keyNames = []string{
 	"master", "ops",
 	"security", "news", "insights",
 	"tracking",
-	"editor-security-a", "editor-security-b",
+	"author-security-a", "author-security-b",
 }
 
 // loadOrCreateKeys loads demo keys from dir, generating new ones when missing.

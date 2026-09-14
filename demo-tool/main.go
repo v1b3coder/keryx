@@ -2,8 +2,10 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -17,7 +19,7 @@ import (
 func main() {
 	mode := flag.String("mode", "build", "build | verify")
 	site := flag.String("site", "../demo", "output directory for the demonstration site")
-	base := flag.String("base", "http://10.110.147.178:8000", "public origin of the demo site (signed into every artifact URL)")
+	base := flag.String("base", "http://localhost:8000", "public origin of the demo site (signed into every artifact URL)")
 	flag.Parse()
 
 	setBase(*base)
@@ -45,8 +47,8 @@ func main() {
 }
 
 // setBase reconfigures every URL the generator signs into the demo
-// artifacts (join URL, TUF repo_base, feed/item URLs, logo, tracking
-// pattern, _sig identity). Must run before build/verify.
+// artifacts (join URL, TUF repo_base, item/media URLs, logo, tracking
+// pattern). Must run before build/verify.
 func setBase(base string) {
 	base = strings.TrimSuffix(base, "/")
 	metadataOrigin = base
@@ -54,40 +56,43 @@ func setBase(base string) {
 	logoURL = base + "/media/logo.png"
 	repoBase = base + "/keryx/"
 	trackingPattern = base + "/channels/tracking/*/feed.json"
-	sigAbout = base + "/_sig"
 }
 
 func buildAll(keys map[string]*keyPair, site string) error {
 	fmt.Println("== building TUF repository ==")
 	// stale artifacts from older layouts are removed so the repo is
 	// self-contained and matches the current protocol exactly.
-	for _, stale := range []string{".well-known", "beacon", "keryx", "join.png"} {
+	for _, stale := range []string{".well-known", "beacon", "keryx", "join.png", "_sig", "channels", "blog"} {
 		if err := os.RemoveAll(filepath.Join(site, stale)); err != nil {
 			return err
 		}
 	}
 
-	fmt.Println("== signing public feeds (one per channel) ==")
-	feeds := map[string][]byte{}
+	fmt.Println("== signing public items (one TUF target per item) ==")
+	items := map[string][]byte{}
 	for _, ch := range channels {
-		feed, err := buildChannelFeed(keys, ch)
-		if err != nil {
-			return err
+		n := 0
+		for _, it := range publicItems {
+			if it.Channel != ch.Name {
+				continue
+			}
+			item, err := buildChannelItem(keys, it)
+			if err != nil {
+				return err
+			}
+			data, err := itemToBytes(item)
+			if err != nil {
+				return err
+			}
+			items[itemTargetPath(ch.Name, it.ID)] = data
+			n++
 		}
-		feedBytes, err := feedToBytes(feed)
-		if err != nil {
-			return err
+		if n == 0 {
+			return fmt.Errorf("channel %q has no items", ch.Name)
 		}
-		feeds[ch.Name] = feedBytes
-		path := filepath.Join(site, "channels", ch.Name, "feed.json")
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(path, feedBytes, 0o644); err != nil {
-			return err
-		}
+		fmt.Printf("  %s: %d items\n", ch.Name, n)
 	}
-	if err := buildRepo(keys, site, feeds); err != nil {
+	if err := buildRepo(keys, site, items); err != nil {
 		return err
 	}
 	fmt.Printf("  master keyid: %s\n", keys["master"].KeyID)
@@ -105,11 +110,26 @@ func buildAll(keys map[string]*keyPair, site string) error {
 	if err := os.MkdirAll(privateDir, 0o755); err != nil {
 		return err
 	}
-	pfeed, err := buildPrivateFeed(keys, token, privateURL)
+	// attachment resource: a plain file next to the feed, hash-pinned in the
+	// item's attachments entry (spec/feeds.md §1.1: sha256 OPTIONAL, when
+	// present the app verifies before rendering/opening).
+	attach := "Order summary for Trezor order #2026-0841.\n\nCarrier: DHL Express\nTracking number: DHL-8491-2203-77\nEstimated delivery: 3-5 business days\n\nThis is demo data only - not an invoice.\n"
+	attachPath := filepath.Join(site, "media", "order-2026-0841.txt")
+	if err := os.MkdirAll(filepath.Dir(attachPath), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(attachPath, []byte(attach), 0o644); err != nil {
+		return err
+	}
+	attachSum := sha256Sum([]byte(attach))
+	privateItem.Attachments[0]["url"] = metadataOrigin + "/media/order-2026-0841.txt"
+	privateItem.Attachments[0]["size_in_bytes"] = int64(len(attach))
+	privateItem.Attachments[0]["sha256"] = attachSum
+	doc, err := buildPrivateDocument(keys, privateURL)
 	if err != nil {
 		return err
 	}
-	if err := writeFeed(pfeed, filepath.Join(privateDir, "feed.json")); err != nil {
+	if err := writeJSON(doc, filepath.Join(privateDir, "feed.json")); err != nil {
 		return err
 	}
 
@@ -130,8 +150,8 @@ func buildAll(keys map[string]*keyPair, site string) error {
 		fmt.Printf("  note: %s not found, skipping logo copy (%v)\n", logoSrc, err)
 	}
 
-	// Join payload (PROTOCOL §2): NO metadata URL — the app derives the root
-	// anchor from the join origin (/.well-known/keryx/root.json).
+	// Join payload (spec/core.md §3): NO metadata URL — the app derives the
+	// root anchor from the join origin (/.well-known/keryx/root.json).
 	payload := map[string]any{
 		"v":             1,
 		"channels":      []string{"security", "news", "insights"},
@@ -166,6 +186,12 @@ func buildAll(keys map[string]*keyPair, site string) error {
 	}
 	fmt.Printf("OK: demonstration site written to %s\n", site)
 	return nil
+}
+
+// sha256Sum returns the lowercase-hex SHA-256 of data.
+func sha256Sum(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // copyDir copies every file from src to dst (creating dst).
@@ -225,8 +251,8 @@ func jsonString(s string) string {
 	return string(b)
 }
 
-// joinPage is the PROTOCOL §2 fallback page served at /join (shown when
-// the Keryx app is not installed). Per §2/§10 it sets Referrer-Policy:
+// joinPage is the spec/core.md §3 fallback page served at /join (shown when
+// the Keryx app is not installed). Per §3 it sets Referrer-Policy:
 // no-referrer (the capability token travels in ?p=) and includes no
 // third-party resources. Everything payload-specific is derived at runtime
 // from the page's own URL: with ?p= the payload is decoded and rendered
@@ -239,9 +265,9 @@ func joinPage(demoJoinURL string) string {
 <meta name="referrer" content="no-referrer"></head>
 <body style="font-family:sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem">
 <h1>Keryx — subscribe to Trezor announcements</h1>
-<p>This is the fallback page for the Keryx join URL (PROTOCOL §2). In a real
-deployment it is shown only when the Keryx app is not installed; with the
-app installed, the URL above would be handed to it and pairing would
+<p>This is the fallback page for the Keryx join URL (spec/core.md §3). In a
+real deployment it is shown only when the Keryx app is not installed; with
+the app installed, the URL above would be handed to it and pairing would
 continue there. The root anchor is derived from this page's origin
 (<code>/.well-known/keryx/root.json</code>) — there is no metadata URL in
 the payload.</p>
@@ -346,49 +372,35 @@ var DEMO_JOIN = ` + jsonString(demoJoinURL) + `;
 
 // writeLocalPages generates the local HTML pages so every URL in the signed
 // artifacts resolves on the local server: one page per announcement, the
-// private order page, the _sig extension page and an index.
+// private order page and an index.
 func writeLocalPages(site, token, joinQuery string) error {
 	blogDir := filepath.Join(site, "blog")
 	if err := os.MkdirAll(blogDir, 0o755); err != nil {
 		return err
 	}
+	var blogItems []string
 	for _, it := range publicItems {
 		if err := os.WriteFile(filepath.Join(blogDir, it.Slug+".html"), []byte(articlePage(it)), 0o644); err != nil {
 			return err
 		}
+		blogItems = append(blogItems, "<li><a href=\""+it.Slug+".html\">"+html.EscapeString(it.Title)+"</a> <small>("+
+			html.EscapeString(it.Channel)+", "+html.EscapeString(it.Published)+")</small></li>")
 	}
-	privDir := filepath.Join(site, "channels", "tracking", token)
-	if err := os.WriteFile(filepath.Join(privDir, privateItem.Slug+".html"), []byte(articlePage(privateItem)), 0o644); err != nil {
-		return err
-	}
-	sigPage := `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Keryx _sig extension</title></head>
+	blogIndex := `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Keryx demo — announcements</title></head>
 <body style="font-family:sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem">
-<h1>Keryx <code>_sig</code> extension</h1>
-<p>This is the identity URL of the <code>_sig</code> JSON Feed extension used by the
-Keryx protocol (see <code>README.md</code> in this repository). Generic JSON Feed
-readers ignore the extension; the Keryx app enforces it.</p>
-<h2>Items (PROTOCOL §8.2)</h2>
-<ul>
-<li><code>channel</code> — the delegated channel role the item belongs to (cross-checked against the feed path)</li>
-<li><code>withdrawn</code> — signed retraction: the app hides the item entirely</li>
-<li><code>signatures</code> — raw Ed25519 (base64url) over the JCS (RFC 8785) canonical bytes of the item with this field removed</li>
-</ul>
-<h2>Private capability feeds (PROTOCOL §10)</h2>
-<p>The top-level <code>_sig</code> of a private feed additionally carries:</p>
-<ul>
-<li><code>channel</code> — MUST equal the authorized pattern entry's channel</li>
-<li><code>url</code> — the canonical capability URL (MUST equal the fetched URL)</li>
-<li><code>signatures</code> — Ed25519 over the whole document (top-level <code>_sig.signatures</code> removed)</li>
-<li><code>version</code> — monotonic per feed (anti-rollback via client version memory)</li>
-<li><code>expires</code> — the order window end (anti-freeze)</li>
+<h1>Announcements (human-readable copies)</h1>
+<p>These pages are demo chrome only — the signed artifacts are the JSON item
+files in <code>keryx/channels/&lt;channel&gt;/&lt;id&gt;.json</code>.</p>
+<ul>` + strings.Join(blogItems, "\n") + `
 </ul>
 </body></html>
 `
-	if err := os.MkdirAll(filepath.Join(site, "_sig"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(blogDir, "index.html"), []byte(blogIndex), 0o644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(site, "_sig", "index.html"), []byte(sigPage), 0o644); err != nil {
+	privDir := filepath.Join(site, "channels", "tracking", token)
+	if err := os.WriteFile(filepath.Join(privDir, privateItem.Slug+".html"), []byte(articlePage(privateItem)), 0o644); err != nil {
 		return err
 	}
 	index := strings.Replace(strings.Replace(strings.Replace(`<!doctype html>
@@ -405,11 +417,11 @@ or private feeds (pairs with the public channels; QR rendered on the page)</li>
 a private capability feed (QR code rendered on the page; the URL is also in
 <a href="join.txt">join.txt</a>)</li>
 <li><a href=".well-known/keryx/root.json">.well-known/keryx/root.json</a> (root anchor on the join origin; the ONLY root metadata source)</li>
-<li><a href="keryx/targets.json">keryx/targets.json</a> (channel authorization + editor mode + private patterns)</li>
-<li><a href="keryx/channels.security.json">keryx/channels.security.json</a> (channel role metadata pins channels/security/feed.json)</li>
-<li><a href="keryx/channels/security/feed.json">channels/security/feed.json</a> (signed public feed)</li>
-<li><a href="_sig/">_sig extension</a></li>
-<li><a href="blog/">Announcements</a></li>
+<li><a href="keryx/targets.json">keryx/targets.json</a> (channel + authors role authorization, company identity, private-feed patterns)</li>
+<li><a href="keryx/channels.security.json">keryx/channels.security.json</a> (channel role metadata pins the security items)</li>
+<li><a href="keryx/channels.security.authors.json">keryx/channels.security.authors.json</a> (authors role metadata — authorizes item signing)</li>
+<li><a href="keryx/channels/security/msg-2026-03-18-phishing-attacks.json">keryx/channels/security/msg-2026-03-18-phishing-attacks.json</a> (one item = one TUF target)</li>
+<li><a href="blog/">Announcements (human-readable copies)</a></li>
 </ul>
 {{INSTALL}}
 </body></html>
@@ -426,10 +438,6 @@ func articlePage(it demoItem) string {
 	if lang == "" {
 		lang = "en"
 	}
-	body := ""
-	for _, para := range splitParagraphs(it.ContentText) {
-		body += "<p>" + html.EscapeString(para) + "</p>\n"
-	}
 	source := ""
 	if it.Source != "" {
 		source = "<hr><p><small>Keryx demo. Original content (not a link): " + html.EscapeString(it.Source) + "</small></p>\n"
@@ -438,34 +446,12 @@ func articlePage(it demoItem) string {
 <html lang="%s"><head><meta charset="utf-8"><title>%s</title></head>
 <body style="font-family:sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem">
 <h1>%s</h1>
-<p><em>%s · %s · %s</em></p>
+<p><em>%s · %s</em></p>
 <img src="%s/media/img/%s" alt="" style="max-width:100%%;border-radius:8px">
 %s%s
 </body></html>
 `, lang, html.EscapeString(it.Title), html.EscapeString(it.Title),
-		it.Channel, it.Published, html.EscapeString(it.Author), metadataOrigin, it.Image, body, source)
-}
-
-func splitParagraphs(s string) []string {
-	var out []string
-	cur := ""
-	for _, line := range strings.Split(s, "\n") {
-		if line == "" {
-			if cur != "" {
-				out = append(out, cur)
-				cur = ""
-			}
-			continue
-		}
-		if cur != "" {
-			cur += " "
-		}
-		cur += line
-	}
-	if cur != "" {
-		out = append(out, cur)
-	}
-	return out
+		it.Channel, it.Published, metadataOrigin, it.Image, it.ContentHTML, source)
 }
 
 // randomToken returns a 128-bit unguessable capability token (base64url,

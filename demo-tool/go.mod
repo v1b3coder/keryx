@@ -3,7 +3,7 @@ module github.com/v1b3coder/keryx-demo
 go 1.25.5
 
 require (
-	github.com/gowebpki/jcs v1.0.1
+	github.com/secure-systems-lab/go-securesystemslib v0.11.0
 	github.com/sigstore/sigstore v1.10.6
 	github.com/theupdateframework/go-tuf/v2 v2.4.2
 )
@@ -11,7 +11,6 @@ require (
 require (
 	github.com/google/go-containerregistry v0.20.7 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
-	github.com/secure-systems-lab/go-securesystemslib v0.11.0 // indirect
 	github.com/sigstore/protobuf-specs v0.5.0 // indirect
 	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
