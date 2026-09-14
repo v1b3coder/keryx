@@ -18,10 +18,11 @@ are specified in [`spec/`](../spec/core.md). Design rationale is in
 | Attacker who stole a *channel* key | Scoped to its own channel: can publish, unpublish and re-pin that channel's content (availability + which content is shown); in an authored channel **cannot forge items** (item signatures are author-signed) — only re-pin/withhold/unpublish; in a single-author channel it is the content authority; revocation = signed metadata update |
 | Attacker who stole an *author* key (authors role) | Can author items for channels where the key is listed; reaches users only if the publisher publishes them (CI review gate is policy, not protocol); revocation = master-signed update (targets.json) |
 | Attacker who stole a *private-feed engine* key (a `private_feed_patterns` entry) | Scoped to its pattern entry: can rewrite or remove items within orders under that pattern (and forge wake-ups for those orders); cannot touch public channels or other patterns, and cannot widen its own pattern/keys (master-signed); bounded by per-order tokens, the `url` binding, and `expires`/`expired`; revocation = master-signed pattern update |
-| Attacker who stole the online ops key (snapshot/timestamp) | Scoped to freshness: can roll back/freeze metadata (availability), cannot touch channel delegations or feed pinning (channel-key-signed) → no forgery |
+| Attacker who stole the online ops key (snapshot/timestamp) | Scoped to freshness on its own: can roll back/freeze metadata (availability), cannot touch channel delegations or feed pinning (channel-key-signed) → no forgery by itself. **Combined with any content key it is full forgery** — see the next row |
+| Attacker who stole a *content* key (channel or author) **and** the online ops key | Full content forgery for the channels the content key covers: the content key re-signs the item and the channel role metadata, the ops key re-signs `snapshot`/`timestamp`, and the result verifies against the pinned root — no master key and no origin needed. Keep the two keys apart (threshold on the online key); revocation = revoke/reissue in the same update + rotate the online key |
 | **Suppression of a security warning** (freeze/rollback by whoever holds the ops key or the feed host) | Partly addressed, and worth publisher attention: forgery is impossible, but *silence* is achievable — freezing metadata withholds new items, and on a channel that carries security alerts the harm is not merely "availability", it is no warning during the incident the channel exists for. Bounded by the `timestamp` cadence + `expires`; publishers running such a channel should set those tighter than the 24–72 h default and may prefer a higher threshold or an authors role there. Not every publisher has a security channel — which channels are critical is the publisher's call |
-| Attacker who stole the master key | Root metadata — and therefore any rotation or `repo_base` change — is accepted only from the confirmed origin's admin-controlled `/.well-known/` space; a master-signed rotation planted on the repo base/CDN is never fetched. Key alone is not enough |
-| **Full forgery (origin + master key)** | The residual risk — see §3. Mitigated by offline/HSM custody and by the convention that messages never carry credential requests |
+| Attacker who stole the master key | Root metadata — and therefore any rotation or `repo_base` change — is accepted only from the confirmed origin's admin-controlled `/.well-known/` space; a master-signed rotation planted on the repo base/CDN is never fetched. Key alone is not enough. **Combined with the online ops key it is full forgery**: the master re-signs `targets.json` with a new delegation and the ops key pins it |
+| **Full forgery (origin + master key)** | The residual risk for the *trust anchor* — see §3. A root rotation (including any `repo_base`/`mode`/role-key change) is accepted only from the confirmed origin's admin-controlled `/.well-known/` space, so the master key alone is not enough. Mitigated by offline/HSM custody and by the convention that messages never carry credential requests. Content forgery is the separate *content key + online ops key* row above |
 | Company silently rebranding / acting as another company | Identity changes are never silent: `company_name` change → prominent warning + re-pair (rescan QR); logo change → one-tap acknowledge. An unverifiable root change (not a rename) → company **suspended** with a possible-compromise warning and no re-pair prompt; no silent trust |
 | Push provider linkage | APNs/FCM see the device↔company mapping (token↔topic subscriptions); ntfy's anonymous topics remove identity linkage, but topic relationships remain visible to the relay operator ([`why.md` §4.10](why.md), WIP) |
 | Company correlates or profiles users | No user data exists on the server; no registration, no pseudonym, no ID |
@@ -67,6 +68,16 @@ Accepted; mitigated but not eliminated.
   by offline custody, by the no-credential-requests convention, and by
   incident response on the company side. The irreducible core of any
   key-based system.
+- **A content key plus the online ops key** → full content forgery without
+  the master key or the origin: the content key re-signs the item and the
+  channel role metadata, the online key re-signs `snapshot`/`timestamp`, and
+  the result verifies against the pinned root. Because both are online and
+  commonly co-located (CI holds channel keys and the ops key,
+  [`tooling.md`](tooling.md) §3.2), this is a one-machine compromise.
+  Mitigated by a threshold on the online ops key and by keeping it apart
+  from content keys. The master key + online key is a second such pair (the
+  master can re-delegate). This is why "two locks" must be read as *two
+  independent keys*, not as origin + master.
 - **At pairing time, origin control alone suffices** (TOFU: the attacker
   controls the origin and serves their own `/.well-known/keryx/root.json`;
   the user confirms the attacker's origin) — mitigated by the QR being
@@ -109,7 +120,8 @@ not name-anchored); the public broadcast carries no PII and no customer list
 to breach; messages are authenticated against keys the signed metadata
 authorizes (channel keys, or per-channel author keys in an authored channel,
 verified by the app — authoring and publishing are separate); item
-content is hash-pinned (no tampering); forgery needs the root of
+content is hash-pinned (no tampering); content forgery needs an online
+publish key *and* a content key, while a root rotation needs the root of
 trust *and* the confirmed origin's well-known space; rotations/revocations
 are automatic and chain-verified; identity changes are user-visible
 (warning/re-pair), never silent; chain breaks suspend deterministically,
@@ -117,7 +129,9 @@ never "maybe".
 
 **Residual risks (documented, mitigated):** simultaneous origin + master-key
 compromise (full impersonation — mitigated by offline custody and the
-no-credential-requests convention); pairing-time origin control (TOFU —
+no-credential-requests convention); a content key + the online ops key
+(full content forgery, commonly co-located in CI — mitigated by a threshold
+on the online key); pairing-time origin control (TOFU —
 mitigated by QR placement + origin confirmation); device compromise (cached
 messages); relay metadata (wake-up timing); remote-media telemetry (CDN
 observability; app-level preference). Detail in §3.

@@ -51,9 +51,11 @@ The trust model is **binary and automatic**: a message is either signed by a
 key the pinned metadata authorizes for that channel — then it is shown — or
 it is not — then it is rejected, with no warning, no grace period, and no
 judgment call for the user. Reaching a user with a forged message requires
-compromising **both** the metadata origin *and* the root of trust (master
-key); delegated keys are scoped, so a single channel-key compromise cannot
-forge other channels.
+**two independent signing keys** — a content key (channel or author) plus the
+online publish key (`snapshot`/`timestamp`) — because no single role can
+publish alone; delegated keys are scoped, so a single channel-key compromise
+cannot forge other channels, and the metadata origin plays no part in content
+forgery (it is the second lock only for root rotations, §4.6).
 
 The protocol is deliberately boring: HTTPS + QR + TUF + Ed25519.
 A small e-shop can adopt it in an afternoon with one tool; a company with

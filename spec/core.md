@@ -112,17 +112,31 @@ change).
   then it is rejected. There is **no third state**: no "lower trust", no
   grace period, no yellow warning, no "do you trust this?" dialog. A failing
   item is dropped, **including one that was previously displayed**.
-- **Two locks:** *"valid root of trust"* **and** *"root metadata served from
-  the user-confirmed origin's `/.well-known/` space"*. The second lock is
-  mechanical, not a pairing-time event: the app fetches **all** root
-  metadata — the initial anchor and every `N.root.json` of the chain walk —
-  exclusively from the well-known anchor ([repository.md §1](repository.md),
-  [clients.md §1](clients.md)). A root rotation (including any change to
-  `repo_base`, `mode`, or role keys) therefore reaches clients only through
-  the admin-controlled well-known space. An attacker with only the master key
-  cannot get a rotation served from the anchor (a copy planted on the repo
-  base/CDN is never fetched); an attacker with only the origin cannot sign.
-  To send a forged message, both must be compromised.
+- **Two locks on the trust anchor:** *"valid root of trust"* **and**
+  *"root metadata served from the user-confirmed origin's `/.well-known/`
+  space"*. The second lock is mechanical, not a pairing-time event: the app
+  fetches **all** root metadata — the initial anchor and every `N.root.json`
+  of the chain walk — exclusively from the well-known anchor
+  ([repository.md §1](repository.md), [clients.md §1](clients.md)). A root
+  rotation (including any change to `repo_base`, `mode`, or role keys)
+  therefore reaches clients only through the admin-controlled well-known space.
+  An attacker with only the master key cannot get a rotation served from the
+  anchor (a copy planted on the repo base/CDN is never fetched); an attacker
+  with only the origin cannot sign. These two locks govern *which keys are
+  authorized* — they are not the publishing chain.
+- **Two locks on content (the publishing chain):** showing a message the
+  company did not authorize requires **at least two independent keys** — a
+  **content key** (the channel key in a single-author channel, the author key
+  in an authored channel) and the **online publish key** (`snapshot` +
+  `timestamp`, the spec's ops key). No single role can publish alone: in an
+  authored channel the channel key can re-pin, withhold, or unpublish existing
+  author-signed items but cannot forge one; the author key cannot publish
+  without the channel key (the index) and the online publish key (freshness);
+  the online publish key alone only rolls back or freezes. The origin plays no
+  part here — the repo base is untrusted by design. Corollary: a publisher
+  who lets the online publish key sit next to a content key has one lock, not
+  two; put a threshold on the online key
+  ([threats.md](../design/threats.md)).
 - **Company identity — recorded at pairing, then change-visible (never
   silent).** The user confirms the **origin**; they never confirm the
   company's name or logo. Those are self-asserted values that anyone

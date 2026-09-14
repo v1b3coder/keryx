@@ -81,8 +81,14 @@ fixed by a root the base cannot influence.
   dot-namespaced: `N.channels.marketing.json` cannot be confused with
   `N.root.json` or with another channel's file.
 - **Scope of compromise:** the online ops key is scoped to freshness
-  (snapshot/timestamp pinning) — its compromise allows rollback/freeze
-  (availability harm) but never content authorization. Channel keys are
+  (snapshot/timestamp pinning) — on its own its compromise allows
+  rollback/freeze (availability harm) but never content authorization.
+  **Combined with a content key, however, it completes the publishing
+  chain**: the content key re-signs the channel role metadata, the ops key
+  pins it, and the forged content verifies against the pinned root — full
+  forgery for the affected channel(s), with no master key and no origin. A
+  publisher who cares about that keeps the two apart (a threshold on the
+  online key). Channel keys are
   scoped to their own channel: they pin and withdraw that channel's content
   (forging items requires the channel key too — or, in an authored channel,
   the author keys; see [feeds.md §2](feeds.md#2-authors-role)).
