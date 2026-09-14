@@ -2,13 +2,16 @@
 
 The single active server component of the Keryx system (see
 [`SPECIFICATION.md`](SPECIFICATION.md)): it fans out **wake-up signals** —
-never content — to user devices over three delivery legs:
+never content — to user devices over two delivery legs:
 
 | Leg | Mechanism | Registry |
 |---|---|---|
 | FCM topics | one publish per topic; devices subscribe client-side | none |
-| WebPush | 1:1 send per stored subscription (RFC 8291 + VAPID) | SQLite |
-| ntfy topics | one publish per topic; the app is its own ntfy client | none |
+| UnifiedPush (WebPush endpoints) | 1:1 send per stored endpoint subscription (RFC 8291 + VAPID); PWA `PushManager` and de-Googled Android via a distributor (ntfy) | SQLite |
+
+> **Status: WIP.** The transport shape is specified (two legs, above);
+> implementation is not started. API details below are from an earlier
+> draft — the authoritative contract is [`SPECIFICATION.md`](SPECIFICATION.md).
 
 Publishers are registration-free: one API key, hashed at rest, shown once at
 provisioning. All provider credentials (FCM service account, VAPID keypair)
@@ -38,13 +41,12 @@ relay serve \
   -listen :8080 \
   -db relay.db \
   -fcm-service-account /etc/relay/firebase-sa.json \
-  -vapid-private <base64url> -vapid-sub mailto:ops@example.com \
-  -ntfy-base https://ntfy.sh
+  -vapid-private <base64url> -vapid-sub mailto:ops@example.com
 ```
 
 Every flag has a `RELAY_*` environment variable (`RELAY_LISTEN`,
 `RELAY_DB`, `RELAY_FCM_SERVICE_ACCOUNT`, `RELAY_VAPID_PRIVATE`,
-`RELAY_VAPID_SUB`, `RELAY_VAPID_KEY_FILE`, `RELAY_NTFY_BASE`, `RELAY_WEBPUSH_TTL`,
+`RELAY_VAPID_SUB`, `RELAY_VAPID_KEY_FILE`, `RELAY_WEBPUSH_TTL`,
 `RELAY_WEBPUSH_CONCURRENCY`, `RELAY_MAX_CONCURRENT`, `RELAY_QUEUE_SIZE`,
 `RELAY_REG_PER_MIN`, `RELAY_REG_BURST`, `RELAY_PUBLISH_BURST_MULT`,
 `RELAY_APP_KEY`, `RELAY_EVENT_RETENTION_DAYS`). Omit a leg's config to
@@ -73,9 +75,9 @@ disable it (the relay still runs and reports `0` for it).
 - `internal/store` — SQLite (WAL): publishers, registrations,
   registration_topics, event_log; versioned schema (refuses to start on a
   mismatch).
-- `internal/push` — the three legs: FCM HTTP v1 (OAuth2 service-account
-  token, cached until 5 min before expiry), WebPush (RFC 8291 encryption,
-  VAPID ES256 JWT), ntfy (plain HTTP).
+- `internal/push` — the two legs: FCM HTTP v1 (OAuth2 service-account
+  token, cached until 5 min before expiry) and UnifiedPush/WebPush
+  (RFC 8291 encryption, VAPID ES256 JWT).
 - `internal/relay` — concurrent fan-out across legs, webpush
   sent/failed/removed accounting, dead-subscription cleanup, event_log.
 - `internal/api` — HTTP handlers, auth, per-publisher and per-IP rate

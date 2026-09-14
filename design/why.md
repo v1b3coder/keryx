@@ -198,9 +198,11 @@ phishing wave everywhere.
   added later as a separate, clearly-labeled feature.
 - **A universal replacement for transactional email *into* the company**
   (order confirmations to internal systems, invoices, etc.).
-- **Push / notification layer** — optional wake-up only, WIP (§4.10). The
-  only contract decided so far is that a notification is a wake-up signal,
-  never content. No wire format is defined.
+- **Push / notification layer** — optional wake-up only, WIP (§4.10). A
+  notification is a wake-up signal, never content; the relay transport
+  shape is specified in
+  [`../relay/SPECIFICATION.md`](../relay/SPECIFICATION.md) (FCM +
+  UnifiedPush/WebPush), implementation pending.
 - **Email bridge** (per-order virtual addresses, SPF/DKIM/DMARC, mailbox
   discard) — a Phase 3 concept, not part of the protocol.
 - **Company directory** — an open question, not a v1 feature.
@@ -340,20 +342,24 @@ transient, expiring, discardable.
 
 The protocol and app must work fully on de-Googled devices, so push is
 optional and never carries content: a notification is at most a channel
-identifier + an unencrypted "new messages" counter — a wake-up signal only.
-The transport is plug-in (FCM/APNs, ntfy, background fetch, or nothing) and
-WIP — the only contract decided so far is that a notification is never
-content. The **neutral notification relay** for small companies is WebSub-like
-in spirit, but WebSub's per-subscriber callback model is **rejected on privacy
-grounds** (a callback URL is per-user state at the hub); the relay uses
-anonymous-topic semantics — worst case it knows *that* a device woke up.
-Push linkage honesty: APNs/FCM topic subscriptions reveal the device↔company
-mapping to the provider; ntfy's anonymous topics avoid *identity* linkage, but
-topic subscriptions remain visible to the relay operator, and a self-hosted
-relay is per-user state on company infrastructure.
+identifier + a "new messages" counter — a wake-up signal only. The
+transport is plug-in (FCM, UnifiedPush/WebPush, background fetch, or
+nothing) and WIP. The **neutral notification relay** for small companies
+is specified in
+[`../relay/SPECIFICATION.md`](../relay/SPECIFICATION.md): two legs — FCM
+topics (registry-free) and UnifiedPush/WebPush endpoints (per-instance
+registry), the latter with two subscription sources (PWA `PushManager`;
+de-Googled Android via a UnifiedPush distributor, ntfy today). WebSub's
+per-subscriber callback model stays **rejected** — the endpoint registry
+is relay-side state, not hub-per-subscriber callbacks.
+Push linkage honesty: APNs/FCM topic subscriptions reveal the
+device↔company mapping to the provider; on the endpoint leg the relay
+holds that mapping, while an ntfy server behind UnifiedPush endpoints
+sees only random capability URLs and RFC 8291 ciphertext.
 
-**This is the one genuinely unsettled area of the design.** Everything else in
-this file is decided; the push transport is not.
+**This is a specified-but-unimplemented area of the design.** The relay
+component spec decides the transport shape; implementation and client
+integration remain WIP.
 
 ### 4.11 Editor mode: authoring separated from publishing
 
@@ -470,8 +476,8 @@ tool's job ([`products.md`](products.md)).
        └──────────────┬───────────────┐
                       │               │
         ┌─────────────▼─────┐   ┌─────▼──────────────────┐
-        │ APNs / FCM / ntfy │   │ Neutral notification   │
-        │ (unified push)    │   │ relay (small companies)│
+        │ FCM / UnifiedPush │   │ Neutral notification   │
+        │ (WebPush)         │   │ relay (small companies)│
         └───────────────────┘   └────────────────────────┘
 ```
 
@@ -543,7 +549,7 @@ codes, no trust dialogs.
 | Item/message schema | **JSON Feed 1.1** (`application/feed+json`) | **Adopted** — feeds are JSON Feed documents; our data lives in the `_sig` extension (ignored by other readers). |
 | Signatures | **EdDSA (RFC 8032)** — raw over **JCS (RFC 8785)** | **Adopted** — no signature envelope (JWS-style wrappers add algorithm negotiation and headers that nothing here consumes). Ed25519 over ECDSA: deterministic nonces, no RNG-failure key leaks, ~2–4× faster verification, 64-byte signatures, non-malleable, audited constant-time implementations. |
 | Domain binding | DNSSEC/DANE (RFC 6698), TLS certs | Optional hardening; a Phase-2 optional anchor (zone-published root key) is DNSSEC-required by design. |
-| Wake-up / push | **WebSub** (W3C) | **Rejected** — per-subscriber callback URLs are per-user state at the hub (the linkage this protocol eliminates). Wake-up is transport-agnostic, ntfy-first (anonymous topics). |
+| Wake-up / push | **WebSub** (W3C) | **Rejected** — per-subscriber callback URLs are per-user state at the hub (the linkage this protocol eliminates). Wake-up is transport-agnostic; the relay uses FCM topics + UnifiedPush/WebPush endpoints ([relay spec](../relay/SPECIFICATION.md)), WIP. |
 | Signed public broadcast | Nostr; ActivityPub | Inspiring but rejected: Nostr treats a key as a permanent identity — no rotation, revocation, delegation, or threshold chain — and relays provide no freshness proof; ActivityPub is social and two-way. Reasoning in §8. |
 | Auditability | Key Transparency / CT-style logs (RFC 9162 style) | Later phase (optional). |
 

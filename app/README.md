@@ -146,7 +146,7 @@ worker come from vite-plugin-pwa
 - **Offline-first** — IndexedDB cache of pinned metadata + verified items +
   media bytes; sync on open + manual refresh.
 
-**Out of scope** (per spec Phase 1/2): push wake-ups (ntfy/APNs/FCM — WIP),
+**Out of scope** (per spec Phase 1/2): push wake-ups (FCM/UnifiedPush — WIP; relay shape per [relay spec](../relay/SPECIFICATION.md)),
 lite mode (spec/clients.md §3), backup/restore export/import (Phase 2).
 
 ## Architecture

@@ -12,7 +12,7 @@ design questions live here together so they cannot drift apart.
 |---|---|
 | **0 — Design docs (current)** | Protocol, wire format, threat model. Feedback loop with finance/crypto companies. |
 | **1 — MVP** | Reference publisher tool (`pub`: full TUF repo, channels, per-channel role metadata, editor mode, QR); reference app (TUF client + one-way inbox, no push dependency); private capability feeds; suspension; pilots with 1–2 friendly companies. |
-| **2 — Ecosystem** | Lite mode implementation ([spec/clients.md §3](spec/clients.md)); ntfy/unified push + neutral relay (incl. refresh-TTL revisit); `_sig.expiresAt` (v2, per-item auto-hide); cloud-KMS/hardware signer backends (Sigstore signer interface); optional TOFU-free anchor (zone-published root key, `_keryx.<domain>` TXT, DNSSEC-required); backup/restore UX; optional company directory. |
+| **2 — Ecosystem** | Lite mode implementation ([spec/clients.md §3](spec/clients.md)); UnifiedPush/WebPush wake-ups (PWA + de-Googled ntfy distributor) + neutral relay (incl. refresh-TTL revisit); `_sig.expiresAt` (v2, per-item auto-hide); cloud-KMS/hardware signer backends (Sigstore signer interface); optional TOFU-free anchor (zone-published root key, `_keryx.<domain>` TXT, DNSSEC-required); backup/restore UX; optional company directory. |
 | **3 — Bridge & federation** | Email bridge with virtual mailboxes (SPF/DKIM/DMARC verification); partner-channel semantics; possible standardization path. |
 | **4 — Standards** | Open governance, formal spec, independent implementations, security audit. |
 
@@ -71,8 +71,10 @@ design questions live here together so they cannot drift apart.
 6. **Local subscription portability:** backup/restore **format details**
    (join origin + pinned root keys + channel lists + private capability URLs
    across devices).
-7. **Push transport:** the whole wake-up layer is WIP — relay shape, ntfy vs
-   unified push, refresh TTL ([`design/why.md` §4.10](design/why.md)).
+7. **Push transport:** the whole wake-up layer is WIP — relay shape is
+   specified (FCM + UnifiedPush/WebPush endpoints,
+   [relay/SPECIFICATION.md](relay/SPECIFICATION.md)); implementation and
+   refresh TTL pending ([`design/why.md` §4.10](design/why.md)).
 8. **Directory:** is a public, opt-in directory of companies worth the trust
    implications?
 9. **Delivery partner reality check:** which logistics/delivery providers
