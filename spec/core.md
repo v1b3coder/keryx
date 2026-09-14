@@ -84,9 +84,11 @@ allowed; cross-origin redirects stay blocked.
 
 One **master key** (offline; `root` + `targets`), one **online ops key**
 (`snapshot` + `timestamp`), and **one key per channel** (`channels.<channel>`
-role; signs that channel's item index metadata). Optional: an **authors role**
-per channel (`channels.<channel>.authors` delegation,
-[feeds.md §2](feeds.md#2-authors-role)), a **private-feed engine key**
+role; signs that channel's item index metadata). **One authors role per
+channel is the default** (`channels.<channel>.authors` delegation,
+[feeds.md §2](feeds.md#2-authors-role)); a channel may opt into **simple
+mode** instead (no authors role, the channel key signs items). Also optional: a
+**private-feed engine key**
 (`custom.private_feed_patterns`, [feeds.md §3](feeds.md)), and additional keys
 per threshold.
 
@@ -177,8 +179,8 @@ change).
 |---|---|
 | Root key (offline, threshold) | master key |
 | Root metadata | `root.json` (pinned; versioned for chain walk; served only from the well-known anchor) |
-| Targets role (offline) | `targets.json` — channel delegations (incl. optional authors roles) + master-signed `custom` (company, channel display metadata, private patterns) |
-| Delegated roles | channel keys (one role per channel, named `channels.<name>`; signs that channel's item index) + optional authors roles (`channels.<name>.authors`; authorizes item signing) |
+| Targets role (offline) | `targets.json` — channel delegations (incl. authors roles) + master-signed `custom` (company, channel display metadata, private patterns) |
+| Delegated roles | channel keys (one role per channel, named `channels.<name>`; signs that channel's item index) + authors roles (default; `channels.<name>.authors`; authorizes item signing) |
 | Delegation paths | `channels/<name>/*` (channel namespace) |
 | Role keyids + threshold | `delegations[].keyids` + `threshold` |
 | Snapshot/timestamp | freshness + anti-freeze (publisher-side cadence; consumed by the standard client) |

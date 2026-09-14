@@ -88,9 +88,11 @@ cockpit, and the publisher never sees them.
 - **Key handling (MVP decision):** **software keys first** — Ed25519 master
   + online ops key + per-channel keys generated locally (libsodium), stored
   in OS keychain/encrypted file, one-time backup printout ("lose this = lose
-  the channel"). In **authored channels** author keys live on author machines
-  (they sign items) and the channel key lives in the publishing pipeline —
-  the two never co-locate. No external dependencies, works offline.
+  the channel"). In **authored channels (default)** author keys live on author
+  machines (they sign items) and the channel key lives in the publishing
+  pipeline — the two never co-locate; `channel add` generates the author key
+  unless `--author <keyid>` is given, and **simple mode** (`--simple`) keeps
+  one key. No external dependencies, works offline.
   **Cloud KMS / hardware = later phases** (additive via the Sigstore signer
   interface; advanced mode also offers thresholds, e.g. 2-of-3 for security
   alerts).
@@ -99,13 +101,16 @@ cockpit, and the publisher never sees them.
   (`channels.marketing.json`) + `snapshot.json` + `timestamp.json` — channel
   key + online ops key, no master involvement. In authored channels `publish`
   verifies author signatures and refuses unsigned items (it never holds
-  author keys); in single-author channels it signs the item with the channel
-  key. `channel add/rotate/revoke`, `author add/revoke` and `item unpublish`
-  are the lifecycle commands (the first three bump
+  author keys); in simple mode it signs the item with the channel
+  key. `channel add/mode/rotate/revoke`, `author add/revoke` and
+  `item unpublish`
+  are the lifecycle commands (all but `item unpublish` bump
   `targets.json`, master; `item unpublish` is a publish-side operation);
   root rotation is a separate rare ceremony;
   `refresh-timestamp` is one cron line.
-- **Fail-safe defaults:** thresholds 1-of-1; deterministic output; validates
+- **Fail-safe defaults:** authored by default (`channel add` creates the
+  authors role; `--simple` is the explicit opt-in); thresholds 1-of-1;
+  deterministic output; validates
   before write; refuses to sign with a revoked key; refuses to publish an
   item whose `keyid` is unauthorized; refuses to publish an item below the
   authors role threshold in an authored channel; refuses to configure the

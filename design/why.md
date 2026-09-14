@@ -188,10 +188,11 @@ phishing wave everywhere.
    *who signs*, never *how it is verified*: the app still makes a binary
    decision against the pinned root, with no trust states, no warnings, no
    user judgment. Thresholds (n-of-m) are optional, off by default.
-10. **The authors role is optional**: per-channel author keys sign items,
+10. **The authors role is the default**: per-channel author keys sign items,
     the channel key only publishes, and the app enforces both — still with a
-    binary rule. It separates authoring from publishing; channels without it
-    keep the simpler single-publisher model.
+    binary rule. It separates authoring from publishing; **simple mode**
+    (single-author, no authors role) is an explicit opt-in for a one-person
+    publisher who prefers one key.
 
 ### 3.2 Non-Goals (for v1)
 
@@ -399,9 +400,11 @@ withdraw authors — `targets.json` is master-signed), and the reference tool
 refuses to
 configure the same key as both channel key and author key.
 
-This is aimed at **larger publishers**, where authoring, review, and
-operations are already different people — which is why it stays in the Phase 1
-MVP despite adding machinery a one-person e-shop will never enable. Two
+This is the **default** because it matches how publishers already work:
+authoring, review, and operations are different people. It costs a one-person
+publisher nothing extra — the tool generates the authors role on `channel
+add` — and a one-person publisher who wants a single key can opt into **simple
+mode** explicitly instead. Two
 properties follow from per-item signing and are worth naming: author keys can
 live on **hardware signing devices** (an author *is* a device the CI trusts,
 rather than a credential on a build machine), and the signing UX stays

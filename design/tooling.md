@@ -44,7 +44,7 @@ defaults. The spec also leaves gaps that the tooling must fill:
 
 | Role (spec) | Key held | Where it runs | Commands | SDK surface |
 |---|---|---|---|---|
-| **Publisher / operator** | master (offline) | ceremony machine | `init`, `channel add/remove`, `author add/revoke`, `pattern add/remove`, `company set`, `rotate-root`, `validate`, `keys generate/export` | `Publisher.*` master-path ops, `ceremony.Stage` |
+| **Publisher / operator** | master (offline) | ceremony machine | `init`, `channel add/remove`, `channel mode`, `author add/revoke`, `pattern add/remove`, `company set`, `rotate-root`, `validate`, `keys generate/export` | `Publisher.*` master-path ops, `ceremony.Stage` |
 | **Channel publisher** | channel key (+ ops) | CI / pipeline | `publish`, `item withdraw`, `channel key rotate/revoke` (apply side), `ceremony apply` | `Publisher.Publish` etc., `ceremony.Apply` |
 | **Ops** | online ops key | cron / CI | `refresh-timestamp` | `Publisher.RefreshTimestamp` |
 | **Author** | author key | author's own machine | `item sign` | `feed.SignItem` |
@@ -175,9 +175,10 @@ Which commands need which ceremony mode:
 
 | Ceremony | Keys (single-step) | Bundle steps on apply |
 |---|---|---|
-| `channel add` | master + ops + channel key | verify, create role metadata + empty feed (channel key), snapshot/timestamp |
+| `channel add` | master + ops + channel key (+ author key generated or supplied) | verify, create authors role + role metadata + empty feed (channel + author keys), snapshot/timestamp |
+| `channel mode` | master + ops + channel key (+ author key) | verify, add/drop authors role, re-sign the channel's published items in the new mode, snapshot/timestamp |
 | `channel remove` | master + ops | verify, drop role metadata/target from snapshot, snapshot/timestamp |
-| `author add/revoke` | master + ops | verify, authors role metadata re-sign (authors), snapshot/timestamp |
+| `author add/revoke` | master + ops (+ author key) | verify, authors role metadata re-sign (authors), snapshot/timestamp; `author revoke` refuses the last author (use `channel mode … simple`) |
 | `pattern add/remove` | master + ops | verify, snapshot/timestamp |
 | `company set` | master + ops | verify, snapshot/timestamp |
 | `channel key rotate` | master + ops + channel key | verify, re-sign role metadata with old+new (overlap), snapshot/timestamp |
@@ -191,7 +192,7 @@ git pull (repo+anchor)          # fresh authorization
 pub validate                    # cheap pre-check
 pub publish --channel security --file signed.json
     # verify authors-role threshold (or channel-key signing in
-    # single-author channels), add the item + index entry,
+    # simple mode), add the item + index entry,
     # re-sign channels.security.json (channel key), snapshot+timestamp
     # (ops), validate, swap, commit
 pub deploy s3 --bucket …        # repo base; anchor separately (or same job)
@@ -324,7 +325,8 @@ pub init --domain company.example --name "ACME s.r.o."
 pub keys list | generate <name> [--role master|ops|channel|author|engine]
 pub keys export [--role …] [--name …] [--public] --out bundle   # (new) role-tagged, encrypted
 pub keys import --file bundle                                    # (new)
-pub channel add <name> --display-name … [--description …] [--keyid …] [--stage out/]
+pub channel add <name> --display-name … [--description …] [--keyid …] [--author <keyid>] [--simple] [--stage out/]
+pub channel mode <name> simple|authored [--stage out/]                # (new) master-signed mode change
 pub channel set --channel <name> [--display-name …] [--description …] [--stage out/]  # (new)
 pub channel remove <name> [--stage out/]
 pub channel list
@@ -332,6 +334,7 @@ pub channel key rotate <name> [--announce-next-key] [--stage out/]
 pub channel key revoke <name> [--keyid …] [--reissue] [--stage out/]
 pub author add --channel <name> --keyid <id> [--stage out/]
 pub author revoke --channel <name> --keyid <id> [--stage out/]
+                                     # refuses to remove the last author; use `channel mode <name> simple`
 pub author list
 pub pattern add --channel <name> --pattern URL --keyid <id> [--stage out/]   # master
 pub pattern remove --channel <name> [--stage out/]
@@ -365,7 +368,7 @@ pub deploy local --target /var/www/keryx | pub deploy s3 --bucket … --prefix �
   channel keys and never needs the repo.
 - `publish` = pull-fresh repo → verify input item (authors-role threshold
   against the `channels.<name>.authors` delegation; refuses unsigned items
-  there; refuses unknown/unauthorized keyids) → in a single-author channel,
+  there; refuses unknown/unauthorized keyids) → in simple mode,
   sign the item with the channel key → write the item file / replace in
   place on known `(channel, id)` → update the index entry → re-sign
   `channels.<name>.json`
@@ -378,8 +381,14 @@ pub deploy local --target /var/www/keryx | pub deploy s3 --bucket … --prefix �
   snapshot/timestamp) with the keys it holds.
 - `channel add` = targets.json v+1 (master): delegation
   (`channels.<name>`, terminating, `paths: ["channels/<name>/*"]`) + role
-  metadata + `custom.channels` entry + snapshot/timestamp (ops).
-  `channel remove` = drop delegation/role metadata/display entry from
+  metadata + `custom.channels` entry + snapshot/timestamp (ops). It is
+  **authored by default**: it also creates the `channels.<name>.authors`
+  delegation and its role metadata, generating an author key unless
+  `--author <keyid>` is given; `--simple` omits the authors role.
+  `channel mode` switches a channel between simple and authored (master
+  ceremony, targets.json v+1) and **MUST** re-sign the channel's published
+  items with the keys of the new mode. `channel remove` = drop
+  delegation/role metadata/display entry from
   snapshot;
   local history is the client's to keep.
 - `author add/revoke` and `pattern add/remove` = targets.json v+1 (master)

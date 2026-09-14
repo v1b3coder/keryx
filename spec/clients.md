@@ -84,7 +84,8 @@ for f in payload.private_feeds:         // private capability feeds from QR
   ([repository.md §1](repository.md)); malformed anchor data → retry, never
   suspension.
 - Every item MUST satisfy the item-signature rule before display: authored
-  channel → authors role threshold; single-author channel → channel role
+  channel (default) → authors role threshold; simple mode (single-author
+  channel) → channel role
   threshold ([feeds.md §1.2](feeds.md)). Unknown `keyid` → ignore
   (attribution only); known `keyid` whose signature fails → item rejected.
 - Unverifiable root change (validly signed, unchainable) → **company
@@ -121,14 +122,26 @@ pub init --domain company.example --name "ACME s.r.o." [--base https://cdn.examp
        --logo (URL or local file): a URL is stored linked and fetched once
        to record custom.logo_sha256; a local file is embedded as an inline
        data URL in custom.logo
-pub channel add marketing              # public channel: delegation role
-                                       #  channels.marketing + role metadata
+pub channel add marketing              # authored by default: delegation
+                                       #  channels.marketing + delegation
+                                       #  channels.marketing.authors (a
+                                       #  generated author key unless
+                                       #  --author <keyid>) + role metadata
                                        #  channels.marketing.json + display
                                        #  metadata in custom.channels (master)
+pub channel add marketing --simple      # explicit opt-in: no authors role; the
+                                       #  channel key signs items
+pub channel mode --channel marketing simple|authored
+                                       # master-signed mode change; MUST
+                                       #  re-sign the channel's published
+                                       #  items with the new mode's keys
+                                       #  (feeds §2.1)
 pub channel set --channel marketing --display-name "Offers" [--description …]
 pub author add --channel security --keyid <id>
 pub author revoke --channel security --keyid <id>
-                                     # (authored channels: channels.<ch>.authors)
+                                     # (authored channels: channels.<ch>.authors;
+                                     #  the last author is never removed
+                                     #  here — use `channel mode … simple`)
 pub item sign --channel security --file draft.json --out signed.json
                                      # author-side: signs the item file (OLPC)
                                      # — needs only the author key + draft
@@ -136,15 +149,15 @@ pub publish --channel marketing --file signed.json
      # adds/replaces the item file channels/marketing/<id>.json, updates
      # the target in the channel role metadata, re-signs
      # channels.marketing.json (channel key) + snapshot + timestamp;
-     # in authored channels: refuses to publish items that fail the authors
-     # role threshold (the tool verifies author signatures — it never holds
-     # author keys); in single-author channels: signs the item with the
-     # channel key
+     # in authored channels (default): refuses to publish items that fail
+     # the authors role threshold (the tool verifies author signatures —
+     # it never holds author keys); in simple mode: signs the item with
+     # the channel key
 pub item unpublish --channel marketing --id <id>
      # removes the target from the channel role metadata (absence =
      # unpublished, feeds §1.3) + re-signs role/snapshot/timestamp
 pub rotate --channel marketing         # overlap (old+new, threshold 1); in
-                                       #  single-author channels re-signs items
+                                       #  simple mode re-signs items
 pub revoke --channel marketing --keyid <id> [--reissue]
 pub rotate-root                        # root.json v+1 signed by old master;
                                        #  written to the well-known anchor dir
@@ -165,16 +178,18 @@ pub qr --channels marketing,product --private-feed "https://…/tracking/<token>
   revoked key; refuses to publish an item whose `keyid` is unauthorized;
   refuses to publish an unsigned item or one below the authors role
   threshold in an authored channel; refuses
-  to configure the same key as both channel role key and author key; rejects
+  to configure the same key as both channel role key and author key; refuses
+  to remove the last author (`channel mode … simple` instead); rejects
   channel names outside `[a-z0-9-_]+` and always writes the role as
   `channels.<channel>`; records `logo_sha256` for a linked logo (fetched
   once) / embeds an inline data URL for a local file; verifies every `sig` entry it writes (a
   present-but-invalid signature is rejected by clients, so it must never
   leave the tool). Thresholds default to 1-of-1.
 - Key custody (MVP): software keys in OS keychain/encrypted file + one-time
-  backup printout. **Authored channels:** author keys live with the authors — on
-  their own machines or signing devices — and never in CI; the channel key
-  lives in the publishing pipeline (CI); the master key offline. Advanced:
+  backup printout. **Authored channels (default):** author keys live with the
+  authors — on their own machines or signing devices — and never in CI; the
+  channel key lives in the publishing pipeline (CI); the master key offline.
+  Advanced:
   cloud KMS / hardware ceremony (Phase 2+, additive via the Sigstore
   `signature.Signer` interface).
 - Crypto split: TUF metadata signing delegated to go-tuf/python-tuf (OLPC);

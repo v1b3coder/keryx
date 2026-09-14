@@ -4,7 +4,7 @@
 Rationale is informative and lives in [`design/why.md`](../design/why.md).
 
 Covers: the public channel item format, signing and verification (§1); the
-optional authors role (§2); private per-order capability feeds (§3).
+authors role and channel modes (§2); private per-order capability feeds (§3).
 
 ---
 
@@ -88,8 +88,9 @@ considered):**
   entries verify against the authors role's keyids. Any failure → item
   rejected, never displayed. Additional entries (e.g. channel-key
   signatures, for portability) MAY be present but are not load-bearing.
-- **Single-author channel** (no authors role): the app MUST verify that at
-  least `threshold` entries verify against the channel role's keyids.
+- **Simple mode** (single-author channel, no authors role): the app MUST
+  verify that at least `threshold` entries verify against the channel role's
+  keyids.
 - In both cases: entries by **unknown** keys are ignored, never a reason to
   reject (attribution only); a **known keyid whose signature does not
   verify** → item rejected. There is no third state
@@ -159,10 +160,16 @@ never resolves through TUF ([repository.md §2](repository.md)).
 
 ---
 
-## 2. Authors Role (Optional Protocol Extension)
+## 2. Authors Role
 
-**Definition (normative).** A channel is **authored** iff `targets.json`
-`delegations` contains a role named `channels.<channel>.authors`. The
+**Authored is the default channel mode.** A channel is **authored** iff
+`targets.json` `delegations` contains a role named
+`channels.<channel>.authors`, and is in
+**simple mode** (single-author) otherwise. The publisher tool creates the
+authors role on channel creation unless the
+publisher explicitly opts into simple mode, and the mode is always an explicit
+master-signed ceremony — never an implicit side effect of adding or revoking an
+author key (§2.1). The
 delegation carries the author key objects, `keyids`, and `threshold`
 (default 1); it is **master-signed** — the channel key MUST NOT be able to
 modify it, otherwise the distributor could self-authorize. The role:
@@ -211,8 +218,23 @@ channel-key compromise can re-pin/withhold/unpublish but cannot forge items
 in an authored channel. Master authorizes *who* the authors are
 ([design/why.md §4.11](../design/why.md)).
 
-**Channels without an authors role:** the channel role's keys authorize item
-signing (§1.2) — the single-publisher model.
+**Simple mode (channels without an authors role):** the channel role's keys
+authorize item signing (§1.2) — the single-publisher model. Simple mode is
+an **explicit opt-in**: the publisher tool creates the authors role by default
+(§2.1), so a channel is single-author only because the publisher asked for
+it.
+
+### 2.1 Mode changes (normative)
+
+Adding or removing the authors role is a master-signed `targets.json` update
+and **MUST** be an explicit ceremony (`channel mode --channel <channel>
+simple|authored`), never
+a side effect of `author add`/`author revoke`. Because §1.2 binds the
+verification rule to the mode, a mode change **MUST** re-sign the channel's
+published items with the keys authorized in the new mode — otherwise items
+signed by the old mode's keys are dropped on the next client fetch. The
+reference tool refuses to remove the last author key and points the publisher at
+the simple-mode ceremony instead.
 
 ---
 
@@ -236,7 +258,7 @@ feed has **no authors role and no channel role**: the pattern entry's keys
 single authority, and the engine is both author and publisher — it can
 rewrite the whole document (items, removals, `version`, `expires`,
 `expired`) at any time. This is a deliberate simplification compared with
-public channels (channel key distributes, optional authors role authors): a
+public channels (channel key distributes, authors role authors by default): a
 per-order feed has one issuer per order, is small, short-lived, and
 PII-bearing, so author/publisher separation would add machinery without a
 matching threat. What bounds the engine:

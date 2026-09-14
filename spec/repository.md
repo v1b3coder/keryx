@@ -54,7 +54,7 @@ fixed by a root the base cannot influence.
 | Role | Signer | Cadence | Contains |
 |---|---|---|---|
 | `root` | master key (offline) | rare (rotation only) | keys of all roles, thresholds, identity |
-| `targets` | master key (offline) | rare (channel/author changes) | channel delegations (incl. optional authors roles), `custom` (company metadata, channel display metadata, private patterns) |
+| `targets` | master key (offline) | rare (channel/author changes) | channel delegations (incl. authors roles), `custom` (company metadata, channel display metadata, private patterns) |
 | `channels.<name>` (delegated) | **channel key** | **every publish of that channel** | that channel's item index: `{path → length, hashes}` |
 | `channels.<name>.authors` (delegated, optional) | **author keys** | only when the author set changes | no item targets; authorizes item signing (keyids + threshold) |
 | `snapshot` | online ops key | every metadata change | hashes/versions of all metadata files |
@@ -254,16 +254,18 @@ Standard TUF targets metadata; signed by the master key.
   Clients derive the channel from the item target path
   ([feeds.md §1](feeds.md#1-public-channel-items)), never by string-stripping
   the role name.
-- **Authors role (optional, normative — [feeds.md §2](feeds.md#2-authors-role)):**
-  a channel MAY have an additional delegated role `channels.<channel>.authors`
-  whose keyids/threshold authorize item signing. It is a sibling delegation in
+- **Authors role (default, normative — [feeds.md §2](feeds.md#2-authors-role)):**
+  a channel has an additional delegated role `channels.<channel>.authors`
+  whose keyids/threshold authorize item signing. **Authored is the default
+  mode**: the publisher tool creates this role on channel creation unless the
+  publisher explicitly opts into **simple mode** (no authors role; the channel
+  role's keys authorize item signing, [feeds.md §2.1](feeds.md#21-mode-changes-normative)).
+  It is a sibling delegation in
   `targets.json` (master-signed — the channel key cannot nominate or withdraw
   authors), has the same `paths` as the channel role, is **not** terminating,
   and **pins no item targets**: it exists to authorize item signatures. Its
   role metadata file (`channels.<channel>.authors.json`) is signed by the
   author keys (threshold), pins no targets, and is pinned by `snapshot.json`.
-  A channel without an authors role is a single-author channel: the channel
-  role's keys authorize item signing.
 - The app **MUST** ignore delegated roles whose name does not begin with
   `channels.`, and roles whose `paths` fall outside their own
   `channels/<channel>/*` namespace: they are not channels. `channels.<channel>.authors`
@@ -418,7 +420,8 @@ Standard TUF, no custom machinery:
 - **Channel key rotation:** `targets.json` version+1 (master-signed) listing
   old+new `keyids` with `threshold: 1` (overlap), then drop the old key; and
   the channel's role metadata (`channels.marketing.json`) is re-signed during
-  the overlap by old+new keys. In a single-author channel (no authors role)
+  the overlap by old+new keys. In simple mode (single-author channel, no
+  authors role)
   the publisher **MUST re-sign the channel's items with the new key during
   the overlap** (while the old key is still listed), otherwise items signed
   by the old key fail verification on the next client fetch
