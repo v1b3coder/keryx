@@ -86,7 +86,7 @@ content reconciliation and presentation remain the app's contract.
 | **registration** | A delivery address on the endpoint leg, stored in the registry database: a UnifiedPush/WebPush subscription (`endpoint` + `keys.p256dh`/`keys.auth`), created by the PWA browser or by the Android connector via a distributor (§6.2). |
 | **publisher** | A company or partner engine holding the signing keys for a scope authorized by the company's TUF metadata. No relay account or production API key is required. |
 | **company synchronization** | An unsigned request to bootstrap or refresh the relay's TUF state for a company domain. TOFU applies only when no trusted state exists; subsequent updates use standard TUF verification, including root rotation (§5.2). |
-| **request_id** | A short-lived, unguessable bearer capability for reading one publish's dispatch status; it grants no publishing or registration-management rights (§5.1.1). |
+| **request_id** | A short-lived, unguessable bearer capability for reading one publish's dispatch status and following its supersession chain; it grants no publishing or registration-management rights (§5.1.1). |
 | **wake-up** | A data-only push message, never content. |
 | **company_id** | The canonical join origin: lowercase ASCII host, punycode for IDNs, no scheme, no port, no trailing slash (e.g. `company.example`), i.e. the confirmed origin after the single canonical redirect (http→https, www→apex) per [`../spec/core.md` §1.2](../spec/core.md). This is the same value the user confirms at pairing. |
 
@@ -387,10 +387,21 @@ Request (one shape for channels and orders — no type marker):
   or enqueue. No API token can bypass or substitute for this verification.
 
 The uniform publish workflow is: select company TUF state → resolve scope →
-derive topic → verify signature threshold (§5.5) → check/update in-memory sequence
-cache → enqueue for dispatch (below). The client independently derives the
-same topic when subscribing; neither keys nor scope identifiers are delivery
+derive topic → verify signature threshold (§5.5) → atomically admit dispatch
+and advance the in-memory sequence cache (below). The client independently
+derives the same topic when subscribing; neither keys nor scope identifiers are delivery
 subscriptions.
+
+**Acceptance boundary:** serialize admission per topic. Check replay state,
+reserve dispatch capacity, and commit the acceptance audit row (including any
+supersession) before making work visible to workers and advancing replay state.
+These form one logical acceptance operation on both paths. On admission or
+storage failure, release reservations and leave the replay cache, existing
+queued work, and its audit state unchanged. In particular, `503` for a full
+queue MUST NOT suppress a later retry of the same signed envelope. A pending
+entry can be replaced without reserving an additional queue slot. Process
+failure after durable audit commit remains subject to the documented
+non-durable queue/restart behavior (§7).
 
 Response — fast path (`200 OK`). When the fan-out is small — no endpoint
 registrations for the topic, or at most `fast-path-max-registrations`
@@ -402,7 +413,7 @@ per-leg results:
   "topic": "<43 chars>",
   "suppressed": false,
   "providers": { "fcm": "accepted",
-                 "webpush": { "sent": 0, "failed": 0, "removed": 0 } }
+                 "webpush": { "sent": 0, "failed": 0, "dead": 0 } }
 }
 ```
 
@@ -424,12 +435,19 @@ Dispatch continues in the background; the publisher follows it via
   zero subscribers can still be accepted. Errors never count as acceptance.
 - `webpush`: `sent` = registrations for this topic the provider accepted;
   `failed` = permanent errors or transient errors after retry exhaustion;
-  `removed` =
-  registrations deleted because the provider said they are dead.
+  `dead` =
+  registrations reported dead by the provider (`404/410`); no registry write
+  occurs during dispatch (§7).
 - **Dispatch (async path).** The relay keeps a bounded, in-memory dispatch
   queue — one entry per topic, holding the **latest accepted** wake-up for
   that topic. Coalescing: a newer `seq` replaces a pending entry; an older
-  or duplicate one is a no-op. FCM is a single provider call; the endpoint
+  or duplicate one is a no-op. The replaced request becomes `superseded`
+  and links to the newer request's status capability (§5.1.1). A replacement
+  always uses the async response, even if the registry has since shrunk below
+  the fast-path threshold. Once any provider attempt starts, that dispatch
+  cannot be superseded: finish its results normally and coalesce later
+  publishes into a separate pending entry for the same topic, returning `202`
+  regardless of registry size. Serialize dispatches for each topic. FCM is a single provider call; the endpoint
   leg expands the entry to the topic's registrations at drain time. Workers
   drain the queue paced by the global per-provider outbound budgets (§5.4),
   with bounded concurrency and per-provider retries/timeouts. The queue is
@@ -458,31 +476,51 @@ in the dispatch queue; no idempotency key is required.
 Possession of `request_id` is the only authorization required: no API key or
 request signature. Generate it from 32 cryptographically random bytes,
 encoded as canonical unpadded base64url (43 characters). It authorizes only
-reading this dispatch's status. Store only its SHA-256 hash in `event_log`
-(§7); the caller retains the secret returned at acceptance.
+reading this dispatch's status and following its supersession chain. Store
+its SHA-256 hash for lookup in `event_log` (§7); the caller retains the secret
+returned at acceptance. When superseding a pending request, store the
+successor capability in plaintext in the predecessor row so it can be returned
+after restart. This is the one deliberate exception to hashed-at-rest for
+status capabilities: the handle is read-only, expires within its own TTL, and
+grants nothing but this dispatch's status. It must not be extended to
+management tokens or any capability that can mutate state.
 
 Capabilities expire independently of audit retention: configurable TTL,
 default **1 hour from acceptance**, returned as `expires_at` in the `202`
 response. Expiry does not cancel dispatch. Invalid, unknown, and expired
 capabilities return `404`, even if the audit row still exists. Responses
-MUST use `Cache-Control: no-store`. Raw capabilities MUST NOT enter access
+MUST use `Cache-Control: no-store`. Raw capabilities, including `superseded_by`, MUST NOT enter access
 logs, tracing, or analytics; redact the request-id path segment at the relay
 and any reverse proxy. Status reads are rate-limited by IP and globally.
 
 - `200` while dispatch is in progress:
   `{ "request_id": "<43-char secret>", "topic": "<43 chars>", "status": "pending" }`
+- `200` when superseded before dispatch began:
+  `{ "request_id": "<original secret>", "topic": "<43 chars>", "status": "superseded",
+     "superseded_by": "<newer request_id>", "expires_at": "<successor expiry>" }`
+  This is terminal for the original request and carries no provider results.
+  `expires_at` is the successor's own capability expiry, read from its row at
+  probe time. Tooling follows `GET /v1/publishes/{superseded_by}` to monitor the
+  replacement; repeat if that request is also superseded. Links only point to
+  later accepted requests for the same topic, so chains cannot cycle. Each
+  capability retains its own expiry and retention rules; following a link
+  grants access to the successor's status, not proof that the original
+  envelope was sent. An expired or removed predecessor returns `404` and cannot
+  reveal its successor; if the successor row itself has been removed by
+  retention, return `superseded` without the link (following it would `404`
+  anyway).
 - `200` when complete (all enabled legs attempted):
 
 ```json
 { "request_id": "<43-char secret>", "topic": "<43 chars>", "status": "complete",
   "providers": { "fcm": "accepted",
                  "webpush": { "attempted": 1000, "sent": 950,
-                              "failed": 20, "removed": 30 } } }
+                              "failed": 20, "dead": 30 } } }
 ```
 
 - `webpush.attempted` = registrations for the topic that were attempted;
-  `sent`/`failed`/`removed` partition it (push-service accepted / retries
-  exhausted / dead, deleted). No counts are returned while `pending`;
+  `sent`/`failed`/`dead` partition it (push-service accepted / retries
+  exhausted / endpoint reported dead). No counts are returned while `pending`;
   progress reporting is out of scope for this revision.
 - **Results describe attempts, not deliveries.** There is no device
   acknowledgement on any leg: `sent` means the push service accepted the
@@ -605,18 +643,22 @@ topics, so the relay stores registration ↔ topic mappings in the
 
 | Method + path | Body | Meaning |
 |---|---|---|
-| `POST /v1/registrations` | `{ "endpoint": "https://…", "keys": { "p256dh": "…", "auth": "…" }, "topics": ["<43 chars>", …] }` | Create registration. Returns `{ "id": "<uuid>", "management_token": "<secret>" }` once. Existing endpoint without its management token: `409`, no overwrite. |
-| `PUT /v1/registrations/{id}` | `{ "topics": [ … ] }` | Replace the followed-topic set (called on follow/unfollow). |
+| `POST /v1/registrations` | `{ "endpoint": "https://…", "keys": { "p256dh": "…", "auth": "…" }, "topics": ["<43 chars>", …] }` | Create registration. Returns `{ "id": "<uuid>", "management_token": "<secret>" }` once. Existing endpoint: `409`, no overwrite; use authenticated PUT for replacement. |
+| `PUT /v1/registrations/{id}` | `{ "topics": [ … ], "endpoint": "https://…", "keys": { "p256dh": "…", "auth": "…" } }` | Replace topics; optionally replace endpoint and keys together. Omitted endpoint/keys remain unchanged. Preserve id and management token. |
 | `DELETE /v1/registrations/{id}` | — | Remove the installation's entire registration. Removing one company uses PUT to remove only its topics. |
 | `POST /v1/registrations/{id}/heartbeat` | — | Liveness ack (no body): bumps `last_seen`. Sent by the service worker on wake-up receipt, and by the app (PWA or Android) on foreground. `204 No Content`. |
 
 - The relay POSTs to `endpoint` during delivery. It MUST be HTTPS and pass
   the outbound-request policy (§5.6). Validate subscription key encodings
   before storage. Registration is rate-limited by IP.
-- Updates, deletion, heartbeat, and replacement by endpoint MUST require
+- Updates, deletion, heartbeat, and endpoint/key replacement MUST require
   `Authorization: Bearer <management_token>` for that registration. Generate
   a random 256-bit token and store only its SHA-256 hash. Missing/invalid
   credentials return `401`; never return an existing token from registration.
+  An unknown registration id returns `404`; `401` does not imply absence.
+  PUT validates the entire replacement before mutation; endpoint and keys must
+  be supplied together, pass the same validation as creation, and an endpoint
+  owned by another registration returns `409` without modifying either record.
   A shared secret embedded in a public app build is not ownership proof.
 - `topics` are derived per §3; the relay accepts only 43-char base64url
   topics and rejects others.
@@ -624,11 +666,18 @@ topics, so the relay stores registration ↔ topic mappings in the
   topics it follows, but a delivered message carries no topic — so the
   wake-up payload must name it. The registry makes delivery *possible*;
   the payload makes it *legible*.
-- **Lifecycle:** track `created_at` and `last_seen` (§7). A client
-  re-registers (POST) when a management operation returns `404`/`401` —
-  e.g. after GC — since no server-side record then exists for it; the
-  Android connector re-registers on the same condition and on endpoint
-  rotation from the distributor.
+- **Lifecycle:** track `created_at` and `last_seen` (§7). Persist the id and
+  management token together after creation. On `404` (e.g. after GC), POST
+  the current subscription and followed topics. On endpoint/key rotation,
+  use authenticated PUT when the existing id/token is available.
+  On token loss, `401`, or a lost creation response followed by `409`, do not
+  repeatedly POST the same endpoint: the relay record may still exist.
+  Unsubscribe/unregister the old push subscription through the browser or
+  Android connector, obtain a fresh subscription with a different endpoint,
+  and POST it with the current topic set. The old relay record expires through
+  GC; unauthenticated recovery never overwrites it or reveals its token.
+  If a different endpoint cannot be obtained, defer registration and retry
+  through the provider's lifecycle; independent content sync remains available.
 
 ### 5.4 Limits
 
@@ -687,8 +736,9 @@ Cached authorization is not proof that no newer metadata exists.
 - **Replay:** after signature verification, atomically compare `seq` with a
   bounded in-memory LRU mapping `topic → highest_seen_seq`. Values ≤ the
   cached value are suppressed before enqueue; a higher value updates the
-  cache and the publish is enqueued for dispatch (§5.1). The cache is
-  updated at acceptance, before dispatch. A suppressed publish returns
+  cache only as part of successful dispatch admission (§5.1). A rejected
+  publish never advances it. The cache is updated at acceptance, before dispatch.
+  A suppressed publish returns
   `200` with `suppressed: true`, zero WebPush counts, and `suppressed`
   for the enabled topic leg (`disabled` otherwise). Suppression is not a
   delivery acknowledgement: an already attempted fan-out may have failed
@@ -804,7 +854,8 @@ need not distinguish PWA from de-Googled Android subscriptions.
   origin, `exp` = now + 12 h (≤ 24 h), `sub` = `mailto:` contact from config
   (Chrome requires it). The endpoint leg has no delivery topic — the
   payload always carries `t` (§4).
-- **Errors:** `404`/`410` → delete the registration (count `removed`);
+- **Errors:** `404`/`410` → count `dead`, do not retry or mutate the registry;
+  stale registrations are removed by the TTL sweep (§7).
   `429`/`5xx` → retry with backoff, then `failed`. Sends are paced by the
   global endpoint-leg outbound budget (§5.4) with a configurable
   concurrency cap.
@@ -884,13 +935,14 @@ CREATE TABLE event_log (
   request_expires_at TEXT NOT NULL,        -- capability lifetime, independent of audit retention
   company_id  TEXT NOT NULL,
   scope_id    TEXT NOT NULL,
-  status      TEXT NOT NULL,               -- pending | complete
+  status      TEXT NOT NULL,               -- pending | complete | superseded
+  superseded_by_capability TEXT,           -- plaintext successor capability; superseded only (§5.1.1)
   topic       TEXT NOT NULL,
   fcm         TEXT,                        -- disabled/accepted/failed/suppressed
   webpush_attempted INTEGER, webpush_sent INTEGER,
-  webpush_failed INTEGER, webpush_removed INTEGER,
+  webpush_failed INTEGER, webpush_dead INTEGER,
   at          TEXT NOT NULL,               -- acceptance time
-  completed_at TEXT                        -- set when dispatch finishes
+  completed_at TEXT                        -- set on completion or supersession
 );
 ```
 
@@ -925,19 +977,26 @@ CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
 ```
 
 - `event_log` is bounded (retention config, default 30 days) and is the
-  audit/abuse record; it contains hashes and topic names only, never
-  content or tokens. Each publish writes a row at acceptance (`pending`)
-  and updates it at completion; the dispatch-status probe (§5.1.1) reads it
+  audit/abuse record; it contains dispatch metadata, never content or raw
+  tokens, with one deliberate exception: the plaintext successor capability
+  in a superseded row (§5.1.1), which is read-only and TTL-bounded and must
+  not be extended to any other secret. Each accepted publish writes a
+  row (`pending`) and updates it at completion or supersession; the
+  dispatch-status probe (§5.1.1) reads it
   by the hash of `request_id`. Expired capabilities and rows removed by
-  retention return `404`. Raw status capabilities are never persisted. Rows left
+  retention return `404`. Raw status capabilities are otherwise never
+  persisted. Rows left
   `pending` by a restart are closed on startup with legs recorded as
   `failed` (the in-memory queue was lost; audit accuracy, not a delivery
   guarantee).
-- **Garbage collection (registry):** `404/410` deletes the registration
-  immediately. Nothing is written per send attempt — the publish path
-  performs **no per-registration database writes** (§5.1), so a fan-out to
-  a million-registration topic costs one `event_log` row, not a million
-  updates. A registration whose `last_seen` is older than the configured
+- **Garbage collection (registry):** dispatch performs **no per-registration
+  database writes**, including on `404/410`. Dead responses contribute only
+  to aggregate event results; they do not delete rows or persist cleanup tasks.
+  A fan-out to a million-registration topic costs one `event_log` row, not a
+  million updates. Registry mutations occur only through client management
+  operations and the independent low-frequency TTL sweep. Dead endpoints may
+  be attempted again on later publishes until that sweep removes them.
+  A registration whose `last_seen` is older than the configured
   GC TTL is a GC candidate, swept on a low-frequency cadence; an
   authenticated heartbeat or registration update refreshes `last_seen`.
   A registration of a user who neither opens the app nor receives a
@@ -981,8 +1040,10 @@ CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
   to registered endpoint subscriptions), the debug API key (test mode only),
   registration management tokens, and dispatch-status capabilities. Provider
   private credentials and the debug key stay in secret configuration;
-  management tokens and status capabilities are hashed at rest. Raw bearer
-  secrets never enter logs, traces, or the database.
+  management tokens are hashed at rest, as are status capabilities used for
+  lookup — with one bounded exception: the successor capability stored
+  plaintext for supersession linking (§5.1.1), which is read-only and expires
+  within its own TTL. Raw bearer secrets never enter logs, traces, or the database.
 - **Scale:** one instance; the publish API accepts quickly and dispatch is
   asynchronous (§5.1): a bounded, in-memory, per-topic coalescing queue
   drained by workers paced to the per-provider budgets (§5.4). The queue is
@@ -1182,10 +1243,10 @@ the same publish path:
   valid signed test envelopes verify normally, while unsigned/invalid ones
   are never accepted as trusted client wake-ups.
 - Registration mutation requires its management token; destination validation
-  covers delivery and metadata; registry GC is driven by `404/410` and
-  `last_seen`, never by send attempts. PWA and Android endpoint
+  covers delivery and metadata; registry GC is driven by
+  `last_seen`, never by send attempts or their results. PWA and Android endpoint
   registrations are indistinguishable on the publish path; a `404/410`
-  from either deletes the registration.
+  from either counts as `dead` without a registry mutation.
 - The publish path writes one `event_log` row per publish and no
   per-registration rows, even for a fan-out covering a million-registration
   topic.
@@ -1201,5 +1262,22 @@ the same publish path:
   the unexpired request-id capability suffices without an API key or signature.
   Invalid/unknown/expired capabilities return `404`. Expiry does not cancel
   dispatch, and audit retention does not extend capability lifetime. Raw
-  capabilities are neither persisted nor logged; responses are not cached.
+  capabilities are never logged, and only the plaintext supersession successor
+  handle is persisted (§5.1.1); responses are not cached.
   Results describe provider attempts, never device delivery.
+- Queue or audit-storage rejection leaves replay state and previous pending
+  work unchanged; retrying the rejected envelope can be admitted. Concurrent
+  requests for a topic cannot interleave admission and replay advancement.
+- Replacing a pending publish terminates its status as `superseded` with the
+  newer request_id and expiry; tooling can follow repeated replacements to
+  the final result. Supersession links survive restart from the plaintext
+  successor capability in the predecessor row; that handle is the single
+  persisted status capability and never enters logs. Started dispatches
+  finish normally; later publishes occupy a separate pending entry.
+- A lost registration creation response or lost token cannot cause an endless
+  `401`/`409` recovery loop: clients obtain a different endpoint. Authenticated
+  PUT replaces endpoint and keys atomically; conflicts leave records unchanged.
+- A fan-out consisting entirely of `404/410` responses increments aggregate
+  `dead` counts without any per-registration database writes or durable cleanup
+  tasks. Only client operations and the independent TTL sweep mutate registry
+  rows; subsequent sends may encounter the same dead endpoint before GC.
