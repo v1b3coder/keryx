@@ -477,13 +477,14 @@ Possession of `request_id` is the only authorization required: no API key or
 request signature. Generate it from 32 cryptographically random bytes,
 encoded as canonical unpadded base64url (43 characters). It authorizes only
 reading this dispatch's status and following its supersession chain. Store
-its SHA-256 hash for lookup in `event_log` (§7); the caller retains the secret
-returned at acceptance. When superseding a pending request, store the
-successor capability in plaintext in the predecessor row so it can be returned
-after restart. This is the one deliberate exception to hashed-at-rest for
-status capabilities: the handle is read-only, expires within its own TTL, and
-grants nothing but this dispatch's status. It must not be extended to
-management tokens or any capability that can mutate state.
+the capability itself in `event_log` (§7) as the lookup key — raw status
+capabilities are acceptable at rest because they are read-only and expire
+within their TTL, and they grant nothing but this dispatch's status. The
+caller retains the secret returned at acceptance. When superseding a
+pending request, record the successor's row id in the predecessor row; the
+successor capability is read from its own row at probe time, so no capability
+is ever stored twice. Management tokens and any capability that can mutate
+state remain hashed or in secret configuration.
 
 Capabilities expire independently of audit retention: configurable TTL,
 default **1 hour from acceptance**, returned as `expires_at` in the `202`
@@ -499,16 +500,17 @@ and any reverse proxy. Status reads are rate-limited by IP and globally.
   `{ "request_id": "<original secret>", "topic": "<43 chars>", "status": "superseded",
      "superseded_by": "<newer request_id>", "expires_at": "<successor expiry>" }`
   This is terminal for the original request and carries no provider results.
-  `expires_at` is the successor's own capability expiry, read from its row at
-  probe time. Tooling follows `GET /v1/publishes/{superseded_by}` to monitor the
-  replacement; repeat if that request is also superseded. Links only point to
-  later accepted requests for the same topic, so chains cannot cycle. Each
-  capability retains its own expiry and retention rules; following a link
-  grants access to the successor's status, not proof that the original
-  envelope was sent. An expired or removed predecessor returns `404` and cannot
-  reveal its successor; if the successor row itself has been removed by
-  retention, return `superseded` without the link (following it would `404`
-  anyway).
+  `superseded_by` is the successor capability, read from the successor's own
+  row — each capability is stored once, in its own row; `expires_at` is that
+  capability's own expiry. Tooling follows `GET /v1/publishes/{superseded_by}`
+  to monitor the replacement; repeat if that request is also superseded.
+  Links only point to later accepted requests for the same topic, so chains
+  cannot cycle. Each capability retains its own expiry and retention rules;
+  following a link grants access to the successor's status, not proof that the
+  original envelope was sent. An expired or removed predecessor returns `404`
+  and cannot reveal its successor; if the successor row itself has been
+  removed by retention, return `superseded` without the link (following it
+  would `404` anyway).
 - `200` when complete (all enabled legs attempted):
 
 ```json
@@ -931,12 +933,12 @@ CREATE TABLE company_tuf (                 -- standard TUF trust state per domai
 
 CREATE TABLE event_log (
   id          INTEGER PRIMARY KEY,
-  request_id_hash TEXT NOT NULL UNIQUE,    -- sha256hex of the status capability (§5.1.1)
+  request_id  TEXT NOT NULL UNIQUE,        -- raw status capability; lookup key (§5.1.1)
   request_expires_at TEXT NOT NULL,        -- capability lifetime, independent of audit retention
   company_id  TEXT NOT NULL,
   scope_id    TEXT NOT NULL,
   status      TEXT NOT NULL,               -- pending | complete | superseded
-  superseded_by_capability TEXT,           -- plaintext successor capability; superseded only (§5.1.1)
+  superseded_by_id INTEGER,                -- successor row id; superseded only (§5.1.1)
   topic       TEXT NOT NULL,
   fcm         TEXT,                        -- disabled/accepted/failed/suppressed
   webpush_attempted INTEGER, webpush_sent INTEGER,
@@ -977,13 +979,14 @@ CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
 ```
 
 - `event_log` is bounded (retention config, default 30 days) and is the
-  audit/abuse record; it contains dispatch metadata, never content or raw
-  tokens, with one deliberate exception: the plaintext successor capability
-  in a superseded row (§5.1.1), which is read-only and TTL-bounded and must
-  not be extended to any other secret. Each accepted publish writes a
+  audit/abuse record; it contains dispatch metadata and status capabilities,
+  never content or management tokens. Status capabilities are stored raw as
+  the lookup key (§5.1.1): they are read-only and expire within their TTL, so
+  a database leak exposes at most transient dispatch status, never publishing
+  or registration rights. Each accepted publish writes a
   row (`pending`) and updates it at completion or supersession; the
   dispatch-status probe (§5.1.1) reads it
-  by the hash of `request_id`. Expired capabilities and rows removed by
+  by the capability itself. Expired capabilities and rows removed by
   retention return `404`. Raw status capabilities are otherwise never
   persisted. Rows left
   `pending` by a restart are closed on startup with legs recorded as
@@ -1040,10 +1043,11 @@ CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
   to registered endpoint subscriptions), the debug API key (test mode only),
   registration management tokens, and dispatch-status capabilities. Provider
   private credentials and the debug key stay in secret configuration;
-  management tokens are hashed at rest, as are status capabilities used for
-  lookup — with one bounded exception: the successor capability stored
-  plaintext for supersession linking (§5.1.1), which is read-only and expires
-  within its own TTL. Raw bearer secrets never enter logs, traces, or the database.
+  management tokens are hashed at rest. Dispatch-status capabilities are
+  stored raw in `event_log` (§5.1.1): they are read-only and expire within
+  their TTL, so a database leak exposes at most transient dispatch status,
+  never publishing or registration rights. No bearer secret ever enters logs,
+  traces, or analytics.
 - **Scale:** one instance; the publish API accepts quickly and dispatch is
   asynchronous (§5.1): a bounded, in-memory, per-topic coalescing queue
   drained by workers paced to the per-provider budgets (§5.4). The queue is
@@ -1262,18 +1266,18 @@ the same publish path:
   the unexpired request-id capability suffices without an API key or signature.
   Invalid/unknown/expired capabilities return `404`. Expiry does not cancel
   dispatch, and audit retention does not extend capability lifetime. Raw
-  capabilities are never logged, and only the plaintext supersession successor
-  handle is persisted (§5.1.1); responses are not cached.
+  capabilities are never logged; they are stored raw in `event_log` as the
+  lookup key (§5.1.1), read-only and TTL-bounded; responses are not cached.
   Results describe provider attempts, never device delivery.
 - Queue or audit-storage rejection leaves replay state and previous pending
   work unchanged; retrying the rejected envelope can be admitted. Concurrent
   requests for a topic cannot interleave admission and replay advancement.
 - Replacing a pending publish terminates its status as `superseded` with the
   newer request_id and expiry; tooling can follow repeated replacements to
-  the final result. Supersession links survive restart from the plaintext
-  successor capability in the predecessor row; that handle is the single
-  persisted status capability and never enters logs. Started dispatches
-  finish normally; later publishes occupy a separate pending entry.
+  the final result. Supersession links survive restart via a row reference
+  (`superseded_by_id`); the successor capability is returned from its own row
+  and is never duplicated or logged. Started dispatches finish normally;
+  later publishes occupy a separate pending entry.
 - A lost registration creation response or lost token cannot cause an endless
   `401`/`409` recovery loop: clients obtain a different endpoint. Authenticated
   PUT replaces endpoint and keys atomically; conflicts leave records unchanged.
