@@ -8,9 +8,10 @@ authors role and channel modes (§2); private per-order capability feeds (§3).
 
 ---
 
-## 1. Public Channel Items (`channels/<name>/<id>.json`)
+## 1. Public Channel Items
 
-A public channel is a set of **signed item files**; the channel's role
+A public channel is a set of **signed item files**; each item lives at
+`channels/<name>/<id>.json`, and the channel's role
 metadata ([repository.md §3](repository.md#3-channel-role-metadata-channelsmarketingjson))
 is the index — the complete, authoritative list of what is currently
 published. There is **no feed document**: no wrapper, no pagination, no
