@@ -47,7 +47,7 @@ the Android UnifiedPush connector — sharing one WebPush publish path
    company/channel/order locally. This is what bounds the relay's power: a
    fully malicious or compromised relay can only **spam or withhold wake-up
    signals** — it cannot forge a message (the app fetches and verifies
-   content through the TUF/thread path), cannot forge a wake-up (the
+   content through the TUF path), cannot forge a wake-up (the
    payload signature verifies against the publisher's TUF keys,
    §4.1/§5.5), never receives content or order capability tokens (only
    their hash), and cannot impersonate a publisher. Unverifiable wake-ups
@@ -102,7 +102,7 @@ Derivation is **two-stage**:
 h = hex(sha256(company_id + "|" + channel))       // channel wake-up
 h = hex(sha256(company_id + "|" + order_token))   // order wake-up (same rule)
 
-topic = base64url_nopad(sha256("keryx/relay/v1|" + JCS({company_id, scope_id, h})))
+topic = base64url_nopad(sha256("keryx/relay/v1|" + OLPC({company_id, scope_id, h})))
 ```
 
 - `h` is the **source hash** — lowercase hex of SHA-256 over the UTF-8
@@ -128,7 +128,7 @@ topic = base64url_nopad(sha256("keryx/relay/v1|" + JCS({company_id, scope_id, h}
   topic and requires an authorized signature for it. Submitting another company's or
   scope's source hash cannot reach that other namespace's topic. The
   publish path MUST NOT inspect the subject or branch on its type.
-  JCS input is exactly the three string fields shown above, encoded as UTF-8.
+  OLPC input is exactly the three string fields shown above, encoded as UTF-8.
 - Output is **43 chars** (base64url of 32 bytes, no padding, no prefix).
   Base64url (RFC 4648 §5 alphanumerics, `-`, `_`) is valid in FCM topic
   names (`[a-zA-Z0-9-_.~%]`) and is an opaque string in endpoint-leg
@@ -161,7 +161,7 @@ from verified `targets.json` using these exact descriptors:
 public_descriptor  = {"kind":"public", "channel": <bare channel name>}
 private_descriptor = {"kind":"private", "channel": <entry.channel>,
                       "pattern": <entry.pattern>}
-scope_id = hex(sha256("keryx/relay/scope/v1|" + JCS(descriptor)))
+scope_id = hex(sha256("keryx/relay/scope/v1|" + OLPC(descriptor)))
 ```
 
 Use the exact validated metadata strings, without additional normalization;
@@ -221,12 +221,12 @@ A single JSON object. **What it carries depends on the leg** (§1):
   compare it to their own clock. Because `sig` covers `seq`, the app MUST
   reject a wake-up whose `seq` is ≤ the persisted last accepted value for
   that topic (§4.2). A sequence gap is not proof of loss — with
-  timestamp-derived values it is merely elapsed time. Never used for feed
-  ordering — the app reconciles by fetching; feed ordering is editorial and
-  dedup is `(channel, id)`
-  ([`../spec/feeds.md`](../spec/feeds.md)). Unrelated to the `_sig.seq`
-  dropped from the feed format —
-  [`../design/why.md` §8](../design/why.md).
+  timestamp-derived values it is merely elapsed time. Never used for inbox
+  ordering — the app reconciles by fetching; ordering is by the item's
+  `date_published` and dedup is `(channel, id)`
+  ([`../spec/feeds.md`](../spec/feeds.md)). Unrelated to any per-item
+  sequence number — the item format has no sequence field
+  ([`../design/why.md` §8](../design/why.md)).
 - `sig` — the wake-up signatures (§4.1), **required for every scope and leg**.
 - Nothing else. In particular: no title, no body, no URL, no company name,
   no status text, no raw order token, no unread hint (`n`). Unread state is
@@ -243,17 +243,18 @@ verification. Content itself is always independently verified.
 ### 4.1 Wake-up signature
 
 ```
-signature = Ed25519( "keryx/wakeup/v1|" ‖ JCS({ v, t, seq }) )
+signature = Ed25519( "keryx/wakeup/v1|" ‖ OLPC({ v, t, seq }) )
 ```
 
 - Signed bytes: the domain separator `"keryx/wakeup/v1|"` followed by the
-  **JCS (RFC 8785)** canonical JSON, encoded as UTF-8, of exactly
+  **OLPC canonical JSON** (securesystemslib — the same canonicalization the
+  protocol uses for TUF metadata and item signing), encoded as UTF-8, of exactly
   `{v, t, seq}`. `t` is ALWAYS signed, whether carried in the payload or
   recovered from delivery. The `sig` array itself is excluded.
-  JCS and domain separation are mandatory: Ed25519
+  OLPC and domain separation are mandatory: Ed25519
   signatures are reusable across message types, and the protocol applies the
-  same discipline (canonicalization + domain separation) to item signatures
-  — there in OLPC canonicalization ([`../spec/feeds.md`](../spec/feeds.md#12-signing-and-verification)).
+  same canonicalization and discipline to item signatures
+  ([`../spec/feeds.md`](../spec/feeds.md#12-signing-and-verification)).
 - `sig` is always a nonempty array of `{ "keyid": "<hex>",
   "sig": "<base64url>" }`, including threshold 1. Keyids are lowercase
   SHA-256 hex per the protocol's TUF key-object canonicalization; signatures
