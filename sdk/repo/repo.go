@@ -16,6 +16,8 @@ type Repo interface {
 	Read(ctx context.Context, path string) ([]byte, error)
 	Write(ctx context.Context, path string, data []byte) error
 	List(ctx context.Context, prefix string) ([]string, error)
+	// Remove deletes a file (used to clean up orphaned metadata).
+	Remove(ctx context.Context, path string) error
 }
 
 // DirRepo is a Repo backed by a directory.

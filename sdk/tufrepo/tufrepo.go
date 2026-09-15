@@ -320,6 +320,33 @@ func (s *State) Write(_ context.Context, base, anchor repo.Repo) error {
 	if err := write(base, "timestamp.json", timestampBytes); err != nil {
 		return err
 	}
+	// drop metadata for channels that no longer exist: a removed channel's
+	// role files are no longer pinned by snapshot.json, but a stale copy must
+	// not be published by deploy
+	if existing, err := base.List(ctx, "."); err == nil {
+		for _, name := range existing {
+			baseName := name
+			if i := strings.LastIndex(baseName, "/"); i >= 0 {
+				baseName = baseName[i+1:]
+			}
+			if strings.HasPrefix(baseName, "channels.") && strings.HasSuffix(baseName, ".json") {
+				if !s.knownMetadata(baseName) {
+					if err := base.Remove(ctx, name); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+			// item target files are channels/<name>/<id>.json
+			if strings.HasPrefix(name, "channels/") {
+				if _, ok := s.Items[name]; !ok {
+					if err := base.Remove(ctx, name); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
 	for path, data := range s.Items {
 		if err := write(base, path, data); err != nil {
 			return err
@@ -747,6 +774,16 @@ func (s *State) verifyRootChain() error {
 		return fmt.Errorf("root chain: current root version not in the anchor chain")
 	}
 	return nil
+}
+
+// knownMetadata reports whether a channels.<name>[.authors].json file belongs to
+// the current state.
+func (s *State) knownMetadata(baseName string) bool {
+	rest := strings.TrimSuffix(strings.TrimPrefix(baseName, "channels."), ".json")
+	if strings.HasSuffix(rest, ".authors") {
+		return s.Authors[strings.TrimSuffix(rest, ".authors")] != nil
+	}
+	return s.Channels[rest] != nil
 }
 
 func customRoot(root *metadata.Metadata[metadata.RootType]) map[string]any {

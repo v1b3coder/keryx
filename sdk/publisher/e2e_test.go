@@ -3,6 +3,8 @@ package publisher_test
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -233,6 +235,17 @@ func TestCLIEndToEnd(t *testing.T) {
 		}
 		return string(out)
 	}
+	runWith := func(global []string, args ...string) string {
+		t.Helper()
+		full := append(append([]string{"run", "./cmd/pub", "--workspace", ws}, global...), args...)
+		cmd := exec.Command("go", full...)
+		cmd.Dir = ".."
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("pub %v %v: %v\n%s", global, args, err, out)
+		}
+		return string(out)
+	}
 	run("init", "--domain", "company.example", "--name", "ACME s.r.o.", "--base", "https://cdn.example.com/keryx")
 	run("channel", "add", "news", "--simple")
 	run("keys", "generate", "author", "--role", "author")
@@ -247,11 +260,26 @@ func TestCLIEndToEnd(t *testing.T) {
 	if out := run("validate"); !bytes.Contains([]byte(out), []byte("OK")) {
 		t.Fatalf("validate: %s", out)
 	}
+	// rotate the root so the anchor carries a versioned root chain
+	run("rotate-root")
 	target := filepath.Join(dir, "site")
 	run("deploy", "local", "--target", target)
-	for _, rel := range []string{".well-known/keryx/root.json", "keryx/targets.json", "keryx/channels.news.json"} {
+	for _, rel := range []string{".well-known/keryx/root.json", ".well-known/keryx/2.root.json", "keryx/targets.json", "keryx/channels.news.json"} {
 		if _, err := os.Stat(filepath.Join(target, rel)); err != nil {
 			t.Fatalf("deployed %s: %v", rel, err)
+		}
+	}
+	// serve the deployed site and pull it back into a fresh workspace: the
+	// whole root chain must be fetched and verified (design/tooling.md §5)
+	server := httptest.NewServer(http.FileServer(http.Dir(target)))
+	defer server.Close()
+	pullRepo := filepath.Join(dir, "pull-repo")
+	pullAnchor := filepath.Join(dir, "pull-anchor")
+	runWith([]string{"--repo", pullRepo, "--anchor", pullAnchor},
+		"pull", "--base", server.URL+"/keryx")
+	for _, rel := range []string{"root.json", "1.root.json", "2.root.json"} {
+		if _, err := os.Stat(filepath.Join(pullAnchor, rel)); err != nil {
+			t.Fatalf("pulled anchor %s: %v", rel, err)
 		}
 	}
 }

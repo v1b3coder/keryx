@@ -598,3 +598,27 @@ func TestValidateDetectsBrokenRootChain(t *testing.T) {
 		t.Fatal("validate accepted a broken root chain")
 	}
 }
+
+func TestChannelRemoveDropsMetadata(t *testing.T) {
+	e := newEnv(t)
+	ctx := e.ctx()
+	if _, err := e.pub.ChannelAdd(ctx, publisher.ChannelSpec{Name: "news", Simple: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pub.Publish(ctx, publisher.PublishParams{Channel: "news", Item: draft("hello")}); err != nil {
+		t.Fatal(err)
+	}
+	root := e.pub.Base.(*repo.DirRepo).Root
+	if _, err := e.pub.ChannelRemove(ctx, "news"); err != nil {
+		t.Fatalf("channel remove: %v", err)
+	}
+	if _, err := e.pub.Validate(ctx); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	// the removed channel's metadata and items are gone from the base
+	for _, rel := range []string{"channels.news.json", "channels/news/hello.json"} {
+		if _, err := os.Stat(filepath.Join(root, rel)); !os.IsNotExist(err) {
+			t.Fatalf("%s still on disk after channel remove", rel)
+		}
+	}
+}

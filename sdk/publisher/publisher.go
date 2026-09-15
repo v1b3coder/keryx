@@ -793,6 +793,12 @@ func (p *Publisher) channelRemoveMutation(ctx context.Context, name string) (mut
 			removeDelegation(st.Targets, "channels."+name)
 			removeDelegation(st.Targets, "channels."+name+".authors")
 			deleteChannelDisplay(st, name)
+			// the channel's items are no longer published
+			for path := range st.Items {
+				if strings.HasPrefix(path, "channels/"+name+"/") {
+					delete(st.Items, path)
+				}
+			}
 			return nil
 		},
 		steps: []ceremony.Step{{Kind: "channel-remove", Channel: name}},

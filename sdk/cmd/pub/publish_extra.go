@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,10 +82,36 @@ func (a *app) pullCmd() *cobra.Command {
 			}
 			base = strings.TrimSuffix(base, "/") + "/"
 			client := &http.Client{Timeout: 30 * time.Second}
-			// anchor: refresh root.json + N.root.json when an anchor URL is given
-			if anchorURL != "" {
-				anchorURL = strings.TrimSuffix(anchorURL, "/") + "/"
-				if err := fetchTo(client, anchorURL+"root.json", filepath.Join(a.anchorPath(), "root.json")); err != nil {
+			// anchor defaults to the repo base origin's well-known space
+			if anchorURL == "" {
+				if u, err := url.Parse(base); err == nil && u.Host != "" {
+					anchorURL = u.Scheme + "://" + u.Host + "/.well-known/keryx/"
+				}
+			}
+			if anchorURL == "" {
+				return fmt.Errorf("--anchor-url is required (could not derive it from --base)")
+			}
+			anchorURL = strings.TrimSuffix(anchorURL, "/") + "/"
+			// the whole root chain: root.json plus every released N.root.json
+			// (the client walks it; pull must fetch it too)
+			if err := fetchTo(client, anchorURL+"root.json", filepath.Join(a.anchorPath(), "root.json")); err != nil {
+				return err
+			}
+			rootBytes, err := os.ReadFile(filepath.Join(a.anchorPath(), "root.json"))
+			if err != nil {
+				return err
+			}
+			var rootDoc struct {
+				Signed struct {
+					Version int64 `json:"version"`
+				} `json:"signed"`
+			}
+			if err := json.Unmarshal(rootBytes, &rootDoc); err != nil {
+				return fmt.Errorf("root.json: %w", err)
+			}
+			for v := int64(1); v <= rootDoc.Signed.Version; v++ {
+				name := fmt.Sprintf("%d.root.json", v)
+				if err := fetchToOptional(client, anchorURL+name, filepath.Join(a.anchorPath(), name)); err != nil {
 					return err
 				}
 			}
@@ -137,8 +164,32 @@ func (a *app) pullCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&base, "base", "", "repo base URL")
-	cmd.Flags().StringVar(&anchorURL, "anchor", "", "anchor URL (optional; refreshes the root)")
+	cmd.Flags().StringVar(&anchorURL, "anchor-url", "", "anchor URL (defaults to the base origin's /.well-known/keryx/)")
 	return cmd
+}
+
+// fetchToOptional fetches a file, tolerating 404 (older repos may not have
+// every versioned root file).
+func fetchToOptional(client *http.Client, url, path string) error {
+	resp, err := client.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("fetch %s: HTTP %d", url, resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
 }
 
 func fetchTo(client *http.Client, url, path string) error {
