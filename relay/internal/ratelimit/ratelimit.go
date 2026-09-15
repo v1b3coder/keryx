@@ -4,6 +4,7 @@
 package ratelimit
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -60,6 +61,39 @@ func (l *Limiter) AllowN(key string, n int) bool {
 	}
 	b.tokens -= float64(n)
 	return true
+}
+
+// Wait blocks until one token is available for key, or ctx is done. It is
+// used to pace outbound provider budgets (§5.4).
+func (l *Limiter) Wait(ctx context.Context, key string) error {
+	for {
+		if l.Allow(key) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(l.waitInterval()):
+		}
+	}
+}
+
+// waitInterval returns a short sleep between budget checks.
+func (l *Limiter) waitInterval() time.Duration {
+	l.mu.Lock()
+	rate := l.rate
+	l.mu.Unlock()
+	if rate <= 0 {
+		return time.Second
+	}
+	d := time.Duration(float64(time.Second) / rate)
+	if d < time.Millisecond {
+		d = time.Millisecond
+	}
+	if d > time.Second {
+		d = time.Second
+	}
+	return d
 }
 
 // Cleanup drops buckets idle for longer than idle. Bounded key space matters

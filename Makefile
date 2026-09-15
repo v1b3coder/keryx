@@ -70,13 +70,16 @@ examples-build: ## Compile-check the showcase consumers in examples/
 
 # --- relay --------------------------------------------------------------------
 
-.PHONY: relay relay-test
+.PHONY: relay relay-test relay-e2e
 relay: ## Build the notification relay into bin/relay
 	mkdir -p $(BIN)
 	cd $(RELAY_DIR) && $(GO) build -o $(CURDIR)/$(BIN)/relay ./cmd/relay
 
 relay-test: ## Run the relay test suite
 	cd $(RELAY_DIR) && $(GO) test ./...
+
+relay-e2e: ## Run the relay end-to-end test against the sibling demo repo
+	cd $(RELAY_DIR) && KERYX_DEMO_DIR=$(abspath $(KERYX_DEMO_REPO)) $(GO) test -run TestEndToEndDemoRepository ./internal/e2e/...
 
 # --- demo publisher artifact --------------------------------------------------
 
@@ -141,9 +144,9 @@ $(DEMO_DIR)/join.txt:
 
 # --- verification -------------------------------------------------------------
 
-test: sdk-test relay-test app-test ## Run every test suite
+test: sdk-test relay-test relay-e2e app-test ## Run every test suite
 
-verify: sdk-vet sdk-test relay-test demo-verify app-test app-test-sdk ## Full local verification
+verify: sdk-vet sdk-test relay-test relay-e2e demo-verify app-test app-test-sdk ## Full local verification
 
 # --- cleanup ------------------------------------------------------------------
 

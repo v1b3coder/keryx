@@ -1,0 +1,25 @@
+{
+  "companyId": "127.0.0.1",
+  "h": "3aa3eb44c7889aa11dded2e4c9d3da1b5d26a72f929fe20c275132524765d48e",
+  "keys": [
+    {
+      "keyid": "88e7c0a081fe4972cbd6badb4d843f31e459cd62b6585375c8ee80f5852ca5c9",
+      "pub": "96d34f07d094304f648f981a4c89e803e6ccbde5d1e2c593ccdb2cec9ca29036"
+    }
+  ],
+  "scopeId": "eea1254e05830616fa0e1a5a1db21cf4a0684aed4498cba74dda77f12342a9f8",
+  "seq": 1789471480,
+  "threshold": 1,
+  "topic": "c9U4I55zbVzbbAXny43KvSDFLMpbqPGk3ij_Ds_v7g4",
+  "wakeup": {
+    "v": 1,
+    "t": "c9U4I55zbVzbbAXny43KvSDFLMpbqPGk3ij_Ds_v7g4",
+    "seq": 1789471480,
+    "sig": [
+      {
+        "keyid": "88e7c0a081fe4972cbd6badb4d843f31e459cd62b6585375c8ee80f5852ca5c9",
+        "sig": "hs3Xtay4Z9u7ybo0-IjdvCvkiGV82qRMH0GRMkVrn-T4ANJnfgaUHGODHDkFa_Q3-6e2CONhu5nH_fjtOgGjCA"
+      }
+    ]
+  }
+}

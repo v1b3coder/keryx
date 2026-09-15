@@ -161,20 +161,32 @@ func (c *FCM) fetchToken(ctx context.Context) (string, time.Time, error) {
 	return tok.AccessToken, expiry, nil
 }
 
-// Send publishes a wake-up to an FCM topic. Returns nil on accepted sends
-// (including empty topics), ErrEmptyTopic for 404/INVALID_ARGUMENT (counted
-// as dispatched), ErrCredentials for 401/403 (operator alarm), and a plain
-// error for other failures.
-func (c *FCM) Send(ctx context.Context, topic string, data map[string]string) error {
+// Send publishes a wake-up envelope to an FCM topic. wakeup is the §4
+// envelope as one JSON string. Returns nil on accepted sends (including empty
+// topics), ErrEmptyTopic for 404/INVALID_ARGUMENT (counted as dispatched),
+// ErrCredentials for 401/403 (operator alarm), and a plain error for other
+// failures.
+func (c *FCM) Send(ctx context.Context, topic string, wakeup []byte) error {
 	token, err := c.AccessToken(ctx)
 	if err != nil {
 		return err
 	}
 	body, err := json.Marshal(map[string]any{
 		"message": map[string]any{
-			"topic":   topic,
-			"data":    data,
-			"android": map[string]any{"priority": "high"},
+			"topic": topic,
+			"data":  map[string]string{"wakeup": string(wakeup)},
+			"android": map[string]any{
+				"priority": "normal",
+			},
+			"apns": map[string]any{
+				"headers": map[string]string{
+					"apns-push-type": "background",
+					"apns-priority":  "5",
+				},
+				"payload": map[string]any{
+					"aps": map[string]any{"content-available": 1},
+				},
+			},
 		},
 	})
 	if err != nil {

@@ -1,15 +1,19 @@
-// Package api implements the relay's publisher and registration HTTP API
-// (SPECIFICATION §5): POST /v1/publish (Bearer API key), and the WebPush
-// registration endpoints (POST/PUT/DELETE /v1/registrations).
+// Package api implements the relay's HTTP surface
+// (relay/SPECIFICATION.md §5): the signature-authorized publish API, the
+// unsigned company synchronization endpoint, the dispatch-status probe, and the
+// UnifiedPush/WebPush registration API, plus the isolated transport-debug mode
+// (§5.7).
 package api
 
 import (
-	"context"
+	"bytes"
 	"crypto/ecdh"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -18,55 +22,76 @@ import (
 	"sync"
 	"time"
 
+	"github.com/v1b3coder/keryx/relay/internal/company"
+	"github.com/v1b3coder/keryx/relay/internal/companytuf"
+	"github.com/v1b3coder/keryx/relay/internal/netpolicy"
 	"github.com/v1b3coder/keryx/relay/internal/ratelimit"
 	"github.com/v1b3coder/keryx/relay/internal/relay"
+	"github.com/v1b3coder/keryx/relay/internal/scope"
 	"github.com/v1b3coder/keryx/relay/internal/store"
 	"github.com/v1b3coder/keryx/relay/internal/topic"
+	"github.com/v1b3coder/keryx/relay/internal/wakeup"
 )
-
-// Server serves the relay HTTP API.
-type Server struct {
-	store  *store.Store
-	relay  *relay.Dispatcher
-	appKey string // optional X-App-Key gate for registrations (§5.2)
-	logger *slog.Logger
-
-	regLimiter *ratelimit.Limiter // per-IP subscription throttling (§5.3)
-
-	mu               sync.Mutex
-	pubLimiters      map[int64]*ratelimit.Limiter // per-publisher publish limits
-	publishBurstMult int
-
-	sem   chan struct{} // max concurrent dispatches (sync path + workers)
-	queue chan *publishJob
-}
-
-// publishJob is an accepted publish request awaiting dispatch (202 path).
-type publishJob struct {
-	ctx         context.Context
-	publisherID int64
-	h           string
-	n, seq      *int
-}
 
 // Options configure a Server.
 type Options struct {
-	AppKey           string // "" disables the registration gate
-	MaxConcurrent    int    // default 64
-	QueueSize        int    // default 4096
-	RegPerMin        int    // per-IP registration throttle, default 30
-	RegBurst         int    // default 60
-	PublishBurstMult int    // burst = rate_per_min * mult, default 2
-	Logger           *slog.Logger
+	Debug       bool
+	DebugAPIKey string
+	BodyMax     int64
+
+	PublishPerMin     int // per-company publish budget, default 60
+	PublishBurst      int // default 120
+	IPPerMin          int // unauthenticated publish per IP, default 120
+	IPBurst           int // default 240
+	RegPerMin         int // registration per IP, default 30
+	RegBurst          int // default 60
+	ProbePerMin       int // status probe per IP, default 120
+	ProbeBurst        int // default 240
+	GlobalProbePerMin int // default 600
+	GlobalProbeBurst  int // default 1200
+
+	SeqFutureTolerance  time.Duration // default 5m
+	ApprovedPushOrigins []string      // additional approved push-service origins
+	Policy              *netpolicy.Policy
+	Logger              *slog.Logger
 }
 
-// New builds the API server and starts the async publish workers.
-func New(st *store.Store, d *relay.Dispatcher, opts Options) *Server {
-	if opts.MaxConcurrent <= 0 {
-		opts.MaxConcurrent = 64
+// Server serves the relay HTTP API.
+type Server struct {
+	store      *store.Store
+	dispatcher *relay.Dispatcher
+	companies  *companytuf.Manager
+	logger     *slog.Logger
+	opts       Options
+	policy     *netpolicy.Policy
+
+	ipLimiter   *ratelimit.Limiter
+	regLimiter  *ratelimit.Limiter
+	probeIP     *ratelimit.Limiter
+	probeGlobal *ratelimit.Limiter
+
+	pubMu       sync.Mutex
+	pubLimiters map[string]*ratelimit.Limiter
+
+	pushOrigins map[string]bool
+}
+
+// New builds the API server.
+func New(st *store.Store, d *relay.Dispatcher, companies *companytuf.Manager, opts Options) *Server {
+	if opts.BodyMax <= 0 {
+		opts.BodyMax = 1 << 20
 	}
-	if opts.QueueSize <= 0 {
-		opts.QueueSize = 4096
+	if opts.PublishPerMin <= 0 {
+		opts.PublishPerMin = 60
+	}
+	if opts.PublishBurst <= 0 {
+		opts.PublishBurst = 120
+	}
+	if opts.IPPerMin <= 0 {
+		opts.IPPerMin = 120
+	}
+	if opts.IPBurst <= 0 {
+		opts.IPBurst = 240
 	}
 	if opts.RegPerMin <= 0 {
 		opts.RegPerMin = 30
@@ -74,145 +99,296 @@ func New(st *store.Store, d *relay.Dispatcher, opts Options) *Server {
 	if opts.RegBurst <= 0 {
 		opts.RegBurst = 60
 	}
-	if opts.PublishBurstMult <= 0 {
-		opts.PublishBurstMult = 2
+	if opts.ProbePerMin <= 0 {
+		opts.ProbePerMin = 120
+	}
+	if opts.ProbeBurst <= 0 {
+		opts.ProbeBurst = 240
+	}
+	if opts.GlobalProbePerMin <= 0 {
+		opts.GlobalProbePerMin = 600
+	}
+	if opts.GlobalProbeBurst <= 0 {
+		opts.GlobalProbeBurst = 1200
+	}
+	if opts.SeqFutureTolerance <= 0 {
+		opts.SeqFutureTolerance = 5 * time.Minute
+	}
+	if opts.Policy == nil {
+		opts.Policy = netpolicy.New()
 	}
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
 	s := &Server{
 		store:       st,
-		relay:       d,
-		appKey:      opts.AppKey,
+		dispatcher:  d,
+		companies:   companies,
 		logger:      opts.Logger,
+		opts:        opts,
+		policy:      opts.Policy,
+		ipLimiter:   ratelimit.New(opts.IPPerMin, opts.IPBurst),
 		regLimiter:  ratelimit.New(opts.RegPerMin, opts.RegBurst),
-		pubLimiters: make(map[int64]*ratelimit.Limiter),
-		sem:         make(chan struct{}, opts.MaxConcurrent),
-		queue:       make(chan *publishJob, opts.QueueSize),
+		probeIP:     ratelimit.New(opts.ProbePerMin, opts.ProbeBurst),
+		probeGlobal: ratelimit.New(opts.GlobalProbePerMin, opts.GlobalProbeBurst),
+		pubLimiters: map[string]*ratelimit.Limiter{},
+		pushOrigins: defaultPushOrigins(),
 	}
-	s.publishBurstMult = opts.PublishBurstMult
-	for i := 0; i < opts.MaxConcurrent; i++ {
-		go s.worker()
+	for _, origin := range opts.ApprovedPushOrigins {
+		s.pushOrigins[origin] = true
 	}
 	return s
 }
 
-// Handler returns the http.Handler with all routes registered.
+// Handler returns the http.Handler with the routes for the selected mode.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/publish", s.handlePublish)
 	mux.HandleFunc("POST /v1/registrations", s.handleRegistrationCreate)
 	mux.HandleFunc("PUT /v1/registrations/{id}", s.handleRegistrationUpdate)
 	mux.HandleFunc("DELETE /v1/registrations/{id}", s.handleRegistrationDelete)
+	mux.HandleFunc("POST /v1/registrations/{id}/heartbeat", s.handleRegistrationHeartbeat)
+	if s.opts.Debug {
+		mux.HandleFunc("POST /debug/v1/publish", s.handleDebugPublish)
+		mux.HandleFunc("GET /debug/v1/publishes/{request_id}", s.handleProbe)
+	} else {
+		mux.HandleFunc("POST /v1/publish", s.handlePublish)
+		mux.HandleFunc("GET /v1/publishes/{request_id}", s.handleProbe)
+		mux.HandleFunc("POST /v1/companies/{company_id}/refresh", s.handleCompanyRefresh)
+	}
 	return s.logRequests(mux)
 }
 
-func (s *Server) worker() {
-	for job := range s.queue {
-		s.sem <- struct{}{}
-		if _, err := s.dispatch(job.ctx, job.publisherID, job.h, job.n, job.seq); err != nil {
-			s.logger.Error("queued publish failed", "err", err)
-		}
-		<-s.sem
+// Cleanup drops idle rate-limit state.
+func (s *Server) Cleanup(idle time.Duration) {
+	s.ipLimiter.Cleanup(idle)
+	s.regLimiter.Cleanup(idle)
+	s.probeIP.Cleanup(idle)
+	s.probeGlobal.Cleanup(idle)
+	s.pubMu.Lock()
+	defer s.pubMu.Unlock()
+	for id, l := range s.pubLimiters {
+		l.Cleanup(idle)
+		_ = id
 	}
 }
 
 // --- publish ---
 
 type publishRequest struct {
-	V   int    `json:"v"`
-	H   string `json:"h"`
-	N   *int   `json:"n"`
-	Seq *int   `json:"seq"`
+	V         int          `json:"v"`
+	CompanyID string       `json:"company_id"`
+	ScopeID   string       `json:"scope_id"`
+	H         string       `json:"h"`
+	Seq       int64        `json:"seq"`
+	Sig       []wakeup.Sig `json:"sig"`
 }
 
 func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
-	apiKey, ok := bearerToken(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing or malformed Authorization header")
-		return
-	}
-	pub, err := s.store.LookupPublisher(apiKey)
-	if err != nil {
-		if errors.Is(err, store.ErrUnknownKey) {
-			writeError(w, http.StatusUnauthorized, "unknown API key")
-			return
-		}
-		s.internalError(w, err)
-		return
-	}
+	s.publish(w, r, false)
+}
 
+func (s *Server) handleDebugPublish(w http.ResponseWriter, r *http.Request) {
+	if !s.debugAuthorized(w, r) {
+		return
+	}
+	s.publish(w, r, true)
+}
+
+func (s *Server) publish(w http.ResponseWriter, r *http.Request, debug bool) {
+	// Unauthenticated traffic is bounded by IP and globally before any
+	// signature or company-state work (§5.4).
+	if !s.ipLimiter.Allow(remoteIP(r)) {
+		writeError(w, http.StatusTooManyRequests, "publish rate limit exceeded")
+		return
+	}
 	var req publishRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if err := s.decodeStrict(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.V != 1 {
 		writeError(w, http.StatusBadRequest, "v must be 1")
 		return
 	}
+	if err := company.Validate(req.CompanyID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	companyID := req.CompanyID
+	if err := topic.ValidateScopeID(req.ScopeID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := topic.ValidateH(req.H); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if req.N != nil && *req.N < 0 {
-		writeError(w, http.StatusBadRequest, "n must be >= 0")
+	if req.Seq < 1 || req.Seq > wakeup.MaxSeq {
+		writeError(w, http.StatusBadRequest, "seq must be an integer from 1 through 9007199254740991")
 		return
 	}
-	if req.Seq != nil && *req.Seq < 0 {
-		writeError(w, http.StatusBadRequest, "seq must be >= 0")
+	if time.Unix(req.Seq, 0).After(time.Now().Add(s.opts.SeqFutureTolerance)) {
+		writeError(w, http.StatusBadRequest, "seq is implausibly far in the future")
+		return
+	}
+	if !debug && len(req.Sig) == 0 {
+		writeError(w, http.StatusBadRequest, "sig must be a nonempty array")
 		return
 	}
 
-	if !s.publisherLimiter(pub).Allow("") {
-		writeError(w, http.StatusTooManyRequests, "publish rate limit exceeded")
+	tpc, err := topic.Derive(companyID, req.ScopeID, req.H)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	job := &publishJob{
-		ctx:         r.Context(),
-		publisherID: pub.ID,
-		h:           req.H,
-		n:           req.N,
-		seq:         req.Seq,
-	}
-	// Synchronous fan-out when capacity is available; queue (202) under load.
-	select {
-	case s.sem <- struct{}{}:
-		res, err := s.dispatch(job.ctx, job.publisherID, job.h, job.n, job.seq)
-		<-s.sem
-		if err != nil {
-			s.internalError(w, err)
+	var tbl *scope.Table
+	if !debug {
+		tbl = s.companies.Table(companyID)
+		if tbl == nil {
+			if !s.companies.Known(companyID) {
+				writeError(w, http.StatusNotFound, "company not known; synchronize first")
+				return
+			}
+			s.companies.Hint(companyID)
+			writeError(w, http.StatusServiceUnavailable, "company authorization unavailable; refresh pending")
 			return
 		}
-		tpc, _ := topic.Topic(job.h)
-		writeJSON(w, http.StatusOK, map[string]any{"topic": tpc, "delivered": res})
-	case <-r.Context().Done():
-		return
-	default:
-		select {
-		case s.queue <- job:
-			w.WriteHeader(http.StatusAccepted)
-		default:
-			writeError(w, http.StatusServiceUnavailable, "relay overloaded; retry later")
+		entry, ok := tbl.Lookup(req.ScopeID)
+		if !ok {
+			writeError(w, http.StatusForbidden, "unknown scope for company")
+			return
+		}
+		if err := wakeup.Verify(int64(req.V), tpc, req.Seq, req.Sig, entry.Keys, entry.Threshold); err != nil {
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		if !s.companyLimiter(companyID).Allow("") {
+			writeError(w, http.StatusTooManyRequests, "company publish rate limit exceeded")
+			return
 		}
 	}
-}
 
-// dispatch runs the fan-out and returns the §5.1 result.
-func (s *Server) dispatch(ctx context.Context, publisherID int64, h string, n, seq *int) (relay.Result, error) {
-	return s.relay.Publish(ctx, publisherID, h, n, seq)
-}
-
-func (s *Server) publisherLimiter(pub *store.Publisher) *ratelimit.Limiter {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	l, ok := s.pubLimiters[pub.ID]
-	if !ok {
-		l = ratelimit.New(pub.RatePerMin, pub.RatePerMin*s.publishBurstMult)
-		s.pubLimiters[pub.ID] = l
+	wakeupJSON, err := json.Marshal(wakeup.Wakeup{V: int64(req.V), T: tpc, Seq: req.Seq, Sig: req.Sig})
+	if err != nil {
+		s.internalError(w, err)
+		return
 	}
-	return l
+
+	out, err := s.dispatcher.Publish(r.Context(), companyID, req.ScopeID, tpc, req.Seq, wakeupJSON)
+	if err != nil {
+		if errors.Is(err, relay.ErrQueueFull) {
+			writeError(w, http.StatusServiceUnavailable, "dispatch queue saturated; retry later")
+			return
+		}
+		s.internalError(w, err)
+		return
+	}
+	if out.Suppressed {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"topic":      tpc,
+			"suppressed": true,
+			"providers":  map[string]any{"fcm": out.FCM, "webpush": webpushCounts(out.WebPush)},
+		})
+		return
+	}
+	if out.Async {
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"topic":      tpc,
+			"request_id": out.RequestID,
+			"status":     "accepted",
+			"expires_at": out.ExpiresAt.UTC().Format(time.RFC3339),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"topic":      tpc,
+		"suppressed": false,
+		"providers":  map[string]any{"fcm": out.FCM, "webpush": webpushCounts(out.WebPush)},
+	})
+}
+
+func webpushCounts(w relay.WebPushResult) map[string]int {
+	return map[string]int{"sent": w.Sent, "failed": w.Failed, "dead": w.Dead}
+}
+
+// --- dispatch status ---
+
+func (s *Server) handleProbe(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if !s.probeIP.Allow(remoteIP(r)) || !s.probeGlobal.Allow("global") {
+		writeError(w, http.StatusTooManyRequests, "probe rate limit exceeded")
+		return
+	}
+	requestID := r.PathValue("request_id")
+	e, err := s.store.EventByRequestID(requestID, time.Now().UTC())
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "unknown or expired request_id")
+			return
+		}
+		s.internalError(w, err)
+		return
+	}
+	switch e.Status {
+	case store.StatusPending:
+		writeJSON(w, http.StatusOK, map[string]any{
+			"request_id": requestID,
+			"topic":      e.Topic,
+			"status":     "pending",
+		})
+	case store.StatusSuperseded:
+		resp := map[string]any{
+			"request_id": requestID,
+			"topic":      e.Topic,
+			"status":     "superseded",
+		}
+		if e.SupersededByID != nil {
+			if next, err := s.store.EventByID(*e.SupersededByID); err == nil {
+				resp["superseded_by"] = next.RequestID
+				resp["expires_at"] = next.RequestExpiresAt.UTC().Format(time.RFC3339)
+			}
+		}
+		writeJSON(w, http.StatusOK, resp)
+	default:
+		writeJSON(w, http.StatusOK, map[string]any{
+			"request_id": requestID,
+			"topic":      e.Topic,
+			"status":     "complete",
+			"providers": map[string]any{
+				"fcm": e.FCM,
+				"webpush": map[string]int{
+					"attempted": e.WebPushAttempted,
+					"sent":      e.WebPushSent,
+					"failed":    e.WebPushFailed,
+					"dead":      e.WebPushDead,
+				},
+			},
+		})
+	}
+}
+
+// --- company synchronization ---
+
+func (s *Server) handleCompanyRefresh(w http.ResponseWriter, r *http.Request) {
+	companyID := r.PathValue("company_id")
+	if err := company.Validate(companyID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if r.ContentLength > 0 {
+		writeError(w, http.StatusBadRequest, "unexpected request body")
+		return
+	}
+	// Unknown-domain discovery has a separate, stricter admission budget
+	// (§5.2); known companies keep their trust state when it is exhausted.
+	if !s.companies.Known(companyID) && !s.companies.DiscoveryAllowed(remoteIP(r)) {
+		w.Header().Set("Retry-After", "60")
+		writeError(w, http.StatusTooManyRequests, "discovery rate limit exceeded")
+		return
+	}
+	s.companies.Hint(companyID)
+	writeJSON(w, http.StatusAccepted, map[string]string{"company_id": companyID, "status": "scheduled"})
 }
 
 // --- registrations ---
@@ -224,126 +400,183 @@ type registrationRequest struct {
 		Auth   string `json:"auth"`
 	} `json:"keys"`
 	Topics []string `json:"topics"`
+	Source string   `json:"source"`
 }
 
 func (s *Server) handleRegistrationCreate(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeApp(w, r) {
-		return
-	}
 	if !s.regLimiter.Allow(remoteIP(r)) {
 		writeError(w, http.StatusTooManyRequests, "registration rate limit exceeded")
 		return
 	}
 	var req registrationRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	if err := validateRegistrationRequest(&req); err != nil {
+	if err := s.decodeStrict(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	id, err := s.store.UpsertRegistration(req.Endpoint, req.Keys.P256DH, req.Keys.Auth,
-		r.UserAgent(), req.Topics)
-	if err != nil {
-		s.internalError(w, err)
+	if err := s.validateRegistration(req.Endpoint, req.Keys.P256DH, req.Keys.Auth, req.Topics); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"id": id})
+	source := req.Source
+	if source == "" {
+		source = "pwa"
+	}
+	if source != "pwa" && source != "android_up" {
+		writeError(w, http.StatusBadRequest, "source must be pwa or android_up")
+		return
+	}
+	id, token, err := s.store.CreateRegistration(req.Endpoint, req.Keys.P256DH, req.Keys.Auth, source, r.UserAgent(), req.Topics, time.Now().UTC())
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrConflict):
+			writeError(w, http.StatusConflict, "endpoint already registered")
+		case errors.Is(err, store.ErrTooManyTopics):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			s.internalError(w, err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": id, "management_token": token})
 }
 
 func (s *Server) handleRegistrationUpdate(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeApp(w, r) {
+	token, ok := bearerToken(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing management token")
 		return
 	}
 	if !s.regLimiter.Allow(remoteIP(r)) {
 		writeError(w, http.StatusTooManyRequests, "registration rate limit exceeded")
 		return
 	}
-	id := r.PathValue("id")
 	var req struct {
-		Topics []string `json:"topics"`
+		Topics   []string `json:"topics"`
+		Endpoint string   `json:"endpoint"`
+		Keys     *struct {
+			P256DH string `json:"p256dh"`
+			Auth   string `json:"auth"`
+		} `json:"keys"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if err := s.decodeStrict(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	for _, t := range req.Topics {
-		if err := topic.ValidateTopic(t); err != nil {
+	if err := s.validateTopics(req.Topics); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var endpoint, p256dh, auth *string
+	if req.Endpoint != "" || req.Keys != nil {
+		if req.Endpoint == "" || req.Keys == nil {
+			writeError(w, http.StatusBadRequest, "endpoint and keys must be supplied together")
+			return
+		}
+		if err := s.validateEndpoint(req.Endpoint, req.Keys.P256DH, req.Keys.Auth); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		endpoint, p256dh, auth = &req.Endpoint, &req.Keys.P256DH, &req.Keys.Auth
 	}
-	if len(req.Topics) > store.MaxTopicsPerRegistration {
-		writeError(w, http.StatusBadRequest, store.ErrTooManyTopics.Error())
-		return
-	}
-	if err := s.store.ReplaceRegistrationTopics(id, req.Topics); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "registration not found")
-			return
-		}
+	id := r.PathValue("id")
+	err := s.store.UpdateRegistration(id, token, endpoint, p256dh, auth, req.Topics, time.Now().UTC())
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]string{"id": id})
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "registration not found")
+	case errors.Is(err, store.ErrUnauthorized):
+		writeError(w, http.StatusUnauthorized, "invalid management token")
+	case errors.Is(err, store.ErrConflict):
+		writeError(w, http.StatusConflict, "endpoint owned by another registration")
+	case errors.Is(err, store.ErrTooManyTopics):
+		writeError(w, http.StatusBadRequest, err.Error())
+	default:
 		s.internalError(w, err)
-		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"id": id})
 }
 
 func (s *Server) handleRegistrationDelete(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeApp(w, r) {
+	token, ok := bearerToken(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing management token")
 		return
 	}
 	if !s.regLimiter.Allow(remoteIP(r)) {
 		writeError(w, http.StatusTooManyRequests, "registration rate limit exceeded")
 		return
 	}
-	if err := s.store.DeleteRegistration(r.PathValue("id")); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "registration not found")
-			return
-		}
+	err := s.store.DeleteRegistration(r.PathValue("id"), token)
+	switch {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "registration not found")
+	case errors.Is(err, store.ErrUnauthorized):
+		writeError(w, http.StatusUnauthorized, "invalid management token")
+	default:
 		s.internalError(w, err)
+	}
+}
+
+func (s *Server) handleRegistrationHeartbeat(w http.ResponseWriter, r *http.Request) {
+	token, ok := bearerToken(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing management token")
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	err := s.store.HeartbeatRegistration(r.PathValue("id"), token, time.Now().UTC())
+	switch {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "registration not found")
+	case errors.Is(err, store.ErrUnauthorized):
+		writeError(w, http.StatusUnauthorized, "invalid management token")
+	default:
+		s.internalError(w, err)
+	}
 }
 
-// authorizeApp checks the optional X-App-Key gate (§5.2). Always allows when
-// no app key is configured.
-func (s *Server) authorizeApp(w http.ResponseWriter, r *http.Request) bool {
-	if s.appKey == "" {
-		return true
+// --- validation ---
+
+func (s *Server) validateRegistration(endpoint, p256dh, auth string, topics []string) error {
+	if err := s.validateEndpoint(endpoint, p256dh, auth); err != nil {
+		return err
 	}
-	got := r.Header.Get("X-App-Key")
-	if subtle.ConstantTimeCompare([]byte(got), []byte(s.appKey)) != 1 {
-		writeError(w, http.StatusUnauthorized, "invalid app key")
-		return false
-	}
-	return true
+	return s.validateTopics(topics)
 }
 
-// validateRegistrationRequest enforces §5.2: https endpoint, well-formed
-// P-256 p256dh and 16-byte auth secret, only derived topics, ≤ 200 topics.
-func validateRegistrationRequest(req *registrationRequest) error {
-	u, err := url.Parse(req.Endpoint)
-	if err != nil || u.Scheme != "https" || u.Host == "" {
-		return errors.New("endpoint: must be an https:// URL")
+func (s *Server) validateEndpoint(endpoint, p256dh, auth string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return errors.New("endpoint: must be a URL")
 	}
-	p256dh, err := base64.RawURLEncoding.DecodeString(req.Keys.P256DH)
-	if err != nil || len(p256dh) != 65 || p256dh[0] != 0x04 {
+	if _, err := s.policy.CheckURL(endpoint); err != nil {
+		return fmt.Errorf("endpoint: %w", err)
+	}
+	if !s.pushOrigins[u.Scheme+"://"+u.Host] {
+		return errors.New("endpoint: origin is not an approved push-service origin")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(p256dh)
+	if err != nil || len(raw) != 65 || raw[0] != 0x04 {
 		return errors.New("keys.p256dh: must be base64url of a 65-byte uncompressed P-256 point")
 	}
-	if _, err := ecdh.P256().NewPublicKey(p256dh); err != nil {
+	if _, err := ecdh.P256().NewPublicKey(raw); err != nil {
 		return errors.New("keys.p256dh: not a valid P-256 point")
 	}
-	auth, err := base64.RawURLEncoding.DecodeString(req.Keys.Auth)
-	if err != nil || len(auth) != 16 {
+	authRaw, err := base64.RawURLEncoding.DecodeString(auth)
+	if err != nil || len(authRaw) != 16 {
 		return errors.New("keys.auth: must be base64url of a 16-byte secret")
 	}
-	if len(req.Topics) > store.MaxTopicsPerRegistration {
+	return nil
+}
+
+func (s *Server) validateTopics(topics []string) error {
+	if len(topics) > store.MaxTopicsPerRegistration {
 		return store.ErrTooManyTopics
 	}
-	for _, t := range req.Topics {
+	for _, t := range topics {
 		if err := topic.ValidateTopic(t); err != nil {
 			return err
 		}
@@ -352,6 +585,105 @@ func validateRegistrationRequest(req *registrationRequest) error {
 }
 
 // --- helpers ---
+
+func (s *Server) companyLimiter(companyID string) *ratelimit.Limiter {
+	s.pubMu.Lock()
+	defer s.pubMu.Unlock()
+	l, ok := s.pubLimiters[companyID]
+	if !ok {
+		l = ratelimit.New(s.opts.PublishPerMin, s.opts.PublishBurst)
+		s.pubLimiters[companyID] = l
+	}
+	return l
+}
+
+func (s *Server) debugAuthorized(w http.ResponseWriter, r *http.Request) bool {
+	token, ok := bearerToken(r)
+	if !ok || s.opts.DebugAPIKey == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.opts.DebugAPIKey)) != 1 {
+		writeError(w, http.StatusUnauthorized, "invalid debug API key")
+		return false
+	}
+	return true
+}
+
+// decodeStrict decodes a bounded JSON body, rejecting unknown fields,
+// duplicate member names and trailing data.
+func (s *Server) decodeStrict(w http.ResponseWriter, r *http.Request, v any) error {
+	body, err := io.ReadAll(io.LimitReader(r.Body, s.opts.BodyMax+1))
+	if err != nil {
+		return errors.New("invalid JSON body")
+	}
+	if int64(len(body)) > s.opts.BodyMax {
+		return errors.New("request body too large")
+	}
+	if err := checkNoDuplicateKeys(body); err != nil {
+		return err
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	dec.UseNumber()
+	if err := dec.Decode(v); err != nil {
+		return fmt.Errorf("invalid JSON body: %w", err)
+	}
+	if err := ensureEOF(dec); err != nil {
+		return err
+	}
+	return nil
+}
+
+func checkNoDuplicateKeys(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	return walkKeys(dec)
+}
+
+func walkKeys(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := map[string]bool{}
+		for dec.More() {
+			kt, err := dec.Token()
+			if err != nil {
+				return nil
+			}
+			key, _ := kt.(string)
+			if seen[key] {
+				return fmt.Errorf("duplicate JSON member %q", key)
+			}
+			seen[key] = true
+			if err := walkKeys(dec); err != nil {
+				return err
+			}
+		}
+		_, err := dec.Token()
+		return err
+	case '[':
+		for dec.More() {
+			if err := walkKeys(dec); err != nil {
+				return err
+			}
+		}
+		_, err := dec.Token()
+		return err
+	}
+	return nil
+}
+
+func ensureEOF(dec *json.Decoder) error {
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return errors.New("trailing data after JSON body")
+	}
+	return nil
+}
 
 func bearerToken(r *http.Request) (string, bool) {
 	h := r.Header.Get("Authorization")
@@ -385,27 +717,34 @@ func (s *Server) internalError(w http.ResponseWriter, err error) {
 	writeError(w, http.StatusInternalServerError, "internal error")
 }
 
-// Cleanup drops idle rate-limit state (called periodically by maintenance).
-func (s *Server) Cleanup(idle time.Duration) {
-	s.regLimiter.Cleanup(idle)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for id, l := range s.pubLimiters {
-		if _, err := s.store.PublisherByID(id); err != nil {
-			delete(s.pubLimiters, id)
-		}
-		l.Cleanup(idle)
+func defaultPushOrigins() map[string]bool {
+	out := map[string]bool{
+		"https://ntfy.sh": true,
 	}
+	for _, origin := range []string{
+		"https://fcm.googleapis.com",
+		"https://updates.push.services.mozilla.com",
+		"https://push.apple.com",
+		"https://notify.windows.com",
+		"https://push.services.mozilla.com",
+	} {
+		out[origin] = true
+	}
+	return out
 }
 
-// logRequests logs method, path, status, and duration (topics and hashes
-// only — never payloads, §9).
+// logRequests logs method, path, status and duration (topics and hashes only —
+// never payloads or capabilities, §9).
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: 200}
 		next.ServeHTTP(rec, r)
-		s.logger.Info("request", "method", r.Method, "path", r.URL.Path,
+		path := r.URL.Path
+		if strings.HasPrefix(path, "/v1/publishes/") || strings.HasPrefix(path, "/debug/v1/publishes/") {
+			path = "/v1/publishes/<redacted>"
+		}
+		s.logger.Info("request", "method", r.Method, "path", path,
 			"status", rec.status, "dur", time.Since(start).Round(time.Millisecond))
 	})
 }

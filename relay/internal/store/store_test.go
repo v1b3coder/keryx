@@ -1,304 +1,320 @@
 package store
 
 import (
-	"database/sql"
+	"context"
 	"errors"
-	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/v1b3coder/keryx/relay/internal/tufclient"
 )
 
 func openTest(t *testing.T) *Store {
 	t.Helper()
-	s, err := Open(filepath.Join(t.TempDir(), "relay.db"))
+	st, err := Open(":memory:", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
-	return s
+	t.Cleanup(func() { st.Close() })
+	return st
 }
 
-func TestOpenWalAndVersion(t *testing.T) {
-	s := openTest(t)
-	var mode string
-	if err := s.db.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil {
-		t.Fatal(err)
-	}
-	if mode != "wal" {
-		t.Fatalf("journal_mode = %q, want wal", mode)
-	}
-	var version int
-	if err := s.db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil {
-		t.Fatal(err)
-	}
-	if version != SchemaVersion {
-		t.Fatalf("schema version = %d, want %d", version, SchemaVersion)
-	}
-}
+func TestCompanyStateRoundTrip(t *testing.T) {
+	st := openTest(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	root := []byte(`{"signed":{"version":1}}`)
 
-func TestOpenRefusesMismatchedVersion(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "relay.db")
-	s, err := Open(path)
+	if _, err := st.Company("company.example"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown company: err = %v", err)
+	}
+	// Root progress is persisted immediately, even before a full refresh.
+	if err := st.SaveRoot("company.example", root, 1, now); err != nil {
+		t.Fatal(err)
+	}
+	c, err := st.Company("company.example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`UPDATE schema_version SET version = ?`, SchemaVersion+1); err != nil {
+	if c.RootVersion != 1 || string(c.Root) != string(root) {
+		t.Fatalf("company = %+v", c)
+	}
+	// A completed refresh persists targets and refreshed_at.
+	targets := []byte(`{"signed":{"_type":"targets"}}`)
+	state := &tufclient.State{
+		CompanyID:      "company.example",
+		Root:           root,
+		RootVersion:    2,
+		Targets:        targets,
+		TargetsVersion: 3,
+		TargetsExpires: now.Add(24 * time.Hour),
+		RefreshedAt:    now,
+	}
+	if err := st.SaveState(state, now.Add(12*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	s.Close()
-
-	_, err = Open(path)
-	if !errors.Is(err, ErrSchemaMismatch) {
-		t.Fatalf("Open on mismatched version = %v, want ErrSchemaMismatch", err)
-	}
-}
-
-func TestPublisherLifecycle(t *testing.T) {
-	s := openTest(t)
-	key, err := s.CreatePublisher("Acme", "company.example", 120)
+	c, err = st.Company("company.example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := s.LookupPublisher(key)
-	if err != nil {
-		t.Fatal(err)
+	if c.RootVersion != 2 || c.TargetsVersion != 3 || string(c.Targets) != string(targets) {
+		t.Fatalf("company = %+v", c)
 	}
-	if p.Name != "Acme" || p.CompanyID != "company.example" || p.RatePerMin != 120 {
-		t.Fatalf("publisher = %+v", p)
+	if got := c.State().CompanyID; got != "company.example" {
+		t.Fatalf("state company = %q", got)
 	}
-	if _, err := s.LookupPublisher("wrong-key"); !errors.Is(err, ErrUnknownKey) {
-		t.Fatalf("LookupPublisher(wrong key) = %v, want ErrUnknownKey", err)
-	}
-	// Key is never stored in plaintext.
-	var hash string
-	if err := s.db.QueryRow(`SELECT api_key_hash FROM publishers WHERE id = ?`, p.ID).Scan(&hash); err != nil {
-		t.Fatal(err)
-	}
-	if hash == key || hash == "" {
-		t.Fatalf("api_key_hash not hashed: %q", hash)
-	}
-	if HashAPIKey(key) != hash {
-		t.Fatalf("HashAPIKey mismatch")
+	companies, err := st.Companies()
+	if err != nil || len(companies) != 1 {
+		t.Fatalf("companies = %v, %v", companies, err)
 	}
 }
 
-func TestRegistrationUpsertAndReplace(t *testing.T) {
-	s := openTest(t)
-	endpoint := "https://push.example.com/abc"
-	id, err := s.UpsertRegistration(endpoint, "p256dh1", "auth1", "ua", []string{"n-b-aaa", "n-o-bbb"})
+func TestReserveRefreshCoalesces(t *testing.T) {
+	st := openTest(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := st.SaveRoot("company.example", []byte("root"), 1, now); err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := st.ReserveRefresh("company.example", now, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id == "" {
-		t.Fatal("empty id")
+	if !reserved.Equal(now) {
+		t.Fatalf("first reservation = %v, want %v", reserved, now)
 	}
-
-	// Same endpoint again: replaces in place, same id, topics replaced.
-	id2, err := s.UpsertRegistration(endpoint, "p256dh2", "auth2", "ua2", []string{"n-b-ccc"})
+	// A second hint during the interval must not move the reservation later.
+	later := now.Add(10 * time.Second)
+	reserved, err = st.ReserveRefresh("company.example", later, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id2 != id {
-		t.Fatalf("replace by endpoint changed id: %q -> %q", id, id2)
+	if !reserved.Equal(now.Add(time.Minute)) {
+		t.Fatalf("coalesced reservation = %v, want %v", reserved, now.Add(time.Minute))
 	}
-	regs, err := s.RegistrationsForTopic("n-b-aaa")
+	// The reserved time is persisted, so it survives a restart.
+	c, err := st.Company("company.example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(regs) != 0 {
-		t.Fatalf("old topic still present: %d", len(regs))
+	if !c.NextRefreshAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("next_refresh_at = %v", c.NextRefreshAt)
 	}
-	regs, err = s.RegistrationsForTopic("n-b-ccc")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(regs) != 1 || regs[0].P256DH != "p256dh2" {
-		t.Fatalf("regs = %+v", regs)
+	if _, err := st.ReserveRefresh("unknown.example", now, time.Minute); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown reserve: err = %v", err)
 	}
 }
 
-func TestRegistrationValidation(t *testing.T) {
-	s := openTest(t)
-	if _, err := s.UpsertRegistration("http://insecure.example/x", "p", "a", "", nil); err == nil {
-		t.Fatal("accepted non-https endpoint")
-	}
-	if _, err := s.UpsertRegistration("https://push.example/x", "", "a", "", nil); err == nil {
-		t.Fatal("accepted empty p256dh")
-	}
-	if _, err := s.UpsertRegistration("https://push.example/x", "p", "", "", nil); err == nil {
-		t.Fatal("accepted empty auth")
-	}
-}
+func TestEventLifecycle(t *testing.T) {
+	st := openTest(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	topic := strings.Repeat("a", 43)
 
-func TestRegistrationTopicCap(t *testing.T) {
-	s := openTest(t)
-	topics := make([]string, MaxTopicsPerRegistration+1)
-	for i := range topics {
-		topics[i] = "n-b-" + pad(i)
-	}
-	if _, err := s.UpsertRegistration("https://push.example/x", "p", "a", "", topics); !errors.Is(err, ErrTooManyTopics) {
-		t.Fatalf("Upsert = %v, want ErrTooManyTopics", err)
-	}
-	id, err := s.UpsertRegistration("https://push.example/x", "p", "a", "", topics[:MaxTopicsPerRegistration])
+	id, requestID, expires, err := st.AcceptEvent("company.example", strings.Repeat("b", 64), topic, time.Hour, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ReplaceRegistrationTopics(id, topics); !errors.Is(err, ErrTooManyTopics) {
-		t.Fatalf("Replace = %v, want ErrTooManyTopics", err)
+	if len(requestID) != 43 || !expires.Equal(now.Add(time.Hour)) {
+		t.Fatalf("request_id = %q expires = %v", requestID, expires)
 	}
-}
-
-func TestRegistrationReplaceAndDelete(t *testing.T) {
-	s := openTest(t)
-	id, err := s.UpsertRegistration("https://push.example/x", "p", "a", "", []string{"n-b-aaa"})
+	e, err := st.EventByRequestID(requestID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ReplaceRegistrationTopics(id, []string{"n-b-bbb", "n-b-ccc"}); err != nil {
+	if e.Status != StatusPending || e.Topic != topic {
+		t.Fatalf("event = %+v", e)
+	}
+	if err := st.CompleteEvent(id, FCMAccepted, 10, 8, 1, 1, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if regs, _ := s.RegistrationsForTopic("n-b-aaa"); len(regs) != 0 {
-		t.Fatal("old topic survived replace")
-	}
-	if regs, _ := s.RegistrationsForTopic("n-b-bbb"); len(regs) != 1 {
-		t.Fatal("new topic missing")
-	}
-	if err := s.ReplaceRegistrationTopics("no-such-id", nil); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Replace unknown = %v, want ErrNotFound", err)
-	}
-	if err := s.DeleteRegistration(id); err != nil {
+	e, err = st.EventByRequestID(requestID, now)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteRegistration(id); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Delete again = %v, want ErrNotFound", err)
+	if e.Status != StatusComplete || e.FCM != FCMAccepted ||
+		e.WebPushAttempted != 10 || e.WebPushSent != 8 || e.WebPushFailed != 1 || e.WebPushDead != 1 {
+		t.Fatalf("event = %+v", e)
 	}
-	// Cascade removed topics too.
-	if regs, _ := s.RegistrationsForTopic("n-b-bbb"); len(regs) != 0 {
-		t.Fatal("topics not cascaded on delete")
+	// Expired capabilities return 404-equivalent ErrNotFound.
+	if _, err := st.EventByRequestID(requestID, now.Add(2*time.Hour)); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expired probe: err = %v", err)
 	}
 }
 
-func TestRegistrationsForTopic(t *testing.T) {
-	s := openTest(t)
-	for i := 0; i < 3; i++ {
-		if _, err := s.UpsertRegistration(
-			"https://push.example/"+pad(i), "p", "a", "", []string{"n-b-shared", "n-b-" + pad(i)},
-		); err != nil {
+func TestEventSupersession(t *testing.T) {
+	st := openTest(t)
+	now := time.Now().UTC()
+	topic := strings.Repeat("a", 43)
+	id1, req1, _, err := st.AcceptEvent("c", strings.Repeat("b", 64), topic, time.Hour, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id2, req2, _, err := st.AcceptEvent("c", strings.Repeat("b", 64), topic, time.Hour, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SupersedeEvent(id1, id2, now); err != nil {
+		t.Fatal(err)
+	}
+	e, err := st.EventByRequestID(req1, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Status != StatusSuperseded || e.SupersededByID == nil || *e.SupersededByID != id2 {
+		t.Fatalf("event = %+v", e)
+	}
+	next, err := st.EventByID(id2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.RequestID != req2 {
+		t.Fatalf("successor request_id = %q, want %q", next.RequestID, req2)
+	}
+}
+
+func TestClosePendingAndPrune(t *testing.T) {
+	st := openTest(t)
+	now := time.Now().UTC()
+	_, req, _, err := st.AcceptEvent("c", strings.Repeat("b", 64), strings.Repeat("a", 43), time.Hour, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := st.ClosePendingEvents(now); err != nil || n != 1 {
+		t.Fatalf("closed = %d, %v", n, err)
+	}
+	e, err := st.EventByRequestID(req, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Status != StatusComplete || e.FCM != FCMFailed {
+		t.Fatalf("event = %+v", e)
+	}
+	if n, err := st.PruneEventLog(time.Nanosecond, now.Add(time.Hour)); err != nil || n != 1 {
+		t.Fatalf("pruned = %d, %v", n, err)
+	}
+}
+
+func TestRegistrationLifecycle(t *testing.T) {
+	st := openTest(t)
+	now := time.Now().UTC()
+	topics := []string{strings.Repeat("a", 43), strings.Repeat("b", 43)}
+	id, token, err := st.CreateRegistration("https://push.example/x", "p256dh", "auth", "pwa", "ua", topics, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(token) != 43 {
+		t.Fatalf("management token = %q", token)
+	}
+	// The endpoint is unique: a second creation conflicts and never overwrites.
+	if _, _, err := st.CreateRegistration("https://push.example/x", "p", "a", "pwa", "ua", nil, now); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate endpoint: err = %v", err)
+	}
+	// Wrong token is unauthorized; unknown id is not found.
+	if err := st.HeartbeatRegistration(id, "wrong", now); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("wrong token: err = %v", err)
+	}
+	if err := st.HeartbeatRegistration("nope", token, now); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown id: err = %v", err)
+	}
+	// A valid heartbeat bumps last_seen.
+	if err := st.HeartbeatRegistration(id, token, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := st.TopicCount(topics[0]); err != nil || n != 1 {
+		t.Fatalf("topic count = %d, %v", n, err)
+	}
+	// Replace the topic set.
+	if err := st.UpdateRegistration(id, token, nil, nil, nil, []string{strings.Repeat("c", 43)}, now); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := st.TopicCount(topics[0]); n != 0 {
+		t.Fatalf("old topic count = %d", n)
+	}
+	if n, _ := st.TopicCount(strings.Repeat("c", 43)); n != 1 {
+		t.Fatalf("new topic count = %d", n)
+	}
+	if err := st.DeleteRegistration(id, token); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteRegistration(id, token); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted twice: err = %v", err)
+	}
+}
+
+func TestUpdateRegistrationEndpointConflict(t *testing.T) {
+	st := openTest(t)
+	now := time.Now().UTC()
+	id1, tok1, err := st.CreateRegistration("https://push.example/a", "p", "a", "pwa", "ua", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = st.CreateRegistration("https://push.example/b", "p", "a", "pwa", "ua", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Taking another registration's endpoint conflicts without modifying
+	// either record.
+	ep, p, a := "https://push.example/b", "p2", "a2"
+	if err := st.UpdateRegistration(id1, tok1, &ep, &p, &a, nil, now); !errors.Is(err, ErrConflict) {
+		t.Fatalf("endpoint conflict: err = %v", err)
+	}
+	if err := st.HeartbeatRegistration(id1, tok1, now); err != nil {
+		t.Fatalf("record modified by a rejected update: %v", err)
+	}
+	// Endpoint and keys must be supplied together.
+	ep = "https://push.example/c"
+	if err := st.UpdateRegistration(id1, tok1, &ep, nil, nil, nil, now); err == nil {
+		t.Fatal("accepted endpoint without keys")
+	}
+}
+
+func TestForEachRegistrationForTopicBatches(t *testing.T) {
+	st := openTest(t)
+	now := time.Now().UTC()
+	topic := strings.Repeat("a", 43)
+	for i := 0; i < 5; i++ {
+		if _, _, err := st.CreateRegistration("https://push.example/"+string(rune('a'+i)), "p", "a", "pwa", "ua", []string{topic}, now); err != nil {
 			t.Fatal(err)
 		}
 	}
-	regs, err := s.RegistrationsForTopic("n-b-shared")
-	if err != nil {
-		t.Fatal(err)
+	var seen int
+	err := st.ForEachRegistrationForTopic(context.Background(), topic, 2, func(r Registration) error {
+		seen++
+		return nil
+	})
+	if err != nil || seen != 5 {
+		t.Fatalf("seen = %d, err = %v", seen, err)
 	}
-	if len(regs) != 3 {
-		t.Fatalf("shared topic regs = %d, want 3", len(regs))
-	}
-	regs, err = s.RegistrationsForTopic("n-b-none")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(regs) != 0 {
-		t.Fatalf("unknown topic regs = %d", len(regs))
-	}
-}
-
-func TestEventLogAndPrune(t *testing.T) {
-	s := openTest(t)
-	key, err := s.CreatePublisher("Acme", "company.example", 60)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, _ := s.LookupPublisher(key)
-	if err := s.LogEvent(p.ID, "n-aaa", 1, 1, 3, 1, 2); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.LogEvent(p.ID, "n-bbb", 0, 1, 0, 0, 0); err != nil {
-		t.Fatal(err)
-	}
-	e, err := s.LatestEvent()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if e.Topic != "n-bbb" || e.FCM != 0 || e.Ntfy != 1 {
-		t.Fatalf("event = %+v", e)
-	}
-	// Prune with a huge retention keeps rows; zero retention removes all.
-	n, err := s.PruneEventLog(30 * 24 * time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 0 {
-		t.Fatalf("prune removed %d with 30d retention", n)
-	}
-	n, err = s.PruneEventLog(0)
-	if err != nil || n != 0 {
-		t.Fatalf("prune(0) = %d, %v (0 = retention disabled)", n, err)
+	// A callback error stops the walk.
+	err = st.ForEachRegistrationForTopic(context.Background(), topic, 2, func(r Registration) error {
+		return errors.New("stop")
+	})
+	if err == nil {
+		t.Fatal("callback error not propagated")
 	}
 }
 
-// TestMigrateV1ToV2 verifies an existing v1 database (with event_log.kind)
-// is upgraded in place: the column is dropped, rows survive, and the version
-// is stamped to the current one (§7 migration).
-func TestMigrateV1ToV2(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "relay-v1.db")
-	db, err := sql.Open("sqlite", path)
+func TestSweepRegistrations(t *testing.T) {
+	st := openTest(t)
+	old := time.Now().UTC().Add(-48 * time.Hour)
+	id, token, err := st.CreateRegistration("https://push.example/x", "p", "a", "pwa", "ua", nil, old)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(schemaV1); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO schema_version (version) VALUES (1)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(
-		`INSERT INTO event_log (publisher_id, kind, topic, fcm, ntfy, webpush_sent, webpush_failed, webpush_removed, at)
-		 VALUES (1, 'channel', 'n-Z720n4ivEXWSqHWBmeGxiryrFEd0BxzY2FdcX7E-A4E', 1, 1, 0, 0, 0, '2026-01-01T00:00:00Z')`,
-	); err != nil {
-		t.Fatal(err)
-	}
-	db.Close()
-
-	s, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	var version int
-	if err := s.db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil {
-		t.Fatal(err)
-	}
-	if version != SchemaVersion {
-		t.Fatalf("version after migrate = %d, want %d", version, SchemaVersion)
-	}
-	e, err := s.LatestEvent()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if e.Topic != "n-Z720n4ivEXWSqHWBmeGxiryrFEd0BxzY2FdcX7E-A4E" || e.FCM != 1 {
-		t.Fatalf("row after migrate = %+v", e)
-	}
-	// The kind column must be gone.
-	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('event_log') WHERE name = 'kind'`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 0 {
-		t.Fatal("event_log.kind still present after migration")
+	_ = id
+	_ = token
+	n, err := st.SweepRegistrations(24*time.Hour, time.Now().UTC())
+	if err != nil || n != 1 {
+		t.Fatalf("swept = %d, %v", n, err)
 	}
 }
 
-func pad(i int) string {
-	const hexdigits = "0123456789abcdef"
-	out := make([]byte, 43)
-	for i := range out {
-		out[i] = 'a'
+func TestTooManyTopics(t *testing.T) {
+	st := openTest(t)
+	topics := make([]string, MaxTopicsPerRegistration+1)
+	for i := range topics {
+		topics[i] = strings.Repeat("a", 43)
 	}
-	copy(out, []byte("abc"))
-	// vary the tail so topics differ
-	for j := 0; j < 8; j++ {
-		out[42-j] = hexdigits[(i>>(j*4))&0xf]
+	if _, _, err := st.CreateRegistration("https://push.example/x", "p", "a", "pwa", "ua", topics, time.Now().UTC()); !errors.Is(err, ErrTooManyTopics) {
+		t.Fatalf("err = %v", err)
 	}
-	return string(out)
 }

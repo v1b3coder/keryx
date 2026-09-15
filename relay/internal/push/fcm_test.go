@@ -72,8 +72,7 @@ func TestFCMTokenCaching(t *testing.T) {
 	}))
 	defer tokenSrv.Close()
 
-	var fcmSrv *httptest.Server
-	fcmSrv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fcmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sendCalls.Add(1)
 		if got := r.Header.Get("Authorization"); got != "Bearer tok-1" {
 			t.Errorf("authorization = %q", got)
@@ -88,6 +87,9 @@ func TestFCMTokenCaching(t *testing.T) {
 				Android struct {
 					Priority string `json:"priority"`
 				} `json:"android"`
+				APNS struct {
+					Headers map[string]string `json:"headers"`
+				} `json:"apns"`
 			} `json:"message"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -96,11 +98,14 @@ func TestFCMTokenCaching(t *testing.T) {
 		if body.Message.Topic != "n-b-abc" {
 			t.Errorf("topic = %q", body.Message.Topic)
 		}
-		if body.Message.Data["v"] != "1" || body.Message.Data["n"] != "3" {
+		if body.Message.Data["wakeup"] != `{"v":1,"seq":7}` {
 			t.Errorf("data = %v", body.Message.Data)
 		}
-		if body.Message.Android.Priority != "high" {
+		if body.Message.Android.Priority != "normal" {
 			t.Errorf("priority = %q", body.Message.Android.Priority)
+		}
+		if body.Message.APNS.Headers["apns-push-type"] != "background" {
+			t.Errorf("apns headers = %v", body.Message.APNS.Headers)
 		}
 		w.WriteHeader(200)
 		json.NewEncoder(w).Encode(map[string]string{"name": "projects/proj-x/messages/1"})
@@ -116,7 +121,7 @@ func TestFCMTokenCaching(t *testing.T) {
 	f.backoff = func(int) time.Duration { return 0 }
 
 	for i := 0; i < 2; i++ {
-		if err := f.Send(context.Background(), "n-b-abc", map[string]string{"v": "1", "n": "3"}); err != nil {
+		if err := f.Send(context.Background(), "n-b-abc", []byte(`{"v":1,"seq":7}`)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -151,8 +156,8 @@ func TestFCMTokenRefreshNearExpiry(t *testing.T) {
 
 	// First send: token with 60s expiry. Immediately after, remaining < 5min,
 	// so the next send must refetch (no caching window).
-	f.Send(context.Background(), "n-b-a", nil)
-	f.Send(context.Background(), "n-b-a", nil)
+	f.Send(context.Background(), "n-b-a", []byte(`{"v":1,"seq":1}`))
+	f.Send(context.Background(), "n-b-a", []byte(`{"v":1,"seq":2}`))
 	if tokenCalls.Load() != 2 {
 		t.Fatalf("token fetches = %d, want 2 (no cache within 5min of expiry)", tokenCalls.Load())
 	}
@@ -190,7 +195,7 @@ func TestFCMSendClassifications(t *testing.T) {
 			f.tokenURI = tokenSrv.URL
 			f.endpoint = srv.URL
 			f.backoff = func(int) time.Duration { return 0 }
-			err = f.Send(context.Background(), "n-b-a", map[string]string{"v": "1"})
+			err = f.Send(context.Background(), "n-b-a", []byte(`{"v":1,"seq":1}`))
 			if tc.wantErr != nil && err != tc.wantErr {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
 			}
@@ -225,7 +230,7 @@ func TestFCMRetriesTransient(t *testing.T) {
 	f.tokenURI = tokenSrv.URL
 	f.endpoint = srv.URL
 	f.backoff = func(int) time.Duration { return 0 }
-	if err := f.Send(context.Background(), "n-b-a", map[string]string{"v": "1"}); err != nil {
+	if err := f.Send(context.Background(), "n-b-a", []byte(`{"v":1,"seq":1}`)); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 3 {

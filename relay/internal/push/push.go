@@ -1,12 +1,11 @@
-// Package push implements the three delivery legs of the relay
-// (SPECIFICATION §6): FCM topics, WebPush (RFC 8291 encryption + VAPID), and
-// ntfy topics. All legs are best-effort; wake-up payloads carry no content.
+// Package push implements the relay's two delivery legs
+// (relay/SPECIFICATION.md §6): FCM topics and the UnifiedPush/WebPush
+// endpoint leg. All legs are best-effort; wake-up payloads carry no content.
 package push
 
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,41 +13,8 @@ import (
 	"time"
 )
 
-// Wakeup is the §4 canonical wake-up payload.
-//
-// On topic-based legs (FCM, ntfy) the identifier travels in the topic itself
-// and the payload carries only v and the counters. On registry legs (WebPush)
-// there is no topic at delivery, so t MUST be present and the device maps it
-// to the followed company/channel/order locally.
-type Wakeup struct {
-	V   int    `json:"v"`
-	T   string `json:"t,omitempty"`
-	N   *int   `json:"n,omitempty"`
-	Seq *int   `json:"seq,omitempty"`
-}
-
-// JSON returns the §4 payload as JSON bytes. t is included only when set
-// (WebPush); topic-based legs omit it.
-func (w Wakeup) JSON() ([]byte, error) { return json.Marshal(w) }
-
-// DataMap returns the payload as a map of string values for FCM data fields.
-// Field values in FCM data are strings; the app parses them (§6.1).
-func (w Wakeup) DataMap() map[string]string {
-	m := map[string]string{"v": fmt.Sprint(w.V)}
-	if w.T != "" {
-		m["t"] = w.T
-	}
-	if w.N != nil {
-		m["n"] = fmt.Sprint(*w.N)
-	}
-	if w.Seq != nil {
-		m["seq"] = fmt.Sprint(*w.Seq)
-	}
-	return m
-}
-
-// ErrGone marks a subscription that the push service says is dead
-// (404/410): the relay deletes the registration and counts it as removed.
+// ErrGone marks a subscription the push service reports dead (404/410):
+// the dispatch counts it as dead and performs no registry write (§6.2).
 var ErrGone = errors.New("push subscription is gone (404/410)")
 
 // ErrCredentials marks provider credential failures (FCM 401/403): an
@@ -57,7 +23,7 @@ var ErrCredentials = errors.New("push provider credentials rejected")
 
 // doWithRetry performs req, retrying transient failures (network errors,
 // 429, 5xx) with exponential backoff, up to maxAttempts. It returns the
-// final response (body consumed and closed) or the last error.
+// final response or the last error.
 func doWithRetry(ctx context.Context, client *http.Client, req func() (*http.Request, error), maxAttempts int, backoff func(int) time.Duration) (*http.Response, error) {
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
