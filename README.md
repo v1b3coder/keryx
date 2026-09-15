@@ -29,6 +29,53 @@ with the private tracking feed.
 
 ---
 
+## Publisher CLI (`pub`)
+
+Requires Go 1.26+. Build it from the repository:
+
+```
+make cli                       # builds bin/pub
+# or, from the SDK module:
+cd sdk && go install ./cmd/pub
+```
+
+Private keys never live in the repository: the key store defaults to
+`~/.local/share/keryx/keys` and is overridden with `--keystore DIR` or
+`$KERYX_KEYSTORE` (`pub init` refuses a key store inside the workspace).
+The workspace (`--workspace`, default `.keryx`) holds only the public
+`repo/` and `anchor/` directories.
+
+Quickstart — one machine acting as operator, pipeline and author:
+
+```
+pub init --domain company.example --name "ACME s.r.o."
+pub channel add security --display-name "Security alerts" --generate-keys
+pub item sign --channel security --file draft.json --out signed.json
+pub publish --channel security --file signed.json
+pub refresh-timestamp          # the one cron line
+
+pub validate
+pub deploy local --target dist/
+pub join-url --channels security           # prints the join URL
+pub qr --channels security --out qr.png     # or render it as a QR
+```
+
+`channel add` mints the channel key and, for an authored channel, an author
+key (`security-author`); pass `--author <keyid>` instead to use a key the
+author generated on their own machine with
+`pub keys generate alice --role author`. Each machine holds only the keys its
+role needs. The workspace `role`
+(`operator`, `ci` or `author`) gates the commands it may run; a command that
+needs a key the machine does not hold fails fast with a typed `missing key`
+error instead of producing half-signed metadata. `--generate-keys` opts a
+ceremony into minting a key, and `--keyid` disambiguates when a role has
+more than one key. Every master ceremony also takes `--stage <dir>` for the
+strict two-step handoff (the offline machine stages, a CI machine runs
+`pub ceremony apply --bundle <dir>`). See [`sdk/README.md`](sdk/README.md)
+for the full command reference.
+
+---
+
 ## Documentation
 
 ### Normative — the protocol (`spec/`)
