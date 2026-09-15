@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+	"github.com/v1b3coder/keryx/sdk/publisher"
 )
 
 func (a *app) authorCmd() *cobra.Command {
@@ -17,8 +18,12 @@ func (a *app) authorAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add",
 		Short: "Add an author keyid (master ceremony)",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			res, err := a.publisher().AuthorAdd(a.ctx(), channel, keyid)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			res, err := runOrStage(cmd,
+				func(dir, pass string) (publisher.Result, error) {
+					return a.publisher().StageAuthorAdd(a.ctx(), channel, keyid, dir, pass)
+				},
+				func() (publisher.Result, error) { return a.publisher().AuthorAdd(a.ctx(), channel, keyid) })
 			if err != nil {
 				return err
 			}
@@ -26,6 +31,7 @@ func (a *app) authorAddCmd() *cobra.Command {
 			return nil
 		},
 	}
+	addStageFlags(cmd)
 	cmd.Flags().StringVar(&channel, "channel", "", "channel name")
 	cmd.Flags().StringVar(&keyid, "keyid", "", "author keyid")
 	_ = cmd.MarkFlagRequired("channel")
@@ -38,8 +44,12 @@ func (a *app) authorRevokeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "revoke",
 		Short: "Revoke an author keyid (refuses the last author)",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			res, err := a.publisher().AuthorRevoke(a.ctx(), channel, keyid)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			res, err := runOrStage(cmd,
+				func(dir, pass string) (publisher.Result, error) {
+					return a.publisher().StageAuthorRevoke(a.ctx(), channel, keyid, dir, pass)
+				},
+				func() (publisher.Result, error) { return a.publisher().AuthorRevoke(a.ctx(), channel, keyid) })
 			if err != nil {
 				return err
 			}
@@ -47,6 +57,7 @@ func (a *app) authorRevokeCmd() *cobra.Command {
 			return nil
 		},
 	}
+	addStageFlags(cmd)
 	cmd.Flags().StringVar(&channel, "channel", "", "channel name")
 	cmd.Flags().StringVar(&keyid, "keyid", "", "author keyid")
 	_ = cmd.MarkFlagRequired("channel")

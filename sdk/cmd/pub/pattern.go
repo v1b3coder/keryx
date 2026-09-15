@@ -18,8 +18,12 @@ func (a *app) patternAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add",
 		Short: "Authorize a private-feed pattern",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			res, err := a.publisher().PatternAdd(a.ctx(), spec)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			res, err := runOrStage(cmd,
+				func(dir, pass string) (publisher.Result, error) {
+					return a.publisher().StagePatternAdd(a.ctx(), spec, dir, pass)
+				},
+				func() (publisher.Result, error) { return a.publisher().PatternAdd(a.ctx(), spec) })
 			if err != nil {
 				return err
 			}
@@ -27,6 +31,7 @@ func (a *app) patternAddCmd() *cobra.Command {
 			return nil
 		},
 	}
+	addStageFlags(cmd)
 	f := cmd.Flags()
 	f.StringVar(&spec.Channel, "channel", "", "channel label")
 	f.StringVar(&spec.Pattern, "pattern", "", "URL pattern (origin-exact, segment wildcard)")
@@ -45,8 +50,12 @@ func (a *app) patternRemoveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "remove",
 		Short: "Remove a private-feed pattern",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			res, err := a.publisher().PatternRemove(a.ctx(), channel)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			res, err := runOrStage(cmd,
+				func(dir, pass string) (publisher.Result, error) {
+					return a.publisher().StagePatternRemove(a.ctx(), channel, dir, pass)
+				},
+				func() (publisher.Result, error) { return a.publisher().PatternRemove(a.ctx(), channel) })
 			if err != nil {
 				return err
 			}
@@ -54,6 +63,7 @@ func (a *app) patternRemoveCmd() *cobra.Command {
 			return nil
 		},
 	}
+	addStageFlags(cmd)
 	cmd.Flags().StringVar(&channel, "channel", "", "channel label")
 	_ = cmd.MarkFlagRequired("channel")
 	return cmd
@@ -70,8 +80,12 @@ func (a *app) companySetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set",
 		Short: "Set master-signed company name and/or logo",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			res, err := a.publisher().CompanySet(a.ctx(), name, logo, logoSHA)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			res, err := runOrStage(cmd,
+				func(dir, pass string) (publisher.Result, error) {
+					return a.publisher().StageCompanySet(a.ctx(), name, logo, logoSHA, dir, pass)
+				},
+				func() (publisher.Result, error) { return a.publisher().CompanySet(a.ctx(), name, logo, logoSHA) })
 			if err != nil {
 				return err
 			}
@@ -79,6 +93,7 @@ func (a *app) companySetCmd() *cobra.Command {
 			return nil
 		},
 	}
+	addStageFlags(cmd)
 	cmd.Flags().StringVar(&name, "name", "", "company name")
 	cmd.Flags().StringVar(&logo, "logo", "", "logo data URL or HTTPS URL")
 	cmd.Flags().StringVar(&logoSHA, "logo-sha256", "", "logo_sha256 for a linked logo")

@@ -57,6 +57,7 @@ func main() {
 		a.deployCmd(),
 		a.pullCmd(),
 		a.privateFeedCmd(),
+		a.ceremonyCmd(),
 	)
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -111,3 +112,51 @@ func (a *app) render(v any, human string) {
 }
 
 func (a *app) ctx() context.Context { return context.Background() }
+
+// addStageFlags adds the two-step ceremony flags to a master-ceremony command.
+func addStageFlags(cmd *cobra.Command) {
+	cmd.Flags().String("stage", "", "stage the ceremony to this directory instead of applying it")
+	cmd.Flags().String("bundle-passphrase", os.Getenv("KERYX_BUNDLE_PASSPHRASE"), "encrypt the bundle keys (or KERYX_BUNDLE_PASSPHRASE)")
+}
+
+// staged returns the --stage directory (empty = single-step).
+func staged(cmd *cobra.Command) (string, string) {
+	dir, _ := cmd.Flags().GetString("stage")
+	pass, _ := cmd.Flags().GetString("bundle-passphrase")
+	return dir, pass
+}
+
+// runOrStage stages the ceremony when --stage is set, otherwise applies it
+// locally (design/tooling.md §3.5).
+func runOrStage(cmd *cobra.Command, stage func(dir, pass string) (publisher.Result, error), run func() (publisher.Result, error)) (publisher.Result, error) {
+	dir, pass := staged(cmd)
+	if dir != "" {
+		return stage(dir, pass)
+	}
+	return run()
+}
+
+func (a *app) ceremonyCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "ceremony", Short: "Finish a staged ceremony bundle"}
+	var bundle, passphrase string
+	apply := &cobra.Command{
+		Use:   "apply",
+		Short: "Verify a bundle and finish it on this machine",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			if bundle == "" {
+				return fmt.Errorf("--bundle is required")
+			}
+			res, err := a.publisher().Apply(a.ctx(), bundle, passphrase)
+			if err != nil {
+				return err
+			}
+			a.render(res, fmt.Sprintf("ceremony applied (targets v%d)", res.Version))
+			return nil
+		},
+	}
+	apply.Flags().StringVar(&bundle, "bundle", "", "bundle directory")
+	apply.Flags().StringVar(&passphrase, "bundle-passphrase", os.Getenv("KERYX_BUNDLE_PASSPHRASE"), "bundle passphrase (or KERYX_BUNDLE_PASSPHRASE)")
+	_ = apply.MarkFlagRequired("bundle")
+	cmd.AddCommand(apply)
+	return cmd
+}

@@ -113,6 +113,9 @@ func (k *Key) Public() ed25519.PublicKey { return k.pub }
 // Private returns the raw Ed25519 private key.
 func (k *Key) Private() ed25519.PrivateKey { return k.priv }
 
+// Seed returns a copy of the 32-byte Ed25519 seed.
+func (k *Key) Seed() []byte { return append([]byte(nil), k.seed...) }
+
 // Signer returns a Sigstore signer for TUF metadata signing.
 func (k *Key) Signer() (signature.Signer, error) {
 	return signature.LoadSigner(k.priv, 0)

@@ -8,12 +8,14 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/theupdateframework/go-tuf/v2/metadata"
+	"github.com/v1b3coder/keryx/sdk/ceremony"
 	"github.com/v1b3coder/keryx/sdk/feed"
 	"github.com/v1b3coder/keryx/sdk/keys"
 	"github.com/v1b3coder/keryx/sdk/repo"
@@ -361,52 +363,337 @@ type ChannelSpec struct {
 	Authors     []string // existing author keyids; a key is generated when empty
 }
 
-// ChannelAdd creates the channel delegation, its role metadata (the index) and
-// its display metadata; authored by default (spec/feeds.md §2.1).
-func (p *Publisher) ChannelAdd(ctx context.Context, spec ChannelSpec) (Result, error) {
-	if !validChannel(spec.Name) {
-		return Result{}, fmt.Errorf("invalid channel name %q", spec.Name)
+// mutation is a master-signed targets.json change plus the channel-level
+// work the applier finishes (design/tooling.md §3.5). The single-step path
+// applies it locally; the two-step path stages it for a CI/ops machine.
+type mutation struct {
+	apply func(st *tufrepo.State) error
+	steps []ceremony.Step
+	keys  []*keys.Key
+	msg   string
+	chans []string
+}
+
+// runMutation applies a mutation to the live repo and finishes it locally
+// (the single-step default, design/tooling.md §3.5).
+func (p *Publisher) runMutation(ctx context.Context, m mutation) (Result, error) {
+	st, err := p.loadVerified(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := m.apply(st); err != nil {
+		return Result{}, err
+	}
+	if err := p.applySteps(ctx, st, m.steps, m.keys); err != nil {
+		return Result{}, err
+	}
+	now := p.now()
+	signFresh(st.Targets, p.exp().Targets, now)
+	master, err := p.key(ctx, keys.RoleMaster, "")
+	if err != nil {
+		return Result{}, err
+	}
+	if err := tufrepo.SignAndTag(st.Targets, master); err != nil {
+		return Result{}, err
+	}
+	if err := p.signFreshness(st, now); err != nil {
+		return Result{}, err
+	}
+	if err := p.writeVerified(ctx, st); err != nil {
+		return Result{}, err
+	}
+	return Result{Company: st.CompanyName(), Channels: m.chans, Version: st.Targets.Signed.Version, Message: m.msg}, nil
+}
+
+// stageMutation master-signs targets.json and writes the handoff bundle without
+// touching the live repo (the strict two-step path, design/tooling.md §3.5).
+func (p *Publisher) stageMutation(ctx context.Context, m mutation, out, passphrase string) (Result, error) {
+	st, err := p.loadVerified(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := m.apply(st); err != nil {
+		return Result{}, err
+	}
+	now := p.now()
+	signFresh(st.Targets, p.exp().Targets, now)
+	master, err := p.key(ctx, keys.RoleMaster, "")
+	if err != nil {
+		return Result{}, err
+	}
+	if err := tufrepo.SignAndTag(st.Targets, master); err != nil {
+		return Result{}, err
+	}
+	targetsBytes, err := st.Targets.ToBytes(true)
+	if err != nil {
+		return Result{}, err
+	}
+	bundle := &ceremony.Bundle{Version: 1, Targets: targetsBytes, Steps: m.steps, Keys: keyFiles(m.keys)}
+	if err := bundle.EncodeKeys(passphrase); err != nil {
+		return Result{}, err
+	}
+	if err := ceremony.Write(out, bundle); err != nil {
+		return Result{}, err
+	}
+	return Result{Channels: m.chans, Version: st.Targets.Signed.Version, Message: "staged " + m.msg}, nil
+}
+
+// applySteps finishes the channel-level work of a ceremony bundle: it creates or
+// drops channel/authors role metadata, re-signs items and installs nothing else.
+func (p *Publisher) applySteps(ctx context.Context, st *tufrepo.State, steps []ceremony.Step, ks []*keys.Key) error {
+	byID := map[string]*keys.Key{}
+	for _, k := range ks {
+		byID[k.KeyID()] = k
+	}
+	keyFor := func(kid string) (*keys.Key, error) {
+		if k := byID[kid]; k != nil {
+			return k, nil
+		}
+		// fall back to the local store (single-step path holds the old keys)
+		if k, err := p.keyByID(ctx, kid); err == nil {
+			return k, nil
+		}
+		return nil, &keys.ErrMissingKey{Role: "ceremony", KeyID: kid, Hint: "key " + kid + " missing from the ceremony bundle"}
+	}
+	for _, step := range steps {
+		switch step.Kind {
+		case "channel-create":
+			k, err := keyFor(step.KeyID)
+			if err != nil {
+				return err
+			}
+			chMeta := metadata.Targets(p.now().Add(p.exp().Channel))
+			chMeta.Signed.Delegations = emptyDelegations()
+			if err := tufrepo.SignAndTag(chMeta, k); err != nil {
+				return err
+			}
+			st.Channels[step.Channel] = chMeta
+		case "authors-create":
+			authMeta := metadata.Targets(p.now().Add(p.exp().Authors))
+			authMeta.Signed.Delegations = emptyDelegations()
+			for _, kid := range step.KeyIDs {
+				k, err := keyFor(kid)
+				if err != nil {
+					return err
+				}
+				if err := tufrepo.SignAndTag(authMeta, k); err != nil {
+					return err
+				}
+			}
+			st.Authors[step.Channel] = authMeta
+		case "channel-remove":
+			delete(st.Channels, step.Channel)
+			delete(st.Authors, step.Channel)
+		case "authors-remove":
+			delete(st.Authors, step.Channel)
+		case "channel-mode":
+			if step.Mode == "authored" {
+				authMeta := metadata.Targets(p.now().Add(p.exp().Authors))
+				authMeta.Signed.Delegations = emptyDelegations()
+				for _, kid := range step.KeyIDs {
+					k, err := keyFor(kid)
+					if err != nil {
+						return err
+					}
+					if err := tufrepo.SignAndTag(authMeta, k); err != nil {
+						return err
+					}
+				}
+				st.Authors[step.Channel] = authMeta
+			} else {
+				delete(st.Authors, step.Channel)
+			}
+			signers, err := keyList(step.KeyIDs, keyFor)
+			if err != nil {
+				return err
+			}
+			if err := p.resignItems(st, step.Channel, signers); err != nil {
+				return err
+			}
+			// the item hashes changed: re-sign the channel role metadata too
+			chMeta := st.Channels[step.Channel]
+			signFresh(chMeta, p.exp().Channel, p.now())
+			for _, kid := range step.KeyIDs {
+				k, err := keyFor(kid)
+				if err != nil {
+					return err
+				}
+				if err := tufrepo.SignAndTag(chMeta, k); err != nil {
+					return err
+				}
+			}
+		case "channel-keys":
+			signers, err := keyList(step.KeyIDs, keyFor)
+			if err != nil {
+				return err
+			}
+			if step.Resign {
+				if err := p.resignItems(st, step.Channel, signers); err != nil {
+					return err
+				}
+			}
+			// re-sign the channel role metadata over the (possibly re-signed) items
+			chMeta := st.Channels[step.Channel]
+			signFresh(chMeta, p.exp().Channel, p.now())
+			for _, kid := range step.KeyIDs {
+				k, err := keyFor(kid)
+				if err != nil {
+					return err
+				}
+				if err := tufrepo.SignAndTag(chMeta, k); err != nil {
+					return err
+				}
+			}
+		case "resign-items":
+			signers, err := keyList(step.KeyIDs, keyFor)
+			if err != nil {
+				return err
+			}
+			if err := p.resignItems(st, step.Channel, signers); err != nil {
+				return err
+			}
+			chMeta := st.Channels[step.Channel]
+			signFresh(chMeta, p.exp().Channel, p.now())
+			for _, kid := range step.KeyIDs {
+				k, err := keyFor(kid)
+				if err != nil {
+					return err
+				}
+				if err := tufrepo.SignAndTag(chMeta, k); err != nil {
+					return err
+				}
+			}
+		default:
+			return fmt.Errorf("ceremony: unknown step %q", step.Kind)
+		}
+	}
+	return nil
+}
+
+func keyList(keyids []string, keyFor func(string) (*keys.Key, error)) ([]*keys.Key, error) {
+	out := make([]*keys.Key, 0, len(keyids))
+	for _, kid := range keyids {
+		k, err := keyFor(kid)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, nil
+}
+
+// Apply verifies a ceremony bundle (master signature, version monotonicity,
+// delegation invariants) and finishes it on the machine that holds the channel
+// and ops keys (design/tooling.md §3.5).
+func (p *Publisher) Apply(ctx context.Context, dir, passphrase string) (Result, error) {
+	b, err := ceremony.Read(dir)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := b.DecodeKeys(passphrase); err != nil {
+		return Result{}, err
 	}
 	st, err := p.loadVerified(ctx)
 	if err != nil {
 		return Result{}, err
 	}
-	if st.Channels[spec.Name] != nil {
-		return Result{}, fmt.Errorf("channel %q already exists", spec.Name)
-	}
-	chKey, err := p.resolveChannelKey(ctx, spec)
+	bundleTargets, err := metadata.Targets().FromBytes(b.Targets)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("bundle targets: %w", err)
 	}
-	roleName := "channels." + spec.Name
-	if err := addDelegation(st.Targets, roleName, []*metadata.Key{chKey.TUF()}, 1, []string{"channels/" + spec.Name + "/*"}, true); err != nil {
-		return Result{}, err
+	if err := st.Root.VerifyDelegate(metadata.TARGETS, bundleTargets); err != nil {
+		return Result{}, fmt.Errorf("bundle targets signature: %w", err)
 	}
-	chMeta := metadata.Targets(p.now().Add(p.exp().Channel))
-	chMeta.Signed.Delegations = emptyDelegations()
-	st.Channels[spec.Name] = chMeta
-
-	if !spec.Simple {
-		authorKeys, err := p.resolveAuthorKeys(ctx, spec)
+	if bundleTargets.Signed.Version <= st.Targets.Signed.Version {
+		return Result{}, fmt.Errorf("bundle targets v%d is not newer than live v%d", bundleTargets.Signed.Version, st.Targets.Signed.Version)
+	}
+	st.Targets = bundleTargets
+	ks := make([]*keys.Key, 0, len(b.Keys))
+	for _, kf := range b.Keys {
+		seed, err := hex.DecodeString(kf.SeedHex)
+		if err != nil {
+			return Result{}, fmt.Errorf("bundle key %s: %w", kf.Name, err)
+		}
+		k, err := keys.FromSeed(kf.Role, kf.Name, seed)
 		if err != nil {
 			return Result{}, err
 		}
-		authRole := roleName + ".authors"
-		threshold := spec.Threshold
-		if threshold < 1 {
-			threshold = 1
-		}
-		if err := addDelegation(st.Targets, authRole, tufKeys(authorKeys), threshold, []string{"channels/" + spec.Name + "/*"}, false); err != nil {
+		if err := p.Keys.Add(ctx, k); err != nil {
 			return Result{}, err
 		}
-		authMeta := metadata.Targets(p.now().Add(p.exp().Authors))
-		authMeta.Signed.Delegations = emptyDelegations()
-		for _, k := range authorKeys {
-			if err := tufrepo.SignAndTag(authMeta, k); err != nil {
-				return Result{}, err
-			}
+		ks = append(ks, k)
+	}
+	if err := p.applySteps(ctx, st, b.Steps, ks); err != nil {
+		return Result{}, err
+	}
+	now := p.now()
+	if err := p.signFreshness(st, now); err != nil {
+		return Result{}, err
+	}
+	if err := p.writeVerified(ctx, st); err != nil {
+		return Result{}, err
+	}
+	return Result{Version: st.Targets.Signed.Version, Message: "ceremony applied"}, nil
+}
+
+func keyFiles(ks []*keys.Key) []keys.KeyFile {
+	out := make([]keys.KeyFile, 0, len(ks))
+	for _, k := range ks {
+		out = append(out, keys.KeyFile{
+			Name: k.Name, Role: k.Role,
+			SeedHex: hex.EncodeToString(k.Seed()),
+			Public:  hex.EncodeToString(k.Public()),
+			KeyID:   k.KeyID(),
+		})
+	}
+	return out
+}
+
+// ChannelAdd creates the channel delegation, its role metadata (the index) and
+// its display metadata; authored by default (spec/feeds.md §2.1).
+func (p *Publisher) ChannelAdd(ctx context.Context, spec ChannelSpec) (Result, error) {
+	m, err := p.channelAddMutation(ctx, spec)
+	if err != nil {
+		return Result{}, err
+	}
+	return p.runMutation(ctx, m)
+}
+
+// StageChannelAdd master-signs the channel addition and writes the handoff
+// bundle (design/tooling.md §3.5, strict two-step ceremony).
+func (p *Publisher) StageChannelAdd(ctx context.Context, spec ChannelSpec, out, passphrase string) (Result, error) {
+	m, err := p.channelAddMutation(ctx, spec)
+	if err != nil {
+		return Result{}, err
+	}
+	return p.stageMutation(ctx, m, out, passphrase)
+}
+
+func (p *Publisher) channelAddMutation(ctx context.Context, spec ChannelSpec) (mutation, error) {
+	if !validChannel(spec.Name) {
+		return mutation{}, fmt.Errorf("invalid channel name %q", spec.Name)
+	}
+	st, err := p.loadVerified(ctx)
+	if err != nil {
+		return mutation{}, err
+	}
+	if st.Channels[spec.Name] != nil {
+		return mutation{}, fmt.Errorf("channel %q already exists", spec.Name)
+	}
+	chKey, err := p.resolveChannelKey(ctx, spec)
+	if err != nil {
+		return mutation{}, err
+	}
+	var authorKeys []*keys.Key
+	if !spec.Simple {
+		authorKeys, err = p.resolveAuthorKeys(ctx, spec)
+		if err != nil {
+			return mutation{}, err
 		}
-		st.Authors[spec.Name] = authMeta
+	}
+	threshold := spec.Threshold
+	if threshold < 1 {
+		threshold = 1
 	}
 	display := map[string]any{}
 	if spec.DisplayName != "" {
@@ -415,68 +702,101 @@ func (p *Publisher) ChannelAdd(ctx context.Context, spec ChannelSpec) (Result, e
 	if spec.Description != "" {
 		display["description"] = spec.Description
 	}
-	setChannelDisplay(st, spec.Name, display)
-	now := p.now()
-	signFresh(st.Targets, p.exp().Targets, now)
-	master, err := p.key(ctx, keys.RoleMaster, "")
-	if err != nil {
-		return Result{}, err
+	steps := []ceremony.Step{{Kind: "channel-create", Channel: spec.Name, KeyID: chKey.KeyID()}}
+	allKeys := []*keys.Key{chKey}
+	if !spec.Simple {
+		keyids := make([]string, 0, len(authorKeys))
+		for _, k := range authorKeys {
+			keyids = append(keyids, k.KeyID())
+			allKeys = append(allKeys, k)
+		}
+		steps = append(steps, ceremony.Step{Kind: "authors-create", Channel: spec.Name, KeyIDs: keyids})
 	}
-	if err := tufrepo.SignAndTag(st.Targets, master); err != nil {
-		return Result{}, err
-	}
-	if err := tufrepo.SignAndTag(chMeta, chKey); err != nil {
-		return Result{}, err
-	}
-	if err := p.signFreshness(st, now); err != nil {
-		return Result{}, err
-	}
-	if err := p.writeVerified(ctx, st); err != nil {
-		return Result{}, err
-	}
-	return Result{Channels: []string{spec.Name}, Version: st.Targets.Signed.Version, Message: "channel added"}, nil
+	return mutation{
+		apply: func(st *tufrepo.State) error {
+			roleName := "channels." + spec.Name
+			if err := addDelegation(st.Targets, roleName, []*metadata.Key{chKey.TUF()}, 1, []string{"channels/" + spec.Name + "/*"}, true); err != nil {
+				return err
+			}
+			if !spec.Simple {
+				if err := addDelegation(st.Targets, roleName+".authors", tufKeys(authorKeys), threshold, []string{"channels/" + spec.Name + "/*"}, false); err != nil {
+					return err
+				}
+			}
+			setChannelDisplay(st, spec.Name, display)
+			return nil
+		},
+		steps: steps,
+		keys:  allKeys,
+		msg:   "channel added",
+		chans: []string{spec.Name},
+	}, nil
 }
 
 // ChannelRemove drops the channel delegation and its metadata.
 func (p *Publisher) ChannelRemove(ctx context.Context, name string) (Result, error) {
+	m, err := p.channelRemoveMutation(ctx, name)
+	if err != nil {
+		return Result{}, err
+	}
+	return p.runMutation(ctx, m)
+}
+
+// StageChannelRemove master-signs the channel removal and writes the handoff bundle.
+func (p *Publisher) StageChannelRemove(ctx context.Context, name, out, passphrase string) (Result, error) {
+	m, err := p.channelRemoveMutation(ctx, name)
+	if err != nil {
+		return Result{}, err
+	}
+	return p.stageMutation(ctx, m, out, passphrase)
+}
+
+func (p *Publisher) channelRemoveMutation(ctx context.Context, name string) (mutation, error) {
 	st, err := p.loadVerified(ctx)
 	if err != nil {
-		return Result{}, err
+		return mutation{}, err
 	}
 	if st.Channels[name] == nil {
-		return Result{}, fmt.Errorf("unknown channel %q", name)
+		return mutation{}, fmt.Errorf("unknown channel %q", name)
 	}
-	removeDelegation(st.Targets, "channels."+name)
-	removeDelegation(st.Targets, "channels."+name+".authors")
-	delete(st.Channels, name)
-	delete(st.Authors, name)
-	deleteChannelDisplay(st, name)
-	now := p.now()
-	signFresh(st.Targets, p.exp().Targets, now)
-	master, err := p.key(ctx, keys.RoleMaster, "")
-	if err != nil {
-		return Result{}, err
-	}
-	if err := tufrepo.SignAndTag(st.Targets, master); err != nil {
-		return Result{}, err
-	}
-	if err := p.signFreshness(st, now); err != nil {
-		return Result{}, err
-	}
-	if err := p.writeVerified(ctx, st); err != nil {
-		return Result{}, err
-	}
-	return Result{Channels: []string{name}, Version: st.Targets.Signed.Version, Message: "channel removed"}, nil
+	return mutation{
+		apply: func(st *tufrepo.State) error {
+			removeDelegation(st.Targets, "channels."+name)
+			removeDelegation(st.Targets, "channels."+name+".authors")
+			deleteChannelDisplay(st, name)
+			return nil
+		},
+		steps: []ceremony.Step{{Kind: "channel-remove", Channel: name}},
+		msg:   "channel removed",
+		chans: []string{name},
+	}, nil
 }
 
 // ChannelSet updates master-signed channel display metadata.
 func (p *Publisher) ChannelSet(ctx context.Context, name, displayName, description string) (Result, error) {
-	st, err := p.loadVerified(ctx)
+	m, err := p.channelSetMutation(ctx, name, displayName, description)
 	if err != nil {
 		return Result{}, err
 	}
+	return p.runMutation(ctx, m)
+}
+
+// StageChannelSet stages the master-signed display metadata change.
+func (p *Publisher) StageChannelSet(ctx context.Context, name, displayName, description, out, passphrase string) (Result, error) {
+	m, err := p.channelSetMutation(ctx, name, displayName, description)
+	if err != nil {
+		return Result{}, err
+	}
+	return p.stageMutation(ctx, m, out, passphrase)
+}
+
+func (p *Publisher) channelSetMutation(ctx context.Context, name, displayName, description string) (mutation, error) {
+	st, err := p.loadVerified(ctx)
+	if err != nil {
+		return mutation{}, err
+	}
 	if st.Channels[name] == nil {
-		return Result{}, fmt.Errorf("unknown channel %q", name)
+		return mutation{}, fmt.Errorf("unknown channel %q", name)
 	}
 	display := map[string]any{}
 	if displayName != "" {
@@ -485,182 +805,178 @@ func (p *Publisher) ChannelSet(ctx context.Context, name, displayName, descripti
 	if description != "" {
 		display["description"] = description
 	}
-	setChannelDisplay(st, name, display)
-	now := p.now()
-	signFresh(st.Targets, p.exp().Targets, now)
-	master, err := p.key(ctx, keys.RoleMaster, "")
-	if err != nil {
-		return Result{}, err
-	}
-	if err := tufrepo.SignAndTag(st.Targets, master); err != nil {
-		return Result{}, err
-	}
-	if err := p.signFreshness(st, now); err != nil {
-		return Result{}, err
-	}
-	if err := p.writeVerified(ctx, st); err != nil {
-		return Result{}, err
-	}
-	return Result{Channels: []string{name}, Version: st.Targets.Signed.Version, Message: "channel updated"}, nil
+	return mutation{
+		apply: func(st *tufrepo.State) error { setChannelDisplay(st, name, display); return nil },
+		msg:   "channel updated",
+		chans: []string{name},
+	}, nil
 }
 
 // ChannelMode switches a channel between authored and simple mode. The mode
 // change MUST re-sign the channel's published items with the new mode's keys
 // (spec/feeds.md §2.1).
 func (p *Publisher) ChannelMode(ctx context.Context, name, mode string) (Result, error) {
-	st, err := p.loadVerified(ctx)
+	m, err := p.channelModeMutation(ctx, name, mode)
 	if err != nil {
 		return Result{}, err
 	}
-	chMeta := st.Channels[name]
-	if chMeta == nil {
-		return Result{}, fmt.Errorf("unknown channel %q", name)
+	return p.runMutation(ctx, m)
+}
+
+// StageChannelMode stages the master-signed mode change.
+func (p *Publisher) StageChannelMode(ctx context.Context, name, mode, out, passphrase string) (Result, error) {
+	m, err := p.channelModeMutation(ctx, name, mode)
+	if err != nil {
+		return Result{}, err
+	}
+	return p.stageMutation(ctx, m, out, passphrase)
+}
+
+func (p *Publisher) channelModeMutation(ctx context.Context, name, mode string) (mutation, error) {
+	st, err := p.loadVerified(ctx)
+	if err != nil {
+		return mutation{}, err
+	}
+	if st.Channels[name] == nil {
+		return mutation{}, fmt.Errorf("unknown channel %q", name)
+	}
+	chKey, err := p.channelKey(ctx, st, name)
+	if err != nil {
+		return mutation{}, err
 	}
 	switch mode {
 	case "authored":
 		if st.HasAuthors(name) {
-			return Result{}, fmt.Errorf("channel %q is already authored", name)
+			return mutation{}, fmt.Errorf("channel %q is already authored", name)
 		}
 		author, err := p.ensureKey(ctx, keys.RoleAuthor, name+"-author")
 		if err != nil {
-			return Result{}, err
+			return mutation{}, err
 		}
-		roleName := "channels." + name + ".authors"
-		if err := addDelegation(st.Targets, roleName, []*metadata.Key{author.TUF()}, 1, []string{"channels/" + name + "/*"}, false); err != nil {
-			return Result{}, err
-		}
-		authMeta := metadata.Targets(p.now().Add(p.exp().Authors))
-		authMeta.Signed.Delegations = emptyDelegations()
-		if err := tufrepo.SignAndTag(authMeta, author); err != nil {
-			return Result{}, err
-		}
-		st.Authors[name] = authMeta
-		// re-sign the channel's items with the author key (+ channel key)
-		chKey, err := p.channelKey(ctx, st, name)
-		if err != nil {
-			return Result{}, err
-		}
-		if err := p.resignItems(st, name, []*keys.Key{author, chKey}); err != nil {
-			return Result{}, err
-		}
+		return mutation{
+			apply: func(st *tufrepo.State) error {
+				roleName := "channels." + name + ".authors"
+				return addDelegation(st.Targets, roleName, []*metadata.Key{author.TUF()}, 1, []string{"channels/" + name + "/*"}, false)
+			},
+			steps: []ceremony.Step{{
+				Kind: "channel-mode", Channel: name, Mode: "authored",
+				KeyIDs: []string{author.KeyID(), chKey.KeyID()},
+			}},
+			keys:  []*keys.Key{author, chKey},
+			msg:   "mode authored",
+			chans: []string{name},
+		}, nil
 	case "simple":
 		if !st.HasAuthors(name) {
-			return Result{}, fmt.Errorf("channel %q is already simple", name)
+			return mutation{}, fmt.Errorf("channel %q is already simple", name)
 		}
-		removeDelegation(st.Targets, "channels."+name+".authors")
-		delete(st.Authors, name)
-		chKey, err := p.channelKey(ctx, st, name)
-		if err != nil {
-			return Result{}, err
-		}
-		if err := p.resignItems(st, name, []*keys.Key{chKey}); err != nil {
-			return Result{}, err
-		}
+		return mutation{
+			apply: func(st *tufrepo.State) error {
+				removeDelegation(st.Targets, "channels."+name+".authors")
+				return nil
+			},
+			steps: []ceremony.Step{{
+				Kind: "channel-mode", Channel: name, Mode: "simple",
+				KeyIDs: []string{chKey.KeyID()},
+			}},
+			keys:  []*keys.Key{chKey},
+			msg:   "mode simple",
+			chans: []string{name},
+		}, nil
 	default:
-		return Result{}, fmt.Errorf("unknown mode %q (want authored|simple)", mode)
+		return mutation{}, fmt.Errorf("unknown mode %q (want authored|simple)", mode)
 	}
-	now := p.now()
-	signFresh(st.Targets, p.exp().Targets, now)
-	master, err := p.key(ctx, keys.RoleMaster, "")
-	if err != nil {
-		return Result{}, err
-	}
-	if err := tufrepo.SignAndTag(st.Targets, master); err != nil {
-		return Result{}, err
-	}
-	chKey, err := p.channelKey(ctx, st, name)
-	if err != nil {
-		return Result{}, err
-	}
-	signFresh(chMeta, p.exp().Channel, now)
-	if err := tufrepo.SignAndTag(chMeta, chKey); err != nil {
-		return Result{}, err
-	}
-	if err := p.signFreshness(st, now); err != nil {
-		return Result{}, err
-	}
-	if err := p.writeVerified(ctx, st); err != nil {
-		return Result{}, err
-	}
-	return Result{Channels: []string{name}, Version: st.Targets.Signed.Version, Message: "mode " + mode}, nil
 }
 
 // AuthorAdd adds an author keyid to an authored channel's delegation and
 // re-signs the authors role metadata (spec/repository.md §5).
 func (p *Publisher) AuthorAdd(ctx context.Context, channel, keyid string) (Result, error) {
-	return p.authorChange(ctx, channel, keyid, false)
+	m, err := p.authorChangeMutation(ctx, channel, keyid, false)
+	if err != nil {
+		return Result{}, err
+	}
+	return p.runMutation(ctx, m)
 }
 
 // AuthorRevoke drops an author keyid; it refuses to remove the last author
 // (use `channel mode <channel> simple` instead, spec/feeds.md §2.1).
 func (p *Publisher) AuthorRevoke(ctx context.Context, channel, keyid string) (Result, error) {
-	return p.authorChange(ctx, channel, keyid, true)
-}
-
-func (p *Publisher) authorChange(ctx context.Context, channel, keyid string, revoke bool) (Result, error) {
-	st, err := p.loadVerified(ctx)
+	m, err := p.authorChangeMutation(ctx, channel, keyid, true)
 	if err != nil {
 		return Result{}, err
+	}
+	return p.runMutation(ctx, m)
+}
+
+// StageAuthorAdd stages the master-signed author addition.
+func (p *Publisher) StageAuthorAdd(ctx context.Context, channel, keyid, out, passphrase string) (Result, error) {
+	m, err := p.authorChangeMutation(ctx, channel, keyid, false)
+	if err != nil {
+		return Result{}, err
+	}
+	return p.stageMutation(ctx, m, out, passphrase)
+}
+
+// StageAuthorRevoke stages the master-signed author revocation.
+func (p *Publisher) StageAuthorRevoke(ctx context.Context, channel, keyid, out, passphrase string) (Result, error) {
+	m, err := p.authorChangeMutation(ctx, channel, keyid, true)
+	if err != nil {
+		return Result{}, err
+	}
+	return p.stageMutation(ctx, m, out, passphrase)
+}
+
+func (p *Publisher) authorChangeMutation(ctx context.Context, channel, keyid string, revoke bool) (mutation, error) {
+	st, err := p.loadVerified(ctx)
+	if err != nil {
+		return mutation{}, err
 	}
 	roleName := "channels." + channel + ".authors"
 	role := st.Delegation(roleName)
 	if role == nil {
-		return Result{}, fmt.Errorf("channel %q is not authored (use channel mode %s authored)", channel, channel)
+		return mutation{}, fmt.Errorf("channel %q is not authored (use channel mode %s authored)", channel, channel)
 	}
 	key, err := p.keyByID(ctx, keyid)
 	if err != nil {
-		return Result{}, err
+		return mutation{}, err
 	}
 	if revoke {
 		if !contains(role.KeyIDs, keyid) {
-			return Result{}, fmt.Errorf("author %s is not listed on channel %q", keyid, channel)
+			return mutation{}, fmt.Errorf("author %s is not listed on channel %q", keyid, channel)
 		}
 		if len(role.KeyIDs) <= 1 {
-			return Result{}, fmt.Errorf("cannot remove the last author; use channel mode %s simple", channel)
+			return mutation{}, fmt.Errorf("cannot remove the last author; use channel mode %s simple", channel)
 		}
-		role.KeyIDs = removeString(role.KeyIDs, keyid)
 	} else {
 		if contains(role.KeyIDs, keyid) {
-			return Result{}, fmt.Errorf("author %s is already listed on channel %q", keyid, channel)
+			return mutation{}, fmt.Errorf("author %s is already listed on channel %q", keyid, channel)
 		}
 		if chRole := st.Delegation("channels." + channel); chRole != nil && contains(chRole.KeyIDs, keyid) {
-			return Result{}, fmt.Errorf("key %s is the channel role key; key separation is required", keyid)
+			return mutation{}, fmt.Errorf("key %s is the channel role key; key separation is required", keyid)
 		}
-		role.KeyIDs = append(role.KeyIDs, keyid)
-	}
-	st.Targets.Signed.Delegations.Keys[keyid] = key.TUF()
-	authMeta := st.Authors[channel]
-	authMeta.ClearSignatures()
-	now := p.now()
-	authMeta.Signed.Expires = now.Add(p.exp().Authors)
-	for _, kid := range role.KeyIDs {
-		k, err := p.keyByID(ctx, kid)
-		if err != nil {
-			return Result{}, err
-		}
-		if err := tufrepo.SignAndTag(authMeta, k); err != nil {
-			return Result{}, err
-		}
-	}
-	signFresh(st.Targets, p.exp().Targets, now)
-	master, err := p.key(ctx, keys.RoleMaster, "")
-	if err != nil {
-		return Result{}, err
-	}
-	if err := tufrepo.SignAndTag(st.Targets, master); err != nil {
-		return Result{}, err
-	}
-	if err := p.signFreshness(st, now); err != nil {
-		return Result{}, err
-	}
-	if err := p.writeVerified(ctx, st); err != nil {
-		return Result{}, err
 	}
 	action := "added"
 	if revoke {
 		action = "revoked"
 	}
-	return Result{Channels: []string{channel}, Version: st.Targets.Signed.Version, Message: "author " + action}, nil
+	return mutation{
+		apply: func(st *tufrepo.State) error {
+			role := st.Delegation(roleName)
+			if revoke {
+				role.KeyIDs = removeString(role.KeyIDs, keyid)
+			} else {
+				role.KeyIDs = append(role.KeyIDs, keyid)
+				st.Targets.Signed.Delegations.Keys[keyid] = key.TUF()
+			}
+			return nil
+		},
+		steps: []ceremony.Step{{
+			Kind: "authors-create", Channel: channel, KeyIDs: append([]string(nil), role.KeyIDs...),
+		}},
+		keys:  []*keys.Key{key},
+		msg:   "author " + action,
+		chans: []string{channel},
+	}, nil
 }
 
 // PatternSpec configures a private-feed pattern entry.
@@ -676,13 +992,26 @@ type PatternSpec struct {
 // PatternAdd adds a master-signed private-feed pattern entry
 // (spec/feeds.md §3).
 func (p *Publisher) PatternAdd(ctx context.Context, spec PatternSpec) (Result, error) {
-	st, err := p.loadVerified(ctx)
+	m, err := p.patternAddMutation(ctx, spec)
 	if err != nil {
 		return Result{}, err
 	}
-	key, err := p.keyByID(ctx, spec.KeyID)
+	return p.runMutation(ctx, m)
+}
+
+// StagePatternAdd stages the master-signed pattern addition.
+func (p *Publisher) StagePatternAdd(ctx context.Context, spec PatternSpec, out, passphrase string) (Result, error) {
+	m, err := p.patternAddMutation(ctx, spec)
 	if err != nil {
 		return Result{}, err
+	}
+	return p.stageMutation(ctx, m, out, passphrase)
+}
+
+func (p *Publisher) patternAddMutation(ctx context.Context, spec PatternSpec) (mutation, error) {
+	key, err := p.keyByID(ctx, spec.KeyID)
+	if err != nil {
+		return mutation{}, err
 	}
 	threshold := spec.Threshold
 	if threshold < 1 {
@@ -701,208 +1030,213 @@ func (p *Publisher) PatternAdd(ctx context.Context, spec PatternSpec) (Result, e
 	if spec.Purpose != "" {
 		entry["purpose"] = spec.Purpose
 	}
-	custom := st.Custom()
-	patterns, _ := custom["private_feed_patterns"].([]any)
-	custom["private_feed_patterns"] = append(patterns, entry)
-	now := p.now()
-	signFresh(st.Targets, p.exp().Targets, now)
-	master, err := p.key(ctx, keys.RoleMaster, "")
-	if err != nil {
-		return Result{}, err
-	}
-	if err := tufrepo.SignAndTag(st.Targets, master); err != nil {
-		return Result{}, err
-	}
-	if err := p.signFreshness(st, now); err != nil {
-		return Result{}, err
-	}
-	if err := p.writeVerified(ctx, st); err != nil {
-		return Result{}, err
-	}
-	return Result{Channels: []string{spec.Channel}, Version: st.Targets.Signed.Version, Message: "pattern added"}, nil
+	return mutation{
+		apply: func(st *tufrepo.State) error {
+			custom := st.Custom()
+			patterns, _ := custom["private_feed_patterns"].([]any)
+			custom["private_feed_patterns"] = append(patterns, entry)
+			return nil
+		},
+		msg:   "pattern added",
+		chans: []string{spec.Channel},
+	}, nil
 }
 
 // PatternRemove drops the pattern entry for a channel.
 func (p *Publisher) PatternRemove(ctx context.Context, channel string) (Result, error) {
-	st, err := p.loadVerified(ctx)
+	m, err := p.patternRemoveMutation(ctx, channel)
 	if err != nil {
 		return Result{}, err
 	}
+	return p.runMutation(ctx, m)
+}
+
+// StagePatternRemove stages the master-signed pattern removal.
+func (p *Publisher) StagePatternRemove(ctx context.Context, channel, out, passphrase string) (Result, error) {
+	m, err := p.patternRemoveMutation(ctx, channel)
+	if err != nil {
+		return Result{}, err
+	}
+	return p.stageMutation(ctx, m, out, passphrase)
+}
+
+func (p *Publisher) patternRemoveMutation(ctx context.Context, channel string) (mutation, error) {
+	st, err := p.loadVerified(ctx)
+	if err != nil {
+		return mutation{}, err
+	}
 	custom := st.Custom()
 	patterns, _ := custom["private_feed_patterns"].([]any)
-	var kept []any
 	found := false
 	for _, e := range patterns {
 		if m, ok := e.(map[string]any); ok && m["channel"] == channel {
 			found = true
-			continue
+			break
 		}
-		kept = append(kept, e)
 	}
 	if !found {
-		return Result{}, fmt.Errorf("no private-feed pattern for channel %q", channel)
+		return mutation{}, fmt.Errorf("no private-feed pattern for channel %q", channel)
 	}
-	custom["private_feed_patterns"] = kept
-	now := p.now()
-	signFresh(st.Targets, p.exp().Targets, now)
-	master, err := p.key(ctx, keys.RoleMaster, "")
-	if err != nil {
-		return Result{}, err
-	}
-	if err := tufrepo.SignAndTag(st.Targets, master); err != nil {
-		return Result{}, err
-	}
-	if err := p.signFreshness(st, now); err != nil {
-		return Result{}, err
-	}
-	if err := p.writeVerified(ctx, st); err != nil {
-		return Result{}, err
-	}
-	return Result{Channels: []string{channel}, Version: st.Targets.Signed.Version, Message: "pattern removed"}, nil
+	return mutation{
+		apply: func(st *tufrepo.State) error {
+			custom := st.Custom()
+			patterns, _ := custom["private_feed_patterns"].([]any)
+			var kept []any
+			for _, e := range patterns {
+				if m, ok := e.(map[string]any); ok && m["channel"] == channel {
+					continue
+				}
+				kept = append(kept, e)
+			}
+			custom["private_feed_patterns"] = kept
+			return nil
+		},
+		msg:   "pattern removed",
+		chans: []string{channel},
+	}, nil
 }
 
 // CompanySet is the identity ceremony: master-signed company name and/or logo.
 func (p *Publisher) CompanySet(ctx context.Context, name, logo, logoSHA256 string) (Result, error) {
-	st, err := p.loadVerified(ctx)
+	m, err := p.companySetMutation(ctx, name, logo, logoSHA256)
 	if err != nil {
 		return Result{}, err
 	}
-	custom := st.Custom()
-	if name != "" {
-		custom["company_name"] = name
+	return p.runMutation(ctx, m)
+}
+
+// StageCompanySet stages the master-signed identity change.
+func (p *Publisher) StageCompanySet(ctx context.Context, name, logo, logoSHA256, out, passphrase string) (Result, error) {
+	m, err := p.companySetMutation(ctx, name, logo, logoSHA256)
+	if err != nil {
+		return Result{}, err
 	}
-	if logo != "" {
-		if strings.HasPrefix(logo, "https://") {
-			if logoSHA256 == "" {
-				return Result{}, fmt.Errorf("linked logo requires logo_sha256")
+	return p.stageMutation(ctx, m, out, passphrase)
+}
+
+func (p *Publisher) companySetMutation(_ context.Context, name, logo, logoSHA256 string) (mutation, error) {
+	if logo != "" && strings.HasPrefix(logo, "https://") && logoSHA256 == "" {
+		return mutation{}, fmt.Errorf("linked logo requires logo_sha256")
+	}
+	return mutation{
+		apply: func(st *tufrepo.State) error {
+			custom := st.Custom()
+			if name != "" {
+				custom["company_name"] = name
 			}
-			custom["logo"] = logo
-			custom["logo_sha256"] = logoSHA256
-		} else {
-			custom["logo"] = logo
-			delete(custom, "logo_sha256")
-		}
-	}
-	now := p.now()
-	signFresh(st.Targets, p.exp().Targets, now)
-	master, err := p.key(ctx, keys.RoleMaster, "")
-	if err != nil {
-		return Result{}, err
-	}
-	if err := tufrepo.SignAndTag(st.Targets, master); err != nil {
-		return Result{}, err
-	}
-	if err := p.signFreshness(st, now); err != nil {
-		return Result{}, err
-	}
-	if err := p.writeVerified(ctx, st); err != nil {
-		return Result{}, err
-	}
-	return Result{Company: st.CompanyName(), Version: st.Targets.Signed.Version, Message: "company updated"}, nil
+			if logo != "" {
+				custom["logo"] = logo
+				if strings.HasPrefix(logo, "https://") {
+					custom["logo_sha256"] = logoSHA256
+				} else {
+					delete(custom, "logo_sha256")
+				}
+			}
+			return nil
+		},
+		msg: "company updated",
+	}, nil
 }
 
 // RotateChannelKey adds a new channel key alongside the old (threshold-1
 // overlap), re-signs the channel role metadata with old+new and, in simple
 // mode, re-signs the channel's items with the new key (spec/repository.md §5).
 func (p *Publisher) RotateChannelKey(ctx context.Context, channel string) (Result, error) {
-	st, err := p.loadVerified(ctx)
+	m, err := p.rotateChannelKeyMutation(ctx, channel)
 	if err != nil {
 		return Result{}, err
 	}
-	chMeta := st.Channels[channel]
-	if chMeta == nil {
-		return Result{}, fmt.Errorf("unknown channel %q", channel)
+	return p.runMutation(ctx, m)
+}
+
+// StageChannelKeyRotate stages the master-signed overlap rotation.
+func (p *Publisher) StageChannelKeyRotate(ctx context.Context, channel, out, passphrase string) (Result, error) {
+	m, err := p.rotateChannelKeyMutation(ctx, channel)
+	if err != nil {
+		return Result{}, err
+	}
+	return p.stageMutation(ctx, m, out, passphrase)
+}
+
+func (p *Publisher) rotateChannelKeyMutation(ctx context.Context, channel string) (mutation, error) {
+	st, err := p.loadVerified(ctx)
+	if err != nil {
+		return mutation{}, err
+	}
+	if st.Channels[channel] == nil {
+		return mutation{}, fmt.Errorf("unknown channel %q", channel)
 	}
 	newKey, err := p.ensureKey(ctx, keys.RoleChannel, channel+"-"+shortID(p.now()))
 	if err != nil {
-		return Result{}, err
+		return mutation{}, err
 	}
-	roleName := "channels." + channel
-	role := st.Delegation(roleName)
+	role := st.Delegation("channels." + channel)
 	if role == nil {
-		return Result{}, fmt.Errorf("channel %q: delegation missing", channel)
+		return mutation{}, fmt.Errorf("channel %q: delegation missing", channel)
 	}
-	role.KeyIDs = append(role.KeyIDs, newKey.KeyID())
-	st.Targets.Signed.Delegations.Keys[newKey.KeyID()] = newKey.TUF()
-	if !st.HasAuthors(channel) {
-		if err := p.resignItems(st, channel, []*keys.Key{newKey}); err != nil {
-			return Result{}, err
-		}
-	}
-	now := p.now()
-	signFresh(chMeta, p.exp().Channel, now)
-	for _, kid := range role.KeyIDs {
-		k, err := p.keyByID(ctx, kid)
-		if err != nil {
-			return Result{}, err
-		}
-		if err := tufrepo.SignAndTag(chMeta, k); err != nil {
-			return Result{}, err
-		}
-	}
-	signFresh(st.Targets, p.exp().Targets, now)
-	master, err := p.key(ctx, keys.RoleMaster, "")
-	if err != nil {
-		return Result{}, err
-	}
-	if err := tufrepo.SignAndTag(st.Targets, master); err != nil {
-		return Result{}, err
-	}
-	if err := p.signFreshness(st, now); err != nil {
-		return Result{}, err
-	}
-	if err := p.writeVerified(ctx, st); err != nil {
-		return Result{}, err
-	}
-	return Result{Channels: []string{channel}, Version: st.Targets.Signed.Version, Message: "channel key rotated (overlap)"}, nil
+	all := append(append([]string(nil), role.KeyIDs...), newKey.KeyID())
+	return mutation{
+		apply: func(st *tufrepo.State) error {
+			role := st.Delegation("channels." + channel)
+			role.KeyIDs = append(role.KeyIDs, newKey.KeyID())
+			st.Targets.Signed.Delegations.Keys[newKey.KeyID()] = newKey.TUF()
+			return nil
+		},
+		steps: []ceremony.Step{{
+			Kind: "channel-keys", Channel: channel, KeyIDs: all, Resign: !st.HasAuthors(channel),
+		}},
+		keys:  []*keys.Key{newKey},
+		msg:   "channel key rotated (overlap)",
+		chans: []string{channel},
+	}, nil
 }
 
 // RevokeChannelKey drops a keyid from the channel delegation and re-signs
 // the channel role metadata with the remaining keys.
 func (p *Publisher) RevokeChannelKey(ctx context.Context, channel, keyid string) (Result, error) {
-	st, err := p.loadVerified(ctx)
+	m, err := p.revokeChannelKeyMutation(ctx, channel, keyid)
 	if err != nil {
 		return Result{}, err
+	}
+	return p.runMutation(ctx, m)
+}
+
+// StageChannelKeyRevoke stages the master-signed revocation.
+func (p *Publisher) StageChannelKeyRevoke(ctx context.Context, channel, keyid, out, passphrase string) (Result, error) {
+	m, err := p.revokeChannelKeyMutation(ctx, channel, keyid)
+	if err != nil {
+		return Result{}, err
+	}
+	return p.stageMutation(ctx, m, out, passphrase)
+}
+
+func (p *Publisher) revokeChannelKeyMutation(ctx context.Context, channel, keyid string) (mutation, error) {
+	st, err := p.loadVerified(ctx)
+	if err != nil {
+		return mutation{}, err
 	}
 	role := st.Delegation("channels." + channel)
 	if role == nil {
-		return Result{}, fmt.Errorf("unknown channel %q", channel)
+		return mutation{}, fmt.Errorf("unknown channel %q", channel)
 	}
 	if !contains(role.KeyIDs, keyid) {
-		return Result{}, fmt.Errorf("key %s is not on channel %q", keyid, channel)
+		return mutation{}, fmt.Errorf("key %s is not on channel %q", keyid, channel)
 	}
 	if len(role.KeyIDs) <= 1 {
-		return Result{}, fmt.Errorf("cannot revoke the last channel key")
+		return mutation{}, fmt.Errorf("cannot revoke the last channel key")
 	}
-	role.KeyIDs = removeString(role.KeyIDs, keyid)
-	delete(st.Targets.Signed.Delegations.Keys, keyid)
-	chMeta := st.Channels[channel]
-	now := p.now()
-	signFresh(chMeta, p.exp().Channel, now)
-	for _, kid := range role.KeyIDs {
-		k, err := p.keyByID(ctx, kid)
-		if err != nil {
-			return Result{}, err
-		}
-		if err := tufrepo.SignAndTag(chMeta, k); err != nil {
-			return Result{}, err
-		}
-	}
-	signFresh(st.Targets, p.exp().Targets, now)
-	master, err := p.key(ctx, keys.RoleMaster, "")
-	if err != nil {
-		return Result{}, err
-	}
-	if err := tufrepo.SignAndTag(st.Targets, master); err != nil {
-		return Result{}, err
-	}
-	if err := p.signFreshness(st, now); err != nil {
-		return Result{}, err
-	}
-	if err := p.writeVerified(ctx, st); err != nil {
-		return Result{}, err
-	}
-	return Result{Channels: []string{channel}, Version: st.Targets.Signed.Version, Message: "channel key revoked"}, nil
+	remaining := removeString(role.KeyIDs, keyid)
+	return mutation{
+		apply: func(st *tufrepo.State) error {
+			role := st.Delegation("channels." + channel)
+			role.KeyIDs = removeString(role.KeyIDs, keyid)
+			delete(st.Targets.Signed.Delegations.Keys, keyid)
+			return nil
+		},
+		steps: []ceremony.Step{{Kind: "channel-keys", Channel: channel, KeyIDs: remaining}},
+		msg:   "channel key revoked",
+		chans: []string{channel},
+	}, nil
 }
 
 // RotateRoot generates a new master key, builds root v+1 signed by the

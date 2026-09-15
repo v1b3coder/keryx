@@ -14,6 +14,7 @@ import (
 	"github.com/v1b3coder/keryx/sdk/keys"
 	"github.com/v1b3coder/keryx/sdk/publisher"
 	"github.com/v1b3coder/keryx/sdk/repo"
+	"github.com/v1b3coder/keryx/sdk/tufrepo"
 )
 
 type env struct {
@@ -388,4 +389,78 @@ func mustToken(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return tok
+}
+
+func TestTwoStepCeremony(t *testing.T) {
+	dir := t.TempDir()
+	base := repo.NewDirRepo(filepath.Join(dir, "repo"))
+	anchor := repo.NewDirRepo(filepath.Join(dir, "anchor"))
+	operatorKeys := keys.NewDirStore(filepath.Join(dir, "keys-operator"), "")
+	ciKeys := keys.NewDirStore(filepath.Join(dir, "keys-ci"), "")
+
+	// operator machine: master + ops backup key
+	ops, err := keys.Generate(keys.RoleOps, "ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := operatorKeys.Add(context.Background(), ops); err != nil {
+		t.Fatal(err)
+	}
+	operator := publisher.New(base, anchor, operatorKeys)
+	operator.Now = func() time.Time { return time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC) }
+	if _, err := operator.Init(context.Background(), publisher.InitParams{
+		RepoBase: "https://cdn.example.com/keryx", CompanyName: "ACME",
+	}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	// CI machine: the same ops key (snapshot/timestamp), no master
+	if err := ciKeys.Add(context.Background(), ops); err != nil {
+		t.Fatal(err)
+	}
+	ci := publisher.New(base, anchor, ciKeys)
+	ci.Now = operator.Now
+
+	// stage on the offline machine: master-signed targets.json + bundle
+	authorA, err := keys.Generate(keys.RoleAuthor, "author-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorB, err := keys.Generate(keys.RoleAuthor, "author-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []*keys.Key{authorA, authorB} {
+		if err := operatorKeys.Add(context.Background(), k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bundleDir := filepath.Join(dir, "bundle")
+	if _, err := operator.StageChannelAdd(context.Background(), publisher.ChannelSpec{
+		Name: "security", DisplayName: "Security", Threshold: 2,
+		Authors: []string{authorA.KeyID(), authorB.KeyID()},
+	}, bundleDir, ""); err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	// the live repo is untouched until apply
+	live, err := tufrepo.Load(context.Background(), base, anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live.Channels["security"] != nil {
+		t.Fatal("stage wrote the live repo")
+	}
+	// apply on the CI machine: installs the channel key, creates role metadata
+	if _, err := ci.Apply(context.Background(), bundleDir, ""); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	res, err := ci.Validate(context.Background())
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if len(res.Channels) != 1 || res.Channels[0] != "security" {
+		t.Fatalf("channels = %v", res.Channels)
+	}
+	if _, err := ci.AuthorList(context.Background(), "security"); err != nil {
+		t.Fatalf("authors: %v", err)
+	}
 }

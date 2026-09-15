@@ -27,10 +27,12 @@ func (a *app) channelAddCmd() *cobra.Command {
 		Use:   "add <name>",
 		Short: "Add a channel (authored by default; --simple opts out)",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			spec.Name = args[0]
 			spec.Simple = simple
-			res, err := a.publisher().ChannelAdd(a.ctx(), spec)
+			res, err := runOrStage(cmd,
+				func(dir, pass string) (publisher.Result, error) { return a.publisher().StageChannelAdd(a.ctx(), spec, dir, pass) },
+				func() (publisher.Result, error) { return a.publisher().ChannelAdd(a.ctx(), spec) })
 			if err != nil {
 				return err
 			}
@@ -38,6 +40,7 @@ func (a *app) channelAddCmd() *cobra.Command {
 			return nil
 		},
 	}
+	addStageFlags(cmd)
 	f := cmd.Flags()
 	f.StringVar(&spec.DisplayName, "display-name", "", "display name")
 	f.StringVar(&spec.Description, "description", "", "description")
@@ -49,12 +52,16 @@ func (a *app) channelAddCmd() *cobra.Command {
 }
 
 func (a *app) channelRemoveCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "remove <name>",
 		Short: "Remove a channel",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			res, err := a.publisher().ChannelRemove(a.ctx(), args[0])
+		RunE: func(cmd *cobra.Command, args []string) error {
+			res, err := runOrStage(cmd,
+				func(dir, pass string) (publisher.Result, error) {
+					return a.publisher().StageChannelRemove(a.ctx(), args[0], dir, pass)
+				},
+				func() (publisher.Result, error) { return a.publisher().ChannelRemove(a.ctx(), args[0]) })
 			if err != nil {
 				return err
 			}
@@ -62,15 +69,21 @@ func (a *app) channelRemoveCmd() *cobra.Command {
 			return nil
 		},
 	}
+	addStageFlags(cmd)
+	return cmd
 }
 
 func (a *app) channelModeCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "mode <name> simple|authored",
 		Short: "Master-signed channel mode change (re-signs items)",
 		Args:  cobra.ExactArgs(2),
-		RunE: func(_ *cobra.Command, args []string) error {
-			res, err := a.publisher().ChannelMode(a.ctx(), args[0], args[1])
+		RunE: func(cmd *cobra.Command, args []string) error {
+			res, err := runOrStage(cmd,
+				func(dir, pass string) (publisher.Result, error) {
+					return a.publisher().StageChannelMode(a.ctx(), args[0], args[1], dir, pass)
+				},
+				func() (publisher.Result, error) { return a.publisher().ChannelMode(a.ctx(), args[0], args[1]) })
 			if err != nil {
 				return err
 			}
@@ -78,6 +91,8 @@ func (a *app) channelModeCmd() *cobra.Command {
 			return nil
 		},
 	}
+	addStageFlags(cmd)
+	return cmd
 }
 
 func (a *app) channelSetCmd() *cobra.Command {
@@ -85,8 +100,14 @@ func (a *app) channelSetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set",
 		Short: "Update master-signed channel display metadata",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			res, err := a.publisher().ChannelSet(a.ctx(), channel, displayName, description)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			res, err := runOrStage(cmd,
+				func(dir, pass string) (publisher.Result, error) {
+					return a.publisher().StageChannelSet(a.ctx(), channel, displayName, description, dir, pass)
+				},
+				func() (publisher.Result, error) {
+					return a.publisher().ChannelSet(a.ctx(), channel, displayName, description)
+				})
 			if err != nil {
 				return err
 			}
@@ -94,6 +115,7 @@ func (a *app) channelSetCmd() *cobra.Command {
 			return nil
 		},
 	}
+	addStageFlags(cmd)
 	cmd.Flags().StringVar(&channel, "channel", "", "channel name")
 	cmd.Flags().StringVar(&displayName, "display-name", "", "display name")
 	cmd.Flags().StringVar(&description, "description", "", "description")
@@ -129,27 +151,39 @@ func (a *app) channelListCmd() *cobra.Command {
 func (a *app) channelKeyCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "key", Short: "Channel key rotation / revocation"}
 	cmd.AddCommand(
-		&cobra.Command{
-			Use:   "rotate <channel>",
-			Short: "Add a new channel key alongside the old (overlap)",
-			Args:  cobra.ExactArgs(1),
-			RunE: func(_ *cobra.Command, args []string) error {
-				res, err := a.publisher().RotateChannelKey(a.ctx(), args[0])
-				if err != nil {
-					return err
-				}
-				a.render(res, fmt.Sprintf("channel %s key rotated (targets v%d)", args[0], res.Version))
-				return nil
-			},
-		},
+		func() *cobra.Command {
+			c := &cobra.Command{
+				Use:   "rotate <channel>",
+				Short: "Add a new channel key alongside the old (overlap)",
+				Args:  cobra.ExactArgs(1),
+				RunE: func(cmd *cobra.Command, args []string) error {
+					res, err := runOrStage(cmd,
+						func(dir, pass string) (publisher.Result, error) {
+							return a.publisher().StageChannelKeyRotate(a.ctx(), args[0], dir, pass)
+						},
+						func() (publisher.Result, error) { return a.publisher().RotateChannelKey(a.ctx(), args[0]) })
+					if err != nil {
+						return err
+					}
+					a.render(res, fmt.Sprintf("channel %s key rotated (targets v%d)", args[0], res.Version))
+					return nil
+				},
+			}
+			addStageFlags(c)
+			return c
+		}(),
 		func() *cobra.Command {
 			var keyid string
 			c := &cobra.Command{
 				Use:   "revoke <channel>",
 				Short: "Drop a channel keyid",
 				Args:  cobra.ExactArgs(1),
-				RunE: func(_ *cobra.Command, args []string) error {
-					res, err := a.publisher().RevokeChannelKey(a.ctx(), args[0], keyid)
+				RunE: func(cmd *cobra.Command, args []string) error {
+					res, err := runOrStage(cmd,
+						func(dir, pass string) (publisher.Result, error) {
+							return a.publisher().StageChannelKeyRevoke(a.ctx(), args[0], keyid, dir, pass)
+						},
+						func() (publisher.Result, error) { return a.publisher().RevokeChannelKey(a.ctx(), args[0], keyid) })
 					if err != nil {
 						return err
 					}
@@ -157,6 +191,7 @@ func (a *app) channelKeyCmd() *cobra.Command {
 					return nil
 				},
 			}
+			addStageFlags(c)
 			c.Flags().StringVar(&keyid, "keyid", "", "keyid to revoke")
 			_ = c.MarkFlagRequired("keyid")
 			return c
