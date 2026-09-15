@@ -1,10 +1,10 @@
 package main
 
 import (
-	"crypto/rand"
+	"context"
 	"crypto/sha256"
-	_ "embed"
 	"encoding/base64"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -14,6 +14,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/v1b3coder/keryx/sdk/feed"
+	"github.com/v1b3coder/keryx/sdk/join"
+	"github.com/v1b3coder/keryx/sdk/keys"
+	"github.com/v1b3coder/keryx/sdk/publisher"
+	"github.com/v1b3coder/keryx/sdk/repo"
 )
 
 func main() {
@@ -24,23 +31,16 @@ func main() {
 
 	setBase(*base)
 
-	keysDir := filepath.Join(*site, "keys")
-	keys, err := loadOrCreateKeys(keysDir, keyNames)
-	if err != nil {
-		fatal(err)
-	}
-
 	switch *mode {
 	case "build":
-		if err := buildAll(keys, *site); err != nil {
+		if err := buildAll(*site); err != nil {
 			fatal(err)
 		}
 	case "verify":
-		if err := verifyRepo(keys, *site); err != nil {
+		if err := verifyAll(*site); err != nil {
 			fatal(err)
 		}
-		fmt.Printf("OK: metadata chain and all feed items verified against %s\n", *site)
-		return
+		fmt.Printf("OK: metadata chain and all items verified against %s\n", *site)
 	default:
 		fatal(fmt.Errorf("unknown mode %q", *mode))
 	}
@@ -58,79 +58,139 @@ func setBase(base string) {
 	trackingPattern = base + "/channels/tracking/*/feed.json"
 }
 
-func buildAll(keys map[string]*keyPair, site string) error {
-	fmt.Println("== building TUF repository ==")
+// newPublisher opens the SDK workspace rooted at site: keys/, keryx/ (repo
+// base) and .well-known/keryx/ (root anchor).
+func newPublisher(site string) *publisher.Publisher {
+	ks := keys.NewDirStore(filepath.Join(site, "keys"), "")
+	return publisher.New(
+		repo.NewDirRepo(filepath.Join(site, "keryx")),
+		repo.NewDirRepo(filepath.Join(site, ".well-known", "keryx")),
+		ks,
+	)
+}
+
+func ensureKey(ctx context.Context, ks *keys.DirStore, role keys.Role, name string) (*keys.Key, error) {
+	k, err := ks.Find(ctx, role, name)
+	if err == nil {
+		return k, nil
+	}
+	if !keys.IsNotFound(err) {
+		return nil, err
+	}
+	k, err = keys.Generate(role, name)
+	if err != nil {
+		return nil, err
+	}
+	if err := ks.Add(ctx, k); err != nil {
+		return nil, err
+	}
+	fmt.Printf("generated new demo key: %s (%s)\n", name, role)
+	return k, nil
+}
+
+// roleFor maps a demo key name to its publisher role.
+func roleFor(name string) keys.Role {
+	switch name {
+	case "master":
+		return keys.RoleMaster
+	case "ops":
+		return keys.RoleOps
+	case "tracking":
+		return keys.RoleEngine
+	case "author-security-a", "author-security-b":
+		return keys.RoleAuthor
+	default:
+		return keys.RoleChannel
+	}
+}
+
+func buildAll(site string) error {
+	ctx := context.Background()
+	fmt.Println("== building TUF repository with the publisher SDK ==")
 	// stale artifacts from older layouts are removed so the repo is
 	// self-contained and matches the current protocol exactly.
-	for _, stale := range []string{".well-known", "beacon", "keryx", "join.png", "_sig", "channels", "blog"} {
+	for _, stale := range []string{".well-known", "beacon", "keryx", "join.png", "_sig", "channels", "blog", "keys"} {
 		if err := os.RemoveAll(filepath.Join(site, stale)); err != nil {
 			return err
 		}
 	}
+	pub := newPublisher(site)
+	pub.AllowLocalHTTP = true
 
-	fmt.Println("== signing public items (one TUF target per item) ==")
-	items := map[string][]byte{}
+	// the logo is embedded as an inline data URL: self-contained and
+	// authenticated by the master-signed metadata itself (spec/repository.md §2)
+	logo := ""
+	if data, err := os.ReadFile(filepath.Join("assets", "logo.png")); err == nil {
+		logo = "data:image/png;base64," + base64.StdEncoding.EncodeToString(data)
+	} else {
+		return fmt.Errorf("read assets/logo.png: %w", err)
+	}
+	if _, err := pub.Init(ctx, publisher.InitParams{
+		RepoBase: repoBase, CompanyName: companyName, Logo: logo,
+	}); err != nil {
+		return err
+	}
+
+	fmt.Println("== channels ==")
+	authorIDs := make([]string, 0, len(authorChannels["security"].KeyNames))
+	for _, name := range authorChannels["security"].KeyNames {
+		k, err := ensureKey(ctx, pub.Keys.(*keys.DirStore), keys.RoleAuthor, name)
+		if err != nil {
+			return err
+		}
+		authorIDs = append(authorIDs, k.KeyID())
+	}
+	if _, err := pub.ChannelAdd(ctx, publisher.ChannelSpec{
+		Name: "security", DisplayName: channels[0].DisplayName,
+		Description: channels[0].Description, Threshold: 2, Authors: authorIDs,
+	}); err != nil {
+		return err
+	}
 	for _, ch := range channels {
-		n := 0
-		for _, it := range publicItems {
-			if it.Channel != ch.Name {
-				continue
-			}
-			item, err := buildChannelItem(keys, it)
-			if err != nil {
-				return err
-			}
-			data, err := itemToBytes(item)
-			if err != nil {
-				return err
-			}
-			items[itemTargetPath(ch.Name, it.ID)] = data
-			n++
+		if ch.Name == "security" {
+			continue
 		}
-		if n == 0 {
-			return fmt.Errorf("channel %q has no items", ch.Name)
+		if _, err := pub.ChannelAdd(ctx, publisher.ChannelSpec{
+			Name: ch.Name, DisplayName: ch.DisplayName, Description: ch.Description, Simple: true,
+		}); err != nil {
+			return err
 		}
-		fmt.Printf("  %s: %d items\n", ch.Name, n)
 	}
-	if err := buildRepo(keys, site, items); err != nil {
-		return err
-	}
-	fmt.Printf("  master keyid: %s\n", keys["master"].KeyID)
-	fmt.Printf("  ops keyid:    %s\n", keys["ops"].KeyID)
 
-	fmt.Println("== signing private (capability) feed ==")
-	trackingRoot := filepath.Join(site, "channels", "tracking")
-	// regenerate: drop capability dirs from previous runs
-	if err := os.RemoveAll(trackingRoot); err != nil {
-		return err
-	}
-	token := randomToken()
-	privateURL := metadataOrigin + "/channels/tracking/" + token + "/feed.json"
-	privateDir := filepath.Join(trackingRoot, token)
-	if err := os.MkdirAll(privateDir, 0o755); err != nil {
-		return err
-	}
-	// attachment resource: a plain file next to the feed, hash-pinned in the
-	// item's attachments entry (spec/feeds.md §1.1: sha256 OPTIONAL, when
-	// present the app verifies before rendering/opening).
-	attach := "Order summary for Trezor order #2026-0841.\n\nCarrier: DHL Express\nTracking number: DHL-8491-2203-77\nEstimated delivery: 3-5 business days\n\nThis is demo data only - not an invoice.\n"
-	attachPath := filepath.Join(site, "media", "order-2026-0841.txt")
-	if err := os.MkdirAll(filepath.Dir(attachPath), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(attachPath, []byte(attach), 0o644); err != nil {
-		return err
-	}
-	attachSum := sha256Sum([]byte(attach))
-	privateItem.Attachments[0]["url"] = metadataOrigin + "/media/order-2026-0841.txt"
-	privateItem.Attachments[0]["size_in_bytes"] = int64(len(attach))
-	privateItem.Attachments[0]["sha256"] = attachSum
-	doc, err := buildPrivateDocument(keys, privateURL)
+	fmt.Println("== private-feed pattern ==")
+	engine, err := ensureKey(ctx, pub.Keys.(*keys.DirStore), keys.RoleEngine, "tracking")
 	if err != nil {
 		return err
 	}
-	if err := writeJSON(doc, filepath.Join(privateDir, "feed.json")); err != nil {
+	if _, err := pub.PatternAdd(ctx, publisher.PatternSpec{
+		Channel: trackingPatternEntry.Channel, Pattern: trackingPattern,
+		KeyID: engine.KeyID(), DisplayName: trackingPatternEntry.DisplayName,
+		Purpose: trackingPatternEntry.Purpose,
+	}); err != nil {
 		return err
+	}
+
+	fmt.Println("== signing public items (one TUF target per item) ==")
+	ks := pub.Keys.(*keys.DirStore)
+	for _, it := range publicItems {
+		item := itemToMap(it)
+		signers := []string{it.Channel}
+		if ac, ok := authorChannels[it.Channel]; ok {
+			signers = ac.KeyNames
+		}
+		for _, name := range signers {
+			k, err := ensureKey(ctx, ks, roleFor(name), name)
+			if err != nil {
+				return err
+			}
+			if err := feed.SignItem(item, k); err != nil {
+				return err
+			}
+		}
+		if _, err := pub.Publish(ctx, publisher.PublishParams{Channel: it.Channel, Item: item}); err != nil {
+			return err
+		}
+		fmt.Printf("  %s: %s\n", it.Channel, it.ID)
 	}
 
 	fmt.Println("== media & join payload ==")
@@ -140,33 +200,56 @@ func buildAll(keys map[string]*keyPair, site string) error {
 	if err := copyDir(filepath.Join("assets", "img"), filepath.Join(site, "media", "img")); err != nil {
 		return err
 	}
-	logoSrc := filepath.Join("assets", "logo.png")
-	logoDst := filepath.Join(site, "media", "logo.png")
-	if data, err := os.ReadFile(logoSrc); err == nil {
-		if err := os.WriteFile(logoDst, data, 0o644); err != nil {
+	if data, err := os.ReadFile(filepath.Join("assets", "logo.png")); err == nil {
+		if err := os.WriteFile(filepath.Join(site, "media", "logo.png"), data, 0o644); err != nil {
 			return err
 		}
 	} else {
-		fmt.Printf("  note: %s not found, skipping logo copy (%v)\n", logoSrc, err)
+		fmt.Printf("  note: assets/logo.png not found, skipping logo copy (%v)\n", err)
+	}
+
+	fmt.Println("== signing private (capability) feed ==")
+	token, err := feed.NewToken()
+	if err != nil {
+		return err
+	}
+	privateURL := metadataOrigin + "/channels/tracking/" + token + "/feed.json"
+	attach := "Order summary for Trezor order #2026-0841.\n\nCarrier: DHL Express\nTracking number: DHL-8491-2203-77\nEstimated delivery: 3-5 business days\n\nThis is demo data only - not an invoice.\n"
+	attachPath := filepath.Join(site, "media", "order-2026-0841.txt")
+	if err := os.MkdirAll(filepath.Dir(attachPath), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(attachPath, []byte(attach), 0o644); err != nil {
+		return err
+	}
+	sum := sha256.Sum256([]byte(attach))
+	attachment := privateItem.Attachments[0]
+	attachment["url"] = metadataOrigin + "/media/order-2026-0841.txt"
+	attachment["size_in_bytes"] = int64(len(attach))
+	attachment["sha256"] = hex.EncodeToString(sum[:])
+	doc, err := pub.BuildPrivateDocument(ctx, engine.KeyID(), privateURL, "tracking",
+		[]map[string]any{itemToMap(privateItem)}, time.Now().UTC().Add(45*24*time.Hour).Truncate(time.Second))
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(doc, filepath.Join(site, "channels", "tracking", token, "feed.json")); err != nil {
+		return err
 	}
 
 	// Join payload (spec/core.md §3): NO metadata URL — the app derives the
 	// root anchor from the join origin (/.well-known/keryx/root.json).
-	payload := map[string]any{
-		"v":             1,
-		"channels":      []string{"security", "news", "insights"},
-		"private_feeds": []string{privateURL},
-	}
-	payloadJSON, err := json.Marshal(payload)
+	payload, err := join.BuildPayloadOptions([]string{"security", "news", "insights"}, []string{privateURL}, true)
 	if err != nil {
 		return err
 	}
-	joinQuery := "join?p=" + base64.RawURLEncoding.EncodeToString(payloadJSON)
-	joinURL := metadataOrigin + "/" + joinQuery
+	joinURL, err := join.JoinURLOptions(metadataOrigin, payload, true)
+	if err != nil {
+		return err
+	}
+	joinQuery := "join?p=" + strings.TrimPrefix(joinURL, metadataOrigin+"/")
 	if err := os.WriteFile(filepath.Join(site, "join.txt"), []byte(joinURL+"\n"), 0o644); err != nil {
 		return err
 	}
-	// no static QR: the join page renders one client-side from the URL payload
 	if err := os.MkdirAll(filepath.Join(site, "join"), 0o755); err != nil {
 		return err
 	}
@@ -181,17 +264,29 @@ func buildAll(keys map[string]*keyPair, site string) error {
 	}
 
 	fmt.Println("== verifying everything ==")
-	if err := verifyRepo(keys, site); err != nil {
+	if _, err := pub.Validate(ctx); err != nil {
 		return err
 	}
 	fmt.Printf("OK: demonstration site written to %s\n", site)
 	return nil
 }
 
-// sha256Sum returns the lowercase-hex SHA-256 of data.
-func sha256Sum(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
+// verifyAll re-loads the site and runs the SDK's full repository check.
+func verifyAll(site string) error {
+	_, err := newPublisher(site).Validate(context.Background())
+	return err
+}
+
+// writeJSON writes obj (an item or a private-feed document) deterministically.
+func writeJSON(obj map[string]any, path string) error {
+	data, err := feed.Encode(obj)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
 }
 
 // copyDir copies every file from src to dst (creating dst).
@@ -426,10 +521,7 @@ a private capability feed (QR code rendered on the page; the URL is also in
 {{INSTALL}}
 </body></html>
 `, "{{ORIGIN}}", metadataOrigin, 1), "{{JOIN}}", joinQuery, 1), "{{INSTALL}}", installSection(metadataOrigin), 1)
-	if err := os.WriteFile(filepath.Join(site, "index.html"), []byte(index), 0o644); err != nil {
-		return err
-	}
-	return nil
+	return os.WriteFile(filepath.Join(site, "index.html"), []byte(index), 0o644)
 }
 
 // articlePage renders a minimal local permalink page for one announcement.
@@ -452,16 +544,6 @@ func articlePage(it demoItem) string {
 </body></html>
 `, lang, html.EscapeString(it.Title), html.EscapeString(it.Title),
 		it.Channel, it.Published, metadataOrigin, it.Image, it.ContentHTML, source)
-}
-
-// randomToken returns a 128-bit unguessable capability token (base64url,
-// 22 chars — spec/feeds.md §3 token format).
-func randomToken() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 func fatal(err error) {

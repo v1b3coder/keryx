@@ -30,6 +30,9 @@ type Publisher struct {
 	Keys   keys.Store
 	Now    func() time.Time
 	Exp    tufrepo.Expiries
+	// AllowLocalHTTP permits plain-HTTP loopback/RFC 1918 linked media (the
+	// local demo; never set in production).
+	AllowLocalHTTP bool
 }
 
 // New returns a Publisher over the two output directories.
@@ -249,7 +252,7 @@ func (p *Publisher) Publish(ctx context.Context, params PublishParams) (Result, 
 	if chMeta == nil {
 		return Result{}, fmt.Errorf("unknown channel %q", channel)
 	}
-	if err := feed.ValidateItem(params.Item); err != nil {
+	if err := feed.ValidateItemOptions(params.Item, p.AllowLocalHTTP); err != nil {
 		return Result{}, err
 	}
 	id := feed.IDOf(params.Item)

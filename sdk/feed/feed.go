@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -171,6 +172,12 @@ func VerifyItem(
 // and validity are separate (VerifyItem); this is the shape check the publisher
 // applies before writing.
 func ValidateItem(obj map[string]any) error {
+	return ValidateItemOptions(obj, false)
+}
+
+// ValidateItemOptions allows a plain-HTTP local-dev origin for linked media
+// when allowLocalHTTP is set (a documented dev-only exception, spec/feeds.md §1.1).
+func ValidateItemOptions(obj map[string]any, allowLocalHTTP bool) error {
 	id, _ := obj["id"].(string)
 	if id == "" || !idRe.MatchString(id) {
 		return fmt.Errorf("item: id %q must match [a-z0-9-_]+", id)
@@ -199,7 +206,7 @@ func ValidateItem(obj map[string]any) error {
 				return fmt.Errorf("item %s: image data URL must be base64", id)
 			}
 		} else {
-			if !strings.HasPrefix(img, "https://") {
+			if !linkedAllowed(img, allowLocalHTTP) {
 				return fmt.Errorf("item %s: image must be a data URL or absolute HTTPS URL", id)
 			}
 			if sum, _ := obj["image_sha256"].(string); sum == "" {
@@ -214,7 +221,7 @@ func ValidateItem(obj map[string]any) error {
 				return fmt.Errorf("item %s: attachment %d is not an object", id, i)
 			}
 			url, _ := m["url"].(string)
-			if !strings.HasPrefix(url, "https://") {
+			if !linkedAllowed(url, allowLocalHTTP) {
 				return fmt.Errorf("item %s: attachment %d url must be absolute HTTPS", id, i)
 			}
 			if sum, _ := m["sha256"].(string); sum != "" && len(sum) != 64 {
@@ -242,6 +249,41 @@ func IsToken(s string) bool {
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(s)
 	return err == nil && len(raw) == 16
+}
+
+// linkedAllowed reports whether a linked resource URL is acceptable: HTTPS,
+// or plain-HTTP loopback/RFC 1918 in the local-dev exception.
+func linkedAllowed(raw string, allowLocalHTTP bool) bool {
+	if strings.HasPrefix(raw, "https://") {
+		return true
+	}
+	if !allowLocalHTTP || !strings.HasPrefix(raw, "http://") {
+		return false
+	}
+	host := strings.TrimPrefix(raw, "http://")
+	if i := strings.IndexAny(host, "/?#"); i >= 0 {
+		host = host[:i]
+	}
+	if i := strings.LastIndex(host, ":"); i >= 0 {
+		host = host[:i]
+	}
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	nums := make([]int, 4)
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return false
+		}
+		nums[i] = n
+	}
+	a, b := nums[0], nums[1]
+	return a == 10 || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168)
 }
 
 func deepCopy(m map[string]any) map[string]any {

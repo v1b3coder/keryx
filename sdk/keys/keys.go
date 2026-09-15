@@ -208,7 +208,7 @@ func (s *DirStore) Find(_ context.Context, role Role, name string) (*Key, error)
 		return nil, err
 	}
 	for _, info := range infos {
-		if info.Role != role {
+		if info.Role != "" && info.Role != role {
 			continue
 		}
 		if name != "" && info.Name != name {
