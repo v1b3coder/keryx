@@ -172,6 +172,26 @@ worker come from vite-plugin-pwa
 leg is implemented; the native shell does not yet embed a UnifiedPush connector),
 lite mode (spec/clients.md §3), backup/restore export/import (Phase 2).
 
+## Relay wake-ups (optional)
+
+Set `VITE_RELAY_URL` (the relay origin) and `VITE_VAPID_PUBLIC` (the
+relay's VAPID public key, from `relay vapid generate`) at build time to
+enable wake-up notifications. The app then derives the same topic as the relay,
+registers the installation's WebPush subscription, and the service worker
+verifies each wake-up against the topic's exact scope before reconciling
+content. Without both variables the app runs exactly as before (polling is the
+backstop).
+
+Browser `PushManager.subscribe` requires a real browser with a push service and
+the notification permission (headless Chrome for Testing denies it), so that one
+step is verified by the stubbed client test plus the service-worker test against
+the relay's emitted fixture:
+
+```sh
+make relay relay-e2e        # relay end-to-end against ../keryx-demo
+cd app && npm test          # app derivation + handlePush against the fixture
+```
+
 ## Architecture
 
 ```

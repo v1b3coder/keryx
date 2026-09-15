@@ -10,9 +10,10 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { handlePush, RECOVERY_COOLDOWN_MS } from './relay-sw';
+import { handlePush, RECOVERY_COOLDOWN_MS, ensureRelayRegistration } from './relay-sw';
 import { putCompany, relaySeq, getCompany, getAllCompanies, deleteCompany, type CompanyRecord } from './store';
 import { hexToBytes } from './bytes';
+import { deriveTopic, publicScopeId, sourceHash } from './relay';
 import type { TargetsDoc } from './tuf';
 import type { Wakeup } from './relay';
 
@@ -141,5 +142,48 @@ describe('wake-up envelope key separation', () => {
   it('uses the exact scope keys, never a sibling scope', () => {
     expect(fixture.keys.every((k) => /^[0-9a-f]{64}$/.test(k.keyid))).toBe(true);
     expect(hexToBytes(fixture.keys[0].pub)).toHaveLength(32);
+  });
+});
+
+describe('relay registration client (relay/SPECIFICATION.md §5.3)', () => {
+  it('subscribes with the relay VAPID key and POSTs the registration', async () => {
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    let captured: { url: string; body: string } | null = null;
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      captured = { url, body: String(init.body) };
+      return Promise.resolve(new Response(JSON.stringify({ id: 'reg-1', management_token: 'tok-1' }), { status: 200 }));
+    });
+    let applicationServerKey: unknown = null;
+    vi.stubGlobal('navigator', {
+      serviceWorker: {
+        ready: Promise.resolve({
+          pushManager: {
+            subscribe: (opts: { applicationServerKey: unknown }) => {
+              applicationServerKey = opts.applicationServerKey;
+              return Promise.resolve({
+                toJSON: () => ({
+                  endpoint: 'https://push.example/abc',
+                  keys: { p256dh: 'p', auth: 'a' },
+                }),
+              });
+            },
+          },
+        }),
+      },
+    });
+
+    const origin = 'register-' + Math.random();
+    const c = company(origin, fixture.topic);
+    delete c.relay; // an installation that has not registered yet
+    const updated = await ensureRelayRegistration(c);
+    expect(applicationServerKey).toBeInstanceOf(Uint8Array);
+    expect(captured!.url).toBe('https://relay.example/v1/registrations');
+    const body = JSON.parse(captured!.body) as { endpoint: string; topics: string[] };
+    expect(body.endpoint).toBe('https://push.example/abc');
+    expect(body.topics).toEqual([
+      deriveTopic(origin, publicScopeId('security'), sourceHash(origin, 'security')),
+    ]);
+    expect(updated.relay).toMatchObject({ id: 'reg-1', managementToken: 'tok-1' });
   });
 });
