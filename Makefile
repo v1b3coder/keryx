@@ -18,6 +18,7 @@ BIN            ?= bin
 SDK_DIR        ?= sdk
 RELAY_DIR      ?= relay
 DEMO_TOOL_DIR  ?= demo-tool
+EXAMPLES_DIR   ?= examples
 APP_DIR        ?= app
 
 # --- demo settings ------------------------------------------------------------
@@ -43,7 +44,7 @@ help: ## List the available targets
 
 all: build ## Build everything buildable locally
 
-build: cli relay demo-tool app-build ## Build the CLI, relay, demo tool and the PWA
+build: cli relay demo-tool examples-build app-build ## Build the CLI, relay, showcase examples, demo tool and the PWA
 
 # --- SDK + CLI ----------------------------------------------------------------
 
@@ -60,6 +61,12 @@ sdk-vet: ## Vet the SDK
 cli: ## Build the pub publisher CLI into bin/pub
 	mkdir -p $(BIN)
 	cd $(SDK_DIR) && $(GO) build -o $(CURDIR)/$(BIN)/pub ./cmd/pub
+
+# --- showcase consumers (examples/) -------------------------------------------
+
+.PHONY: examples-build
+examples-build: ## Compile-check the showcase consumers in examples/
+	cd $(EXAMPLES_DIR) && $(GO) build -o /dev/null ./...
 
 # --- relay --------------------------------------------------------------------
 
@@ -80,9 +87,9 @@ demo: ## Regenerate the local demo site (SDK-backed)
 demo-verify: $(DEMO_DIR)/join.txt ## Verify the generated demo site
 	cd $(DEMO_TOOL_DIR) && $(GO) run . -mode verify -site $(CURDIR)/$(DEMO_DIR) -base $(DEMO_BASE)
 
-demo-sdk: ## Generate a demo artifact with the SDK alone
+demo-sdk: ## Generate a minimal artifact from examples/sdk-artifact (SDK consumer)
 	mkdir -p $(BIN)
-	cd $(SDK_DIR) && $(GO) build -o $(CURDIR)/$(BIN)/keryxdemo ./cmd/demo
+	cd $(EXAMPLES_DIR) && $(GO) build -o $(CURDIR)/$(BIN)/keryxdemo ./sdk-artifact
 	$(BIN)/keryxdemo --out $(CURDIR)/$(DEMO_SDK_DIR) --base $(DEMO_BASE)
 
 serve-demo: ## Serve the demo site with CORS (default port 8000)

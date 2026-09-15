@@ -89,16 +89,18 @@ own keys. A role that does not hold a key fails fast with a typed
 `missing key: channel key "security" — run this on the pipeline machine`
 error instead of producing half-signed metadata.
 
-## Demo generator
+## Showcase consumer
 
-`cmd/demo` generates a complete demonstration artifact (anchor + repo + keys +
-join URL + QR + private capability feed) with the SDK:
+The `examples/` module is a separate consumer of this SDK — the same shape an
+external project would have (its own `go.mod` with a `replace` to `../sdk`).
+`examples/sdk-artifact` generates a minimal demonstration artifact (anchor +
+repo + keys + join URL + QR + private capability feed):
 
 ```sh
-go run ./cmd/demo --out /tmp/keryx-demo --base http://localhost:8000
+cd ../examples && go run ./sdk-artifact --out /tmp/keryx-demo --base http://localhost:8000
 ```
 
-The app's protocol tests consume it directly:
+The app's protocol tests consume it directly (`make demo-sdk`):
 
 ```sh
 cd ../app
@@ -118,5 +120,8 @@ join/       join URL + QR payload
 deploy/     Deployer: local, S3-compatible
 config/     role-scoped workspace layout
 cmd/pub/    the cobra CLI
-cmd/demo/   demonstration artifact generator
 ```
+
+The SDK module contains no demo or sample content; the showcase consumers
+live in the top-level `examples/` module (and the full demo site generator in
+`demo-tool/`).

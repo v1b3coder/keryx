@@ -1,5 +1,4 @@
 /demo/
-/demo-tool/
 GRAPHICAL_DESIGN.md
 NOTES.md
 __pycache__/
@@ -7,3 +6,5 @@ __pycache__/
 .codesearch.db/
 /bin/
 /.demo-sdk/
+/demo-tool/keryx-demo
+/demo-tool/.claude/

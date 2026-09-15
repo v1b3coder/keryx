@@ -64,6 +64,9 @@ security reviewers → `design/threats.md`; everyone else → `design/why.md`.
   private feeds, ceremonies, join/QR, deploy); see `sdk/README.md`
 - `app/` — reference demo **web client** (Vite + React + TS): PWA +
   Capacitor Android/iOS; see `app/README.md`
+- `examples/` — small showcase consumers of the publisher SDK, each a
+  separate module (own `go.mod`, `replace` to `../sdk`); `examples/sdk-artifact`
+  generates a minimal signed artifact
 - `demo-tool/` — demo-site generator (Go) built on the publisher
   SDK: demonstration content + site chrome around an SDK-generated repo
 - `demo/` — a generated demonstration publisher artifact (full TUF repo +
