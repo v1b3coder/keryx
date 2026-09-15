@@ -15,6 +15,8 @@ import { loadImage } from '../lib/media';
 import { CompanyLogo } from './CompanyLogo';
 import { SanitizedHtml, LinkConfirm } from './SanitizedHtml';
 import { useApp } from '../state';
+import { sha256Hex } from '../lib/bytes';
+import type { FeedItem } from '../lib/item';
 
 async function openExternal(url: string) {
   if (Capacitor.isNativePlatform()) {
@@ -22,6 +24,27 @@ async function openExternal(url: string) {
   } else {
     window.open(url, '_blank', 'noopener,noreferrer');
   }
+}
+
+/**
+ * Open an attachment after verifying its `sha256` when present
+ * (spec/feeds.md §1.1: verify before rendering, opening, or saving;
+ * a mismatch makes the resource unavailable). Unhashed attachments are
+ * ordinary web links, mutable by design.
+ */
+async function openAttachment(url: string, item: FeedItem) {
+  const att = item.attachments?.find((a) => a.url === url);
+  if (att?.sha256) {
+    let ok = false;
+    try {
+      const res = await fetch(url);
+      if (res.ok) ok = sha256Hex(new Uint8Array(await res.arrayBuffer())) === att.sha256.toLowerCase();
+    } catch {
+      ok = false;
+    }
+    if (!ok) return; // resource unavailable — never opened
+  }
+  await openExternal(url);
 }
 
 export function CompanyView({
@@ -41,7 +64,7 @@ export function CompanyView({
 }) {
   const { actions, companies, syncing } = useApp();
   const [showSettings, setShowSettings] = useState(false);
-  const [pendingLink, setPendingLink] = useState<string | null>(null);
+  const [pendingLink, setPendingLink] = useState<{ url: string; item: FeedItem } | null>(null);
 
   const followed = new Set(company.channels.filter((c) => c.followed).map((c) => c.name));
   const visible = useMemo(() => {
@@ -201,7 +224,7 @@ export function CompanyView({
             key={stored.id}
             company={company}
             stored={stored}
-            onLinkTap={setPendingLink}
+            onLinkTap={(url) => setPendingLink({ url, item: stored.item })}
             onRead={() => {
               if (!stored.read) {
                 const feedKey = stored.isPrivate ? `private:${stored.feedUrl}` : `public:${stored.channel}`;
@@ -222,9 +245,9 @@ export function CompanyView({
 
       {pendingLink && (
         <LinkConfirm
-          url={pendingLink}
+          url={pendingLink.url}
           onConfirm={() => {
-            void openExternal(pendingLink);
+            void openAttachment(pendingLink.url, pendingLink.item);
             setPendingLink(null);
           }}
           onCancel={() => setPendingLink(null)}
@@ -254,13 +277,14 @@ function FeedArticle({
     let alive = true;
     const url = item.image;
     if (!url) return;
-    void loadImage(url, stored.origin, item.attachments?.find((a) => a.url === url)?.sha256).then((objectUrl) => {
+    // a linked image is hash-pinned by image_sha256 (spec/feeds.md §1.1)
+    void loadImage(url, stored.origin, item.image_sha256).then((objectUrl) => {
       if (alive) setImg(objectUrl);
     });
     return () => {
       alive = false;
     };
-  }, [item.image, item.attachments, stored.origin]);
+  }, [item.image, item.image_sha256, stored.origin]);
 
   // mark as read when it scrolls into view (no detail view anymore)
   useEffect(() => {
@@ -297,7 +321,13 @@ function FeedArticle({
             </span>
           ))}
         </div>
-        <SanitizedHtml html={item.content_html ?? ''} origin={company.origin} item={item} onLinkTap={onLinkTap} />
+        <SanitizedHtml
+          html={item.content_html ?? ''}
+          origin={company.origin}
+          item={item}
+          loadRemoteMedia={company.prefs.loadRemoteMedia}
+          onLinkTap={onLinkTap}
+        />
       </div>
     </article>
   );

@@ -39,7 +39,7 @@ export interface CompanyRecord {
   origin: string;
   joinUrl: string;
   /** company identity as confirmed at pairing (spec/core.md §2) */
-  identity: { companyName?: string; logo?: string };
+  identity: { companyName?: string; logo?: string; logoSHA256?: string };
   /** company_name changed since pairing → prominent warning, re-pair required */
   rebrandPending?: boolean;
   /** logo changed since pairing → one-tap acknowledgement */
@@ -246,7 +246,7 @@ export function makeCompany(
   joinUrl: string,
   pinnedRoot: RootDoc,
   targets: TargetsDoc,
-  identity: { companyName?: string; logo?: string },
+  identity: { companyName?: string; logo?: string; logoSHA256?: string },
   channels: ChannelState[],
   privateFeeds: PrivateFeedSub[],
 ): CompanyRecord {

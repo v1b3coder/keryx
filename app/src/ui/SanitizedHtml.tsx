@@ -44,11 +44,14 @@ export function SanitizedHtml({
   html,
   origin,
   item,
+  loadRemoteMedia = true,
   onLinkTap,
 }: {
   html: string;
   origin: string;
   item: FeedItem;
+  /** honor the remote-media privacy preference (spec/feeds.md §1.4) */
+  loadRemoteMedia?: boolean;
   onLinkTap: (url: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -63,18 +66,22 @@ export function SanitizedHtml({
     if (!el) return;
     annotateLinks(el);
 
-    // media: verify attachment hashes before rendering; everything else is
-    // an ordinary (mutable-by-design) web resource.
+    // media: inline data URLs are covered by the item hash; linked media is
+    // loaded only when the user allows remote media, and is hash-verified when an
+    // attachment pins its bytes (spec/feeds.md §1.1/§1.4).
     for (const img of Array.from(el.querySelectorAll('img[src]'))) {
       const src = img.getAttribute('src') ?? '';
-      const want = item.attachments?.find((a) => a.url === src)?.sha256;
-      if (want) {
-        img.removeAttribute('src');
-        void loadImage(src, origin, want).then((objectUrl) => {
-          if (objectUrl) img.setAttribute('src', objectUrl);
-          else img.removeAttribute('src'); // resource unavailable — item unaffected
-        });
+      if (src.startsWith('data:')) continue; // inline, covered by the item hash
+      if (!loadRemoteMedia) {
+        img.removeAttribute('src'); // remote media disabled by the user
+        continue;
       }
+      const want = item.attachments?.find((a) => a.url === src)?.sha256;
+      img.removeAttribute('src');
+      void loadImage(src, origin, want).then((objectUrl) => {
+        if (objectUrl) img.setAttribute('src', objectUrl);
+        else img.removeAttribute('src'); // resource unavailable — item unaffected
+      });
     }
 
     // link interception: no auto-open, real domain shown first
@@ -88,7 +95,7 @@ export function SanitizedHtml({
     };
     el.addEventListener('click', onClick);
     return () => el.removeEventListener('click', onClick);
-  }, [dom, origin, item, onLinkTap]);
+  }, [dom, origin, item, loadRemoteMedia, onLinkTap]);
 
   return (
     <div

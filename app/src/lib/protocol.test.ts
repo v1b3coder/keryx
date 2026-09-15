@@ -615,3 +615,43 @@ describe('channel role loading (spec/repository.md §3)', () => {
     expect(targetFileUrl(m.base, path, info, false)).toBe(`${origin}/keryx/${path}`);
   });
 });
+
+describe('sync failure semantics (spec/core.md §4)', () => {
+  const setup = async () => {
+    const joinUrl = readFileSync(join(demoDir, 'join.txt'), 'utf8').trim();
+    const parsed = parseJoinUrl(joinUrl);
+    const fetchTyped = fetchLike as unknown as typeof fetch;
+    const offer = await buildPairingOffer(parsed.origin, joinUrl, parsed.payload, fetchTyped);
+    const company = createCompanyFromOffer(offer, offer.channels.map((c) => c.name));
+    return { company, fetchTyped };
+  };
+
+  it('a verification failure that is not a chain break does NOT suspend the company', async () => {
+    const { company } = await setup();
+    // serve a timestamp whose signed bytes no longer verify (a ProtocolError,
+    // not a validly-signed-but-unchainable root)
+    const tampered = async (url: string) => {
+      if (url.endsWith('/keryx/timestamp.json')) {
+        const doc = loadJson<Record<string, any>>('keryx/timestamp.json');
+        doc.signed.meta['snapshot.json'].version += 1;
+        return new Response(JSON.stringify(doc), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return fetchLike(url);
+    };
+    const synced = await syncCompany(company, tampered as unknown as typeof fetch, new Map());
+    expect(synced.suspended).toBe(false);
+    expect(synced.company.status).not.toBe('suspended');
+    expect(synced.errors.length).toBeGreaterThan(0);
+    expect(synced.toPut).toHaveLength(0);
+  });
+
+  it('a logo_sha256 change alone flags a one-tap acknowledgement', async () => {
+    const { company, fetchTyped } = await setup();
+    const before = await syncCompany(company, fetchTyped, new Map());
+    expect(before.company.logoChangePending).toBeFalsy();
+    // the identity snapshot remembered a different hash
+    const stale = { ...company, identity: { ...company.identity, logoSHA256: 'stale-hash' } };
+    const after = await syncCompany(stale, fetchTyped, new Map());
+    expect(after.company.logoChangePending).toBe(true);
+  });
+});

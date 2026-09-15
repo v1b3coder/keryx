@@ -120,10 +120,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const company = await getCompany(origin);
         if (!company) return;
         const logo = company.targets.signed.custom?.logo;
+        const logoSHA256 = company.targets.signed.custom?.logo_sha256;
         await putCompany({
           ...company,
           logoChangePending: false,
-          identity: { ...company.identity, logo },
+          identity: { ...company.identity, logo, logoSHA256 },
         });
         setCompanies(await getAllCompanies());
       },
@@ -139,13 +140,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       async rePairCompany(origin, company, newItems) {
         // the identity snapshot is refreshed to the just-confirmed values
         const logo = company.targets.signed.custom?.logo;
+        const logoSHA256 = company.targets.signed.custom?.logo_sha256;
         const name = company.targets.signed.custom?.company_name;
         await putCompany({
           ...company,
           origin,
           rebrandPending: false,
           logoChangePending: false,
-          identity: { companyName: name, logo },
+          identity: { companyName: name, logo, logoSHA256 },
         });
         if (newItems && newItems.length > 0) await putItems(newItems);
         setCompanies(await getAllCompanies());

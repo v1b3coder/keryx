@@ -211,7 +211,9 @@ export async function syncCompany(
   try {
     meta = await loadAndVerifyMetadata(fetchFn, anchorUrl, company.pinnedRoot ?? null, company.seen ?? null);
   } catch (err) {
-    if (err instanceof ChainBreakError || err instanceof ProtocolError) {
+    // suspension requires a validly-signed but UNCHAINABLE root (spec/core.md §4);
+    // any other verification failure is unavailability: keep cache + retry
+    if (err instanceof ChainBreakError) {
       suspended = true;
       errors.push(err.message);
     } else {
@@ -243,10 +245,13 @@ export async function syncCompany(
   const companyName =
     typeof targets.signed.custom?.company_name === 'string' ? targets.signed.custom.company_name : undefined;
   const logo = typeof targets.signed.custom?.logo === 'string' ? targets.signed.custom.logo : undefined;
+  const logoSHA256 =
+    typeof targets.signed.custom?.logo_sha256 === 'string' ? targets.signed.custom.logo_sha256 : undefined;
   let rebrandPending = company.rebrandPending ?? false;
   let logoChangePending = company.logoChangePending ?? false;
-  if (companyName !== undefined && companyName !== company.identity.companyName) rebrandPending = true;
-  if (logo !== undefined && logo !== company.identity.logo) logoChangePending = true;
+  if (companyName !== company.identity.companyName) rebrandPending = true;
+  // a logo OR logo_sha256 change (including removal) needs a one-tap ack
+  if (logo !== company.identity.logo || logoSHA256 !== company.identity.logoSHA256) logoChangePending = true;
 
   // --- 3. channel role metadata (verified; pins the item index) -----------
   const roles: Map<string, TargetsDoc> = new Map();
@@ -255,7 +260,7 @@ export async function syncCompany(
       const role = await loadChannelRole(fetchFn, meta, roleName, consistent, company.seen?.roles?.[roleName]);
       roles.set(roleName, role);
     } catch (err) {
-      if (err instanceof ChainBreakError || err instanceof ProtocolError) {
+      if (err instanceof ChainBreakError) {
         suspended = true;
         errors.push(err.message);
         break;

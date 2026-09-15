@@ -141,11 +141,14 @@ worker come from vite-plugin-pwa
 - **Filtering (spec/feeds.md §1)** — purely local; item `language`
   + free-form `tags` (stored locally, never sent); instant,
   offline.
-- **Rendering** — `content_html` sanitized (DOMPurify, script/forms/iframe
-  stripped — the "never asks for a password, seed, or code" promise is
-  structural), links intercepted with their real destination domain shown
-  before opening (no auto-open), attachments hash-verified when `sha256`
-  is present, footer reminder under the feed.
+- **Rendering** — `content_html` sanitized (DOMPurify; scripts, forms,
+  iframes/embeds and content CSS stripped — the "never asks for a password,
+  seed, or code" promise is structural, and stripping CSS is stricter than
+  the spec's sandbox: nothing can escape because none is applied), links
+  intercepted with their real destination domain shown before opening (no
+  auto-open), attachments hash-verified when `sha256` is present, linked
+  media loaded only when the remote-media preference allows it, footer
+  reminder under the feed.
 - **Feed** — full articles inline (big square picture, title, date + tags,
   complete content) — there is no separate detail view; articles are marked
   read when they scroll into view.
