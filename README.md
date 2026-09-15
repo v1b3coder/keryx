@@ -64,8 +64,8 @@ security reviewers → `design/threats.md`; everyone else → `design/why.md`.
   private feeds, ceremonies, join/QR, deploy); see `sdk/README.md`
 - `app/` — reference demo **web client** (Vite + React + TS): PWA +
   Capacitor Android/iOS; see `app/README.md`
-- `demo-tool/` — demo-site generator (Go) built on the same protocol:
-  content + site chrome around an SDK-shaped repo
+- `demo-tool/` — demo-site generator (Go) built on the publisher
+  SDK: demonstration content + site chrome around an SDK-generated repo
 - `demo/` — a generated demonstration publisher artifact (full TUF repo +
   per-channel signed item files + private capability feed), fully local
   (`http://localhost:8000`), based on real public Trezor blog content; not
