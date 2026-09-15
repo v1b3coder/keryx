@@ -23,19 +23,18 @@ PII, no per-user state anywhere.
 ## Run it
 
 ```bash
-cd ../demo && ./server.sh            # demo publisher at http://10.110.147.178:8000 (CORS-enabled)
-cd ../app
-npm install
-npm run dev                          # web client (Vite prints the port)
+make demo                            # demo publisher at http://localhost:8000 (CORS-enabled)
+make serve-demo                       # ... and serve it (separate terminal)
+make app-dev                          # web client (Vite prints the port)
 ```
 
 Then open the printed URL, tap **Add a company**, and paste the join URL from
 `demo/join.txt` (or open the demo join link — `demo/join/?p=…` — and scan
 the QR code it renders). The flow: confirm the origin
-`10.110.147.178:8000` → choose channels (suggested ones preselected, you tap to
+`localhost:8000` → choose channels (suggested ones preselected, you tap to
 subscribe) → subscribe → verified inbox.
 
-> The demo artifact signs metadata for `http://10.110.147.178:8000` (a
+> The demo artifact signs metadata for `http://localhost:8000` (a
 > local-dev exception: the app allows HTTP for private feeds on loopback and
 > RFC 1918 private addresses; Android permits cleartext only for this demo
 > host via `network_security_config.xml`). A real deployment uses the

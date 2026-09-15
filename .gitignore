@@ -5,3 +5,5 @@ NOTES.md
 __pycache__/
 .codegraph/
 .codesearch.db/
+/bin/
+/.demo-sdk/

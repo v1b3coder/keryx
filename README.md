@@ -69,15 +69,16 @@ security reviewers → `design/threats.md`; everyone else → `design/why.md`.
 - `demo/` — a generated demonstration publisher artifact (full TUF repo +
   per-channel signed item files + private capability feed), fully local
   (`http://localhost:8000`), based on real public Trezor blog content; not
-  committed — regenerate it (below); see `demo/README.md`
-- `demo/server.sh` — serve the demo locally with CORS enabled (the browser
-  client runs on a different origin)
+  committed — regenerate it with `make demo` (below)
+- `tools/serve.py` — serve the demo locally with CORS enabled (the browser
+  client runs on a different origin); `make serve-demo`
 
 Run it:
 
 ```
-./demo/server.sh           # serves demo/ at http://localhost:8000 (CORS-enabled)
-cd app && npm install && npm run dev   # web client at http://localhost:5173
+make demo                  # generate the demo artifact into demo/
+make serve-demo            # serve demo/ at http://localhost:8000 (CORS-enabled)
+make app-dev               # web client at http://localhost:5173
 ```
 
 Then paste the join URL from `demo/join.txt` into the client (or open the
@@ -87,5 +88,8 @@ homepage also has a generic join link without a payload.
 Regenerate the demo:
 
 ```
-cd demo-tool && go run . -mode build -site ../demo
+make demo
 ```
+
+See `make help` for the full task list (builds, tests, the relay, the Android
+APK and the published sibling demo repo).
