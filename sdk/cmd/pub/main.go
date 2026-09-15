@@ -58,6 +58,8 @@ func main() {
 		a.pullCmd(),
 		a.privateFeedCmd(),
 		a.ceremonyCmd(),
+		a.rotateCmd(),
+		a.revokeCmd(),
 	)
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)

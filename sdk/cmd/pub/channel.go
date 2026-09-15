@@ -74,24 +74,103 @@ func (a *app) channelRemoveCmd() *cobra.Command {
 }
 
 func (a *app) channelModeCmd() *cobra.Command {
+	var channel string
 	cmd := &cobra.Command{
-		Use:   "mode <name> simple|authored",
+		Use:   "mode [name] simple|authored",
 		Short: "Master-signed channel mode change (re-signs items)",
-		Args:  cobra.ExactArgs(2),
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			name := channel
+			mode := args[0]
+			if len(args) == 2 {
+				name, mode = args[0], args[1]
+			}
+			if name == "" {
+				return fmt.Errorf("--channel is required")
+			}
 			res, err := runOrStage(cmd,
 				func(dir, pass string) (publisher.Result, error) {
-					return a.publisher().StageChannelMode(a.ctx(), args[0], args[1], dir, pass)
+					return a.publisher().StageChannelMode(a.ctx(), name, mode, dir, pass)
 				},
-				func() (publisher.Result, error) { return a.publisher().ChannelMode(a.ctx(), args[0], args[1]) })
+				func() (publisher.Result, error) { return a.publisher().ChannelMode(a.ctx(), name, mode) })
 			if err != nil {
 				return err
 			}
-			a.render(res, fmt.Sprintf("channel %s now %s (targets v%d)", args[0], args[1], res.Version))
+			a.render(res, fmt.Sprintf("channel %s now %s (targets v%d)", name, mode, res.Version))
 			return nil
 		},
 	}
 	addStageFlags(cmd)
+	cmd.Flags().StringVar(&channel, "channel", "", "channel name (alternative to the positional arg)")
+	return cmd
+}
+
+// rotateCmd is the spec/clients.md §2 spelling of channel key rotation.
+func (a *app) rotateCmd() *cobra.Command {
+	var channel string
+	var announce bool
+	cmd := &cobra.Command{
+		Use:   "rotate --channel <name>",
+		Short: "Add a new channel key alongside the old (overlap)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if channel == "" {
+				return fmt.Errorf("--channel is required")
+			}
+			res, err := runOrStage(cmd,
+				func(dir, pass string) (publisher.Result, error) {
+					return a.publisher().StageChannelKeyRotate(a.ctx(), channel, dir, pass, announce)
+				},
+				func() (publisher.Result, error) {
+					return a.publisher().RotateChannelKeyOptions(a.ctx(), channel, announce)
+				})
+			if err != nil {
+				return err
+			}
+			a.render(res, fmt.Sprintf("channel %s key rotated (targets v%d)", channel, res.Version))
+			return nil
+		},
+	}
+	addStageFlags(cmd)
+	cmd.Flags().StringVar(&channel, "channel", "", "channel name")
+	cmd.Flags().BoolVar(&announce, "announce-next-key", false, "pre-announce the next channel key")
+	_ = cmd.MarkFlagRequired("channel")
+	return cmd
+}
+
+// revokeCmd is the spec/clients.md §2 spelling of channel key revocation.
+func (a *app) revokeCmd() *cobra.Command {
+	var channel, keyid string
+	var reissue bool
+	cmd := &cobra.Command{
+		Use:   "revoke --channel <name> --keyid <id>",
+		Short: "Drop a channel keyid (--reissue replaces it in the same update)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if channel == "" {
+				return fmt.Errorf("--channel is required")
+			}
+			res, err := runOrStage(cmd,
+				func(dir, pass string) (publisher.Result, error) {
+					return a.publisher().StageChannelKeyRevoke(a.ctx(), channel, keyid, dir, pass)
+				},
+				func() (publisher.Result, error) {
+					if reissue {
+						return a.publisher().RevokeChannelKeyReissue(a.ctx(), channel, keyid)
+					}
+					return a.publisher().RevokeChannelKey(a.ctx(), channel, keyid)
+				})
+			if err != nil {
+				return err
+			}
+			a.render(res, fmt.Sprintf("channel %s key %s revoked (targets v%d)", channel, keyid, res.Version))
+			return nil
+		},
+	}
+	addStageFlags(cmd)
+	cmd.Flags().StringVar(&channel, "channel", "", "channel name")
+	cmd.Flags().StringVar(&keyid, "keyid", "", "keyid to revoke")
+	cmd.Flags().BoolVar(&reissue, "reissue", false, "revoke and reissue in one update")
+	_ = cmd.MarkFlagRequired("channel")
+	_ = cmd.MarkFlagRequired("keyid")
 	return cmd
 }
 

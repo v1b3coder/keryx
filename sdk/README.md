@@ -52,11 +52,11 @@ Output is two directories (defaults under `--workspace .keryx`):
 | `keys list \| generate <name> \| export \| import` | operator | role-tagged, encrypted bundle (`--role`/`--name`/`--keyid` filters) |
 | `channel add <name>` | operator | authored by default (`--simple` opts out) |
 | `channel remove <name>` | operator | drops delegation + role metadata |
-| `channel mode <name> simple\|authored` | operator | re-signs the channel's items |
+| `channel mode <name> simple\|authored` | operator | re-signs the channel's items (`--channel` also accepted) |
 | `channel set --channel <name>` | operator | display name / description |
 | `channel list` | anyone | |
-| `channel key rotate <name>` | operator | overlap (old+new), `--announce-next-key` pre-announces |
-| `channel key revoke <name> --keyid <id>` | operator | drops a channel key; `--reissue` revokes and replaces in one update |
+| `channel key rotate <name>` / `rotate --channel <name>` | operator | overlap (old+new), `--announce-next-key` pre-announces |
+| `channel key revoke <name> --keyid <id>` / `revoke --channel <name>` | operator | drops a channel key; `--reissue` revokes and replaces in one update |
 | `author add\|revoke\|list` | operator | refuses the last author |
 | `pattern add\|remove` | operator | private-feed authorization |
 | `company set` | operator | identity ceremony (name / logo) |
