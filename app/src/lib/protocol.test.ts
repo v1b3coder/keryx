@@ -39,6 +39,8 @@ import {
   type FeedItem,
 } from './item';
 import { verifyPrivateFeedDocument, matchesPattern, PRIVATE_FEED_MAX_BYTES } from './private';
+import { logoDisplayable, readLimitedBody } from './media';
+import { PUBLIC_ITEM_MAX_BYTES } from './item';
 import { parseJoinUrl, rootAnchorUrl, joinUrlFromDeepLink } from './payload';
 import { buildPairingOffer, createCompanyFromOffer } from './pair';
 import { syncCompany } from './sync';
@@ -482,6 +484,25 @@ describe('sync engine end to end', () => {
     for (const stored of synced.toPut) {
       if (!stored.isPrivate) expect(stored.hash).toBeDefined();
     }
+  });
+});
+
+describe('media and size policy', () => {
+  it('a linked logo without logo_sha256 is a metadata error (placeholder only)', () => {
+    expect(logoDisplayable('data:image/png;base64,AAAA', undefined)).toBe(true);
+    expect(logoDisplayable('https://cdn.example.com/l.png', undefined)).toBe(false);
+    expect(logoDisplayable('https://cdn.example.com/l.png', 'a'.repeat(64))).toBe(true);
+    expect(logoDisplayable(undefined, undefined)).toBe(false);
+  });
+
+  it('enforces a maximum public-item size (spec/feeds.md §1.1)', () => {
+    expect(PUBLIC_ITEM_MAX_BYTES).toBe(1024 * 1024);
+  });
+
+  it('readLimitedBody aborts once the response exceeds the limit', async () => {
+    await expect(readLimitedBody(new Response(new Uint8Array(2000)), 1000)).rejects.toThrow(/limit/);
+    const ok = await readLimitedBody(new Response(new Uint8Array(500)), 1000);
+    expect(ok.length).toBe(500);
   });
 });
 

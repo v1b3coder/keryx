@@ -27,9 +27,11 @@ import {
   verifyImage,
   itemIdFromPath,
   signedContentKey,
+  PUBLIC_ITEM_MAX_BYTES,
   type FeedItem,
 } from './item';
 import { verifyPrivateFeedDocument, matchesPattern, PRIVATE_FEED_MAX_BYTES } from './private';
+import { readLimitedBody } from './media';
 import { hexToBytes } from './bytes';
 import { isLocalDevOrigin, linkedUrlAllowed } from './urlpolicy';
 import {
@@ -341,6 +343,12 @@ export async function syncCompany(
       const prev = existing.get(key);
       const wantHash = info.hashes?.sha256;
       if (prev && wantHash && prev.hash === wantHash) continue; // unchanged, already verified
+      // per-item size limit (spec/feeds.md §1.1): reject before fetching, abort beyond it
+      if (info.length !== undefined && info.length > PUBLIC_ITEM_MAX_BYTES) {
+        rejected++;
+        errors.push(`channel ${channel}: item ${path} is ${info.length} bytes, over the ${PUBLIC_ITEM_MAX_BYTES}-byte limit`);
+        continue;
+      }
       const url = targetFileUrl(base, path, info, consistent);
       try {
         const res = await fetchFn(url, { cache: 'no-cache' });
@@ -348,7 +356,7 @@ export async function syncCompany(
           errors.push(`item ${path}: HTTP ${res.status}`);
           continue;
         }
-        const bytes = new Uint8Array(await res.arrayBuffer());
+        const bytes = await readLimitedBody(res, PUBLIC_ITEM_MAX_BYTES);
         verifyTargetBytes(bytes, info, path); // length + sha256 pinning
         const item = JSON.parse(new TextDecoder().decode(bytes)) as FeedItem;
         if (item.id !== id) {
@@ -403,17 +411,19 @@ export async function syncCompany(
         errors.push(`delivery feed ${sub.url}: HTTP ${res.status}`);
         continue;
       }
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      if (bytes.length > PRIVATE_FEED_MAX_BYTES) {
-        errors.push(`delivery feed too large (${bytes.length} bytes), aborted`);
-        continue;
-      }
+      const bytes = await readLimitedBody(res, PRIVATE_FEED_MAX_BYTES);
       const doc = JSON.parse(new TextDecoder().decode(bytes)) as never;
       const verification = verifyPrivateFeedDocument(doc, entry, sub.url, sub.version);
       sub.version = verification.version;
       const docExpires = (doc as { expires?: string }).expires;
       if (docExpires) sub.expires = docExpires;
       if (verification.closed) sub.closed = true;
+      // stale (expires passed, not closed): keep cache + retry, never apply
+      // a stale document's items (spec/feeds.md §3 enforcement step 5)
+      if (!verification.closed && sub.expires && Date.parse(sub.expires) < Date.now()) {
+        errors.push('delivery feed expired; showing saved items, will retry');
+        continue;
+      }
       const privateItems = ((doc as { items?: FeedItem[] }).items ?? []).map((item) => ({
         item,
         hash: undefined,

@@ -46,6 +46,12 @@ export interface FeedItem {
   [extra: string]: unknown;
 }
 
+/**
+ * Maximum public-item size (spec/feeds.md §1.1, RECOMMENDED 1 MB). The app MUST
+ * enforce a maximum and abort beyond it (the per-item limit is app policy).
+ */
+export const PUBLIC_ITEM_MAX_BYTES = 1024 * 1024;
+
 /** One authorizing key set (channel role or authors role). */
 export interface KeySet {
   keys: AuthorizedKey[];

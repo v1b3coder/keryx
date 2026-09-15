@@ -1375,6 +1375,15 @@ func (p *Publisher) RotateRoot(ctx context.Context, announceNext bool) (Result, 
 
 // RefreshTimestamp re-signs timestamp with a fresh expiry (the cron line).
 func (p *Publisher) RefreshTimestamp(ctx context.Context) (Result, error) {
+	return p.RefreshTimestampExpires(ctx, p.exp().Timestamp)
+}
+
+// RefreshTimestampExpires re-signs timestamp with a caller-chosen expiry
+// (design/tooling.md §5: `pub refresh-timestamp [--expires 48h]`).
+func (p *Publisher) RefreshTimestampExpires(ctx context.Context, expires time.Duration) (Result, error) {
+	if expires <= 0 {
+		expires = p.exp().Timestamp
+	}
 	st, err := p.loadVerified(ctx)
 	if err != nil {
 		return Result{}, err
@@ -1384,7 +1393,7 @@ func (p *Publisher) RefreshTimestamp(ctx context.Context) (Result, error) {
 		return Result{}, err
 	}
 	now := p.now()
-	if err := st.RefreshTimestamp(ops, p.exp().Timestamp, now); err != nil {
+	if err := st.RefreshTimestamp(ops, expires, now); err != nil {
 		return Result{}, err
 	}
 	if err := p.writeVerified(ctx, st); err != nil {

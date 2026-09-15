@@ -318,7 +318,7 @@ function ConsentScreen({
   return (
     <div className="screen screen-pad" style={{ paddingTop: 32 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
-        <CompanyLogo url={offer.logo} origin={offer.origin} size={56} />
+        <CompanyLogo url={offer.logo} origin={offer.origin} expectedSha={offer.logoSHA256} size={56} />
         <div>
           <div className="t-section">{offer.companyName}</div>
           <div className="t-mono" style={{ fontSize: 12, color: 'var(--text-2)' }}>

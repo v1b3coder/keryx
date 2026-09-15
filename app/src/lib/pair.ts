@@ -23,6 +23,8 @@ export interface PairingOffer {
   joinUrl: string;
   companyName: string;
   logo?: string;
+  /** required when logo is a linked URL (spec/repository.md §2) */
+  logoSHA256?: string;
   channels: {
     name: string;
     displayName: string;
@@ -79,6 +81,7 @@ export async function buildPairingOffer(
   const custom = meta.targets.signed.custom;
   const companyName = typeof custom?.company_name === 'string' ? custom.company_name : origin;
   const logo = typeof custom?.logo === 'string' ? custom.logo : undefined;
+  const logoSHA256 = typeof custom?.logo_sha256 === 'string' ? custom.logo_sha256 : undefined;
 
   const offerChannels = payload.channels.map((name) => {
     const display = channelDisplay(meta.targets, name);
@@ -112,6 +115,7 @@ export async function buildPairingOffer(
     joinUrl,
     companyName,
     logo,
+    logoSHA256,
     channels: offerChannels,
     privateFeeds,
     _meta: {

@@ -464,3 +464,35 @@ func TestTwoStepCeremony(t *testing.T) {
 		t.Fatalf("authors: %v", err)
 	}
 }
+
+func TestRefreshTimestampExpires(t *testing.T) {
+	e := newEnv(t)
+	if _, err := e.pub.RefreshTimestampExpires(e.ctx(), time.Hour); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if _, err := e.pub.ValidateStrict(e.ctx()); err != nil {
+		t.Fatalf("strict validate: %v", err)
+	}
+}
+
+func TestCompanySetLogoRules(t *testing.T) {
+	e := newEnv(t)
+	// a linked logo without logo_sha256 is refused
+	if _, err := e.pub.CompanySet(e.ctx(), "", "https://cdn.example.com/logo.png", ""); err == nil {
+		t.Fatal("accepted a linked logo without logo_sha256")
+	}
+	// linked + sha256 is accepted and recorded
+	if _, err := e.pub.CompanySet(e.ctx(), "", "https://cdn.example.com/logo.png", "abc123"); err != nil {
+		t.Fatalf("linked logo: %v", err)
+	}
+	if _, err := e.pub.Validate(e.ctx()); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	// an inline data URL is self-authenticated (no logo_sha256)
+	if _, err := e.pub.CompanySet(e.ctx(), "", "data:image/png;base64,AAAA", ""); err != nil {
+		t.Fatalf("inline logo: %v", err)
+	}
+	if _, err := e.pub.Validate(e.ctx()); err != nil {
+		t.Fatalf("validate after inline logo: %v", err)
+	}
+}

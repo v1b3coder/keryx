@@ -81,6 +81,15 @@ func (a *app) companySetCmd() *cobra.Command {
 		Use:   "set",
 		Short: "Set master-signed company name and/or logo",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// a linked logo URL is fetched once and its sha256 recorded; a local
+			// file is embedded as an inline data URL (spec/clients.md §2)
+			if logo != "" && logoSHA == "" {
+				resolved, sha, err := resolveLogo(logo)
+				if err != nil {
+					return err
+				}
+				logo, logoSHA = resolved, sha
+			}
 			res, err := runOrStage(cmd,
 				func(dir, pass string) (publisher.Result, error) {
 					return a.publisher().StageCompanySet(a.ctx(), name, logo, logoSHA, dir, pass)

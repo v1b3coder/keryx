@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/v1b3coder/keryx/sdk/config"
@@ -142,11 +143,22 @@ func (a *app) publishCmd() *cobra.Command {
 }
 
 func (a *app) refreshCmd() *cobra.Command {
-	return &cobra.Command{
+	var expires string
+	cmd := &cobra.Command{
 		Use:   "refresh-timestamp",
 		Short: "Cron line: re-sign timestamp with a fresh expiry",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			res, err := a.publisher().RefreshTimestamp(a.ctx())
+			var res publisher.Result
+			var err error
+			if expires != "" {
+				d, derr := time.ParseDuration(expires)
+				if derr != nil {
+					return fmt.Errorf("invalid --expires %q (use a duration like 48h)", expires)
+				}
+				res, err = a.publisher().RefreshTimestampExpires(a.ctx(), d)
+			} else {
+				res, err = a.publisher().RefreshTimestamp(a.ctx())
+			}
 			if err != nil {
 				return err
 			}
@@ -154,6 +166,8 @@ func (a *app) refreshCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&expires, "expires", "", "timestamp lifetime (e.g. 48h; default config value)")
+	return cmd
 }
 
 func (a *app) rotateRootCmd() *cobra.Command {

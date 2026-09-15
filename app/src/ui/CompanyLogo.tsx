@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { loadImage } from '../lib/media';
+import { loadImage, logoDisplayable } from '../lib/media';
 
 export function CompanyLogo({
   url,
@@ -23,7 +23,8 @@ export function CompanyLogo({
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
-    if (!url) {
+    if (!url || !logoDisplayable(url, expectedSha)) {
+      // a linked logo without logo_sha256 is a metadata error: placeholder only
       setSrc(null);
       return;
     }

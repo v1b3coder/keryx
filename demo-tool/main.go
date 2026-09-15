@@ -117,16 +117,21 @@ func buildAll(site string) error {
 	pub := newPublisher(site)
 	pub.AllowLocalHTTP = true
 
-	// the logo is embedded as an inline data URL: self-contained and
-	// authenticated by the master-signed metadata itself (spec/repository.md §2)
-	logo := ""
-	if data, err := os.ReadFile(filepath.Join("assets", "logo.png")); err == nil {
-		logo = "data:image/png;base64," + base64.StdEncoding.EncodeToString(data)
+	// The logo is linked (with the required logo_sha256) on an HTTPS origin —
+	// the spec's linked-logo path — and embedded as an inline data URL on the
+	// local HTTP demo, where a linked logo is not allowed (spec/repository.md §2).
+	logo, logoSHA := "", ""
+	if strings.HasPrefix(metadataOrigin, "https://") {
+		logo, logoSHA = logoURL, logoSHA256()
 	} else {
-		return fmt.Errorf("read assets/logo.png: %w", err)
+		data, err := os.ReadFile(filepath.Join("assets", "logo.png"))
+		if err != nil {
+			return fmt.Errorf("read assets/logo.png: %w", err)
+		}
+		logo = "data:image/png;base64," + base64.StdEncoding.EncodeToString(data)
 	}
 	if _, err := pub.Init(ctx, publisher.InitParams{
-		RepoBase: repoBase, CompanyName: companyName, Logo: logo,
+		RepoBase: repoBase, CompanyName: companyName, Logo: logo, LogoSHA256: logoSHA,
 	}); err != nil {
 		return err
 	}
