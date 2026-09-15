@@ -35,7 +35,7 @@ func main() {
 
 func run(out, base string) error {
 	ctx := context.Background()
-	now := func() time.Time { return time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC) }
+	now := func() time.Time { return time.Now().UTC().Truncate(time.Second) }
 	if err := os.RemoveAll(out); err != nil {
 		return err
 	}

@@ -159,7 +159,11 @@ export function mergeSourceItems(
     seen.add(key);
     try {
       verifyImage(item);
-      verifyItemSignatures(item, authorizing.authors, authorizing.channel);
+      // private items carry no per-item sig: the whole-document signature
+      // already covered them (spec/feeds.md §3)
+      if (!isPrivate) {
+        verifyItemSignatures(item, authorizing.authors, authorizing.channel);
+      }
     } catch {
       rejected++;
       if (existing.has(key)) {

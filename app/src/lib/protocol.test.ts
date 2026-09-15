@@ -40,6 +40,8 @@ import {
 } from './item';
 import { verifyPrivateFeedDocument, matchesPattern, PRIVATE_FEED_MAX_BYTES } from './private';
 import { parseJoinUrl, rootAnchorUrl, joinUrlFromDeepLink } from './payload';
+import { buildPairingOffer, createCompanyFromOffer } from './pair';
+import { syncCompany } from './sync';
 import { setDebugBuild } from './build';
 import { patternMatches, pathPatternMatches } from './pattern';
 import { olpcCanonical } from './olpc';
@@ -448,6 +450,38 @@ describe('private capability feed (spec/feeds.md §3)', () => {
 
   it('matches the capability URL against the authorized pattern', () => {
     expect(matchesPattern(entry, privateUrl)).toBe(true);
+  });
+});
+
+describe('sync engine end to end', () => {
+  it('pairs and syncs a company from the artifact (public + private items)', async () => {
+    const joinUrl = readFileSync(join(demoDir, 'join.txt'), 'utf8').trim();
+    const parsed = parseJoinUrl(joinUrl);
+    const fetchTyped = fetchLike as unknown as typeof fetch;
+    const offer = await buildPairingOffer(parsed.origin, joinUrl, parsed.payload, fetchTyped);
+    expect(offer.channels.length).toBe(3);
+    expect(offer.privateFeeds[0].valid).toBe(true);
+    // follow every offered channel (the user tapped Subscribe)
+    const company = createCompanyFromOffer(
+      offer,
+      offer.channels.map((c) => c.name),
+    );
+    const synced = await syncCompany(company, fetchTyped, new Map());
+    expect(synced.suspended).toBe(false);
+    expect(synced.errors).toEqual([]);
+    expect(synced.company.channels.length).toBe(3);
+    // every published public item plus the private order item is verified
+    const publicCount = ['security', 'news', 'insights'].reduce(
+      (n, ch) => n + channelItems(ch).length,
+      0,
+    );
+    const privateDoc = loadJson<{ items: unknown[] }>(privateFeedRelPath());
+    expect(synced.toPut.length).toBe(publicCount + privateDoc.items.length);
+    expect(synced.company.privateFeeds[0].closed).not.toBe(true);
+    // every stored item is a verified one with a pinned hash or private feed
+    for (const stored of synced.toPut) {
+      if (!stored.isPrivate) expect(stored.hash).toBeDefined();
+    }
   });
 });
 
