@@ -251,7 +251,7 @@ func buildAll(site string) error {
 	if err != nil {
 		return err
 	}
-	joinQuery := "join?p=" + strings.TrimPrefix(joinURL, metadataOrigin+"/")
+	joinQuery := strings.TrimPrefix(joinURL, metadataOrigin+"/")
 	if err := os.WriteFile(filepath.Join(site, "join.txt"), []byte(joinURL+"\n"), 0o644); err != nil {
 		return err
 	}

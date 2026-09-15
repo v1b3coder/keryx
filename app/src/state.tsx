@@ -6,7 +6,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   getAllCompanies,
-  getItems,
+  getAllItems,
   getCompany,
   putCompany,
   putItems,
@@ -54,10 +54,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     initDebugBuild();
     void (async () => {
       const list = await getAllCompanies();
+      // seed the in-memory item map from the persistent store: syncCompany
+      // needs the cached items to detect unpublished (absent) items and to keep
+      // their read state (spec/feeds.md §1.3)
+      itemsRef.current = await getAllItems();
       setCompanies(list);
       setLoaded(true);
     })();
   }, []);
+
+  /** Replace the in-memory items of one origin with the post-sync state. */
+  const applyOutcome = (origin: string, existing: Map<string, StoredItem>) => {
+    itemsRef.current = [
+      ...itemsRef.current.filter((i) => i.origin !== origin),
+      ...existing.values(),
+    ];
+  };
 
   const actions = useMemo<AppActions>(
     () => ({
@@ -67,6 +79,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           for (const company of companies) {
             const existing = new Map(itemsRef.current.filter((i) => i.origin === company.origin).map((i) => [i.id, i]));
             const outcome = await syncCompany(company, fetch, existing);
+            applyOutcome(company.origin, existing);
             await putCompany(outcome.company);
             if (outcome.toPut.length > 0) await putItems(outcome.toPut);
             if (outcome.toDelete.length > 0) await deleteItems(outcome.toDelete);
@@ -86,6 +99,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             itemsRef.current.filter((i) => i.origin === origin).map((i) => [i.id, i]),
           );
           const outcome = await syncCompany(company, fetch, existing);
+          applyOutcome(origin, existing);
           await putCompany(outcome.company);
           if (outcome.toPut.length > 0) await putItems(outcome.toPut);
           if (outcome.toDelete.length > 0) await deleteItems(outcome.toDelete);
@@ -130,11 +144,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       },
       async removeCompany(origin) {
         await deleteCompany(origin);
+        itemsRef.current = itemsRef.current.filter((i) => i.origin !== origin);
         setCompanies(await getAllCompanies());
       },
       async saveCompany(company, newItems) {
         await putCompany(company);
-        if (newItems && newItems.length > 0) await putItems(newItems);
+        if (newItems && newItems.length > 0) {
+          await putItems(newItems);
+          const ids = new Set(newItems.map((i) => i.id));
+          itemsRef.current = [...itemsRef.current.filter((i) => !ids.has(i.id)), ...newItems];
+        }
         setCompanies(await getAllCompanies());
       },
       async rePairCompany(origin, company, newItems) {
@@ -149,7 +168,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           logoChangePending: false,
           identity: { companyName: name, logo, logoSHA256 },
         });
-        if (newItems && newItems.length > 0) await putItems(newItems);
+        if (newItems && newItems.length > 0) {
+          await putItems(newItems);
+          const ids = new Set(newItems.map((i) => i.id));
+          itemsRef.current = [...itemsRef.current.filter((i) => !ids.has(i.id)), ...newItems];
+        }
         setCompanies(await getAllCompanies());
       },
     }),
