@@ -163,6 +163,70 @@ func TestPublicBundleCannotBeImported(t *testing.T) {
 	}
 }
 
+func TestFindRefusesAmbiguity(t *testing.T) {
+	ctx := context.Background()
+	store := keys.NewDirStore(t.TempDir(), "")
+	for _, name := range []string{"alice", "bob"} {
+		k, err := keys.Generate(keys.RoleAuthor, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Add(ctx, k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// two author keys and no name: the resolver must not guess
+	if _, err := store.Find(ctx, keys.RoleAuthor, ""); err == nil {
+		t.Fatal("ambiguous find silently picked a key")
+	} else if _, ok := err.(*keys.ErrAmbiguousKey); !ok {
+		t.Fatalf("ambiguous find error = %T (%v)", err, err)
+	}
+	// an exact name is still unambiguous
+	if _, err := store.Find(ctx, keys.RoleAuthor, "bob"); err != nil {
+		t.Fatalf("named find: %v", err)
+	}
+}
+
+func TestGetIsKeyidExact(t *testing.T) {
+	ctx := context.Background()
+	store := keys.NewDirStore(t.TempDir(), "")
+	k, err := keys.Generate(keys.RoleChannel, "security")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Add(ctx, k); err != nil {
+		t.Fatal(err)
+	}
+	// names are labels, not identities: pinned resolution by name is a miss
+	if _, err := store.Get(ctx, "security"); !keys.IsNotFound(err) {
+		t.Fatalf("Get by name error = %v", err)
+	}
+	if _, err := store.Get(ctx, k.KeyID()); err != nil {
+		t.Fatalf("Get by keyid: %v", err)
+	}
+}
+
+func TestResolveSelectsOrPins(t *testing.T) {
+	ctx := context.Background()
+	store := keys.NewDirStore(t.TempDir(), "")
+	k, err := keys.Generate(keys.RoleAuthor, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Add(ctx, k); err != nil {
+		t.Fatal(err)
+	}
+	// a role with exactly one key needs no keyid
+	got, err := keys.Resolve(ctx, store, keys.RoleAuthor, "", "")
+	if err != nil || got.KeyID() != k.KeyID() {
+		t.Fatalf("resolve unique = %v, %v", got, err)
+	}
+	// an explicit keyid is pinned, never overridden by the role
+	if _, err := keys.Resolve(ctx, store, keys.RoleChannel, "", k.KeyID()); err != nil {
+		t.Fatalf("resolve pinned: %v", err)
+	}
+}
+
 func sha256Sum(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])

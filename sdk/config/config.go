@@ -19,6 +19,9 @@ type Config struct {
 	// /.well-known/keryx/root.json anchors the protocol). It is not part of
 	// the signed metadata, so it is persisted here.
 	Origin string `json:"origin,omitempty"`
+	// Keystore is an explicit key store directory. It is never persisted by
+	// `pub init`; set it here or via --keystore/KERYX_KEYSTORE.
+	Keystore string `json:"keystore,omitempty"`
 }
 
 // Default returns the default config for a workspace directory.
@@ -35,8 +38,29 @@ func (c Config) RepoDir() string { return filepath.Join(c.Workspace, "repo") }
 // AnchorDir is the well-known root anchor directory.
 func (c Config) AnchorDir() string { return filepath.Join(c.Workspace, "anchor") }
 
-// KeysDir is the role-scoped key store directory.
-func (c Config) KeysDir() string { return filepath.Join(c.Workspace, "keys") }
+// KeysDir is the resolved key store directory: the config field first, then
+// $KERYX_KEYSTORE, then a per-user location outside any workspace.
+func (c Config) KeysDir() string {
+	if c.Keystore != "" {
+		return c.Keystore
+	}
+	return DefaultKeystore()
+}
+
+// DefaultKeystore is the per-user key store, outside any workspace or repo.
+func DefaultKeystore() string {
+	if d := os.Getenv("KERYX_KEYSTORE"); d != "" {
+		return d
+	}
+	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
+		return filepath.Join(x, "keryx", "keys")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return filepath.Join(".keryx-keys")
+	}
+	return filepath.Join(home, ".local", "share", "keryx", "keys")
+}
 
 // Load reads a config, falling back to the default when absent.
 func Load(workspace string) (Config, error) {

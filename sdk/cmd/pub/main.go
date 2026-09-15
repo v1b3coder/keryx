@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/v1b3coder/keryx/sdk/config"
@@ -19,7 +21,7 @@ type app struct {
 	workspace  string
 	repoDir    string
 	anchorDir  string
-	keysDir    string
+	keystore   string
 	passphrase string
 	jsonOut    bool
 }
@@ -36,7 +38,7 @@ func main() {
 	pf.StringVar(&a.workspace, "workspace", ".keryx", "workspace directory (repo/, anchor/, keys/)")
 	pf.StringVar(&a.repoDir, "repo", "", "repo base directory (default <workspace>/repo)")
 	pf.StringVar(&a.anchorDir, "anchor", "", "well-known anchor directory (default <workspace>/anchor)")
-	pf.StringVar(&a.keysDir, "keys", "", "key store directory (default <workspace>/keys)")
+	pf.StringVar(&a.keystore, "keystore", "", "key store directory (default: $KERYX_KEYSTORE or ~/.local/share/keryx/keys)")
 	pf.StringVar(&a.passphrase, "passphrase", os.Getenv("KERYX_PASSPHRASE"), "keystore passphrase (or KERYX_PASSPHRASE)")
 	pf.BoolVar(&a.jsonOut, "json", false, "machine-readable JSON output")
 
@@ -91,10 +93,39 @@ func (a *app) anchorPath() string {
 }
 
 func (a *app) keysPath() string {
-	if a.keysDir != "" {
-		return a.keysDir
+	if a.keystore != "" {
+		return a.keystore
 	}
 	return a.cfg().KeysDir()
+}
+
+// requireRole fails fast when the workspace role cannot run the command
+// (design/tooling.md §2). The default role is operator.
+func (a *app) requireRole(roles ...string) error {
+	role := a.cfg().Role
+	for _, r := range roles {
+		if role == r {
+			return nil
+		}
+	}
+	return fmt.Errorf("workspace role %q cannot run this command (needs %s)", role, strings.Join(roles, " or "))
+}
+
+// checkKeystoreOutside refuses a key store inside the workspace, so private
+// seeds can never be committed with the repo (design/tooling.md §3.2).
+func (a *app) checkKeystoreOutside(dir string) error {
+	ws, err := filepath.Abs(a.workspace)
+	if err != nil {
+		return err
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	if abs == ws || strings.HasPrefix(abs, ws+string(filepath.Separator)) {
+		return fmt.Errorf("keystore %s is inside the workspace %s; keep keys outside the repo (use --keystore)", dir, a.workspace)
+	}
+	return nil
 }
 
 func (a *app) publisher() *publisher.Publisher {
@@ -145,6 +176,9 @@ func (a *app) ceremonyCmd() *cobra.Command {
 		Use:   "apply",
 		Short: "Verify a bundle and finish it on this machine",
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if err := a.requireRole("ci", "operator"); err != nil {
+				return err
+			}
 			if bundle == "" {
 				return fmt.Errorf("--bundle is required")
 			}

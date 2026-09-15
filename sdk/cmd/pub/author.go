@@ -19,6 +19,9 @@ func (a *app) authorAddCmd() *cobra.Command {
 		Use:   "add",
 		Short: "Add an author keyid (master ceremony)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := a.requireRole("operator"); err != nil {
+				return err
+			}
 			res, err := runOrStage(cmd,
 				func(dir, pass string) (publisher.Result, error) {
 					return a.publisher().StageAuthorAdd(a.ctx(), channel, keyid, dir, pass)
@@ -45,6 +48,9 @@ func (a *app) authorRevokeCmd() *cobra.Command {
 		Use:   "revoke",
 		Short: "Revoke an author keyid (refuses the last author)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := a.requireRole("operator"); err != nil {
+				return err
+			}
 			res, err := runOrStage(cmd,
 				func(dir, pass string) (publisher.Result, error) {
 					return a.publisher().StageAuthorRevoke(a.ctx(), channel, keyid, dir, pass)

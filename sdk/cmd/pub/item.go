@@ -38,13 +38,11 @@ func (a *app) itemSignCmd() *cobra.Command {
 			if err := feed.ValidateItem(item); err != nil {
 				return err
 			}
-			store := keys.NewDirStore(a.keysPath(), a.passphrase)
-			var key *keys.Key
-			if keyid != "" {
-				key, err = store.Get(a.ctx(), keyid)
-			} else {
-				key, err = store.Find(a.ctx(), keys.RoleAuthor, "")
+			if err := a.requireRole("author", "operator"); err != nil {
+				return err
 			}
+			store := keys.NewDirStore(a.keysPath(), a.passphrase)
+			key, err := keys.Resolve(a.ctx(), store, keys.RoleAuthor, "", keyid)
 			if err != nil {
 				return err
 			}
@@ -80,6 +78,9 @@ func (a *app) itemUnpublishCmd() *cobra.Command {
 		Use:   "unpublish",
 		Short: "Remove an item's index entry (absence = unpublished)",
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if err := a.requireRole("ci", "operator"); err != nil {
+				return err
+			}
 			res, err := a.publisher().Unpublish(a.ctx(), channel, id)
 			if err != nil {
 				return err

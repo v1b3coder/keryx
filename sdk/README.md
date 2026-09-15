@@ -79,15 +79,37 @@ CI/ops machine finishes it with `pub ceremony apply --bundle <dir>`. Without
 required key.
 
 `--json` renders machine-readable results for every command; `--passphrase`
-(or `KERYX_PASSPHRASE`) decrypts the keystore.
+(or `KERYX_PASSPHRASE`) decrypts the keystore. `--keystore <dir>`
+(or `KERYX_KEYSTORE`) points at the key store; it defaults to a per-user
+location (`~/.local/share/keryx/keys`) and is never written into the
+workspace. Master ceremonies that mint keys (`channel add`, `channel mode`)
+require `--generate-keys`; without it a missing key is a typed error.
+
+## Key store and resolution
+
+The key store lives outside the repo, so private seeds can never be
+committed with it. Signing resolves keys in two ways
+(design/tooling.md §3.2):
+
+- **Pinned** — metadata already names the keyid (`root.json`/
+  `targets.json` roles, or an explicit `--keyid`): the keyid is looked up
+exactly, never by name.
+- **Selection** — only a role is known (`item sign`, a new channel key):
+  exactly one key of that role is picked; zero is a typed `missing key`
+  error and more than one is an ambiguity error listing the candidates.
+
+`pub keys export`/`import` moves role-tagged keys between machines as an
+encrypted bundle.
 
 ## Role-scoped workspaces
 
 The repo is the only shared state (design/tooling.md §3.2). A workspace is
-`keryx.json` + `repo/` + `anchor/` + `keys/`; each machine holds only its
-own keys. A role that does not hold a key fails fast with a typed
+`keryx.json` + `repo/` + `anchor/`; the key store is a sibling directory
+(or `$KERYX_KEYSTORE`) that each machine keeps to itself. A role that does
+not hold a key fails fast with a typed
 `missing key: channel key "security" — run this on the pipeline machine`
-error instead of producing half-signed metadata.
+error instead of producing half-signed metadata, and the workspace `role`
+(`operator|ci|author`) gates which commands it may run.
 
 ## Showcase consumer
 
@@ -97,14 +119,14 @@ external project would have (its own `go.mod` with a `replace` to `../sdk`).
 repo + keys + join URL + QR + private capability feed):
 
 ```sh
-cd ../examples && go run ./sdk-artifact --out /tmp/keryx-demo --base http://localhost:8000
+cd ../examples && go run ./sdk-artifact --out /tmp/keryx-demo --keys /tmp/keryx-keys --base http://localhost:8000
 ```
 
 The app's protocol tests consume it directly (`make demo-sdk`):
 
 ```sh
 cd ../app
-KERYX_DEMO_DIR=/tmp/keryx-demo npm test
+KERYX_DEMO_DIR=/tmp/keryx-demo KERYX_KEYSTORE=/tmp/keryx-keys npm test
 ```
 
 ## Layout

@@ -26,6 +26,7 @@ import (
 func main() {
 	mode := flag.String("mode", "build", "build | verify")
 	site := flag.String("site", "../demo", "output directory for the demonstration site")
+	keysDir := flag.String("keys", ".keys", "key store directory (outside the published site)")
 	base := flag.String("base", "http://localhost:8000", "public origin of the demo site (signed into every artifact URL)")
 	flag.Parse()
 
@@ -33,11 +34,11 @@ func main() {
 
 	switch *mode {
 	case "build":
-		if err := buildAll(*site); err != nil {
+		if err := buildAll(*site, *keysDir); err != nil {
 			fatal(err)
 		}
 	case "verify":
-		if err := verifyAll(*site); err != nil {
+		if err := verifyAll(*site, *keysDir); err != nil {
 			fatal(err)
 		}
 		fmt.Printf("OK: metadata chain and all items verified against %s\n", *site)
@@ -58,15 +59,18 @@ func setBase(base string) {
 	trackingPattern = base + "/channels/tracking/*/feed.json"
 }
 
-// newPublisher opens the SDK workspace rooted at site: keys/, keryx/ (repo
-// base) and .well-known/keryx/ (root anchor).
-func newPublisher(site string) *publisher.Publisher {
-	ks := keys.NewDirStore(filepath.Join(site, "keys"), "")
-	return publisher.New(
+// newPublisher opens the SDK workspace: the key store lives outside the
+// published site, the repo base at keryx/ and the root anchor at
+// .well-known/keryx/ inside it.
+func newPublisher(site, keysDir string) *publisher.Publisher {
+	ks := keys.NewDirStore(keysDir, "")
+	pub := publisher.New(
 		repo.NewDirRepo(filepath.Join(site, "keryx")),
 		repo.NewDirRepo(filepath.Join(site, ".well-known", "keryx")),
 		ks,
 	)
+	pub.GenerateKeys = true // the single-step demo machine mints every key
+	return pub
 }
 
 func ensureKey(ctx context.Context, ks *keys.DirStore, role keys.Role, name string) (*keys.Key, error) {
@@ -104,7 +108,7 @@ func roleFor(name string) keys.Role {
 	}
 }
 
-func buildAll(site string) error {
+func buildAll(site, keysDir string) error {
 	ctx := context.Background()
 	fmt.Println("== building TUF repository with the publisher SDK ==")
 	// stale artifacts from older layouts are removed so the repo is
@@ -114,7 +118,7 @@ func buildAll(site string) error {
 			return err
 		}
 	}
-	pub := newPublisher(site)
+	pub := newPublisher(site, keysDir)
 	pub.AllowLocalHTTP = true
 
 	// The logo is linked (with the required logo_sha256) on an HTTPS origin —
@@ -277,8 +281,8 @@ func buildAll(site string) error {
 }
 
 // verifyAll re-loads the site and runs the SDK's full repository check.
-func verifyAll(site string) error {
-	_, err := newPublisher(site).Validate(context.Background())
+func verifyAll(site, keysDir string) error {
+	_, err := newPublisher(site, keysDir).Validate(context.Background())
 	return err
 }
 

@@ -140,6 +140,7 @@ func TestAuthorToCIToOperator(t *testing.T) {
 	}
 	operator := publisher.New(base, anchor, opKeys)
 	operator.Now = func() time.Time { return time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC) }
+	operator.GenerateKeys = true // the operator mints the channel key into the bundle
 	if _, err := operator.Init(ctx, publisher.InitParams{
 		RepoBase: "https://cdn.example.com/keryx", CompanyName: "ACME",
 	}); err != nil {
@@ -226,7 +227,7 @@ func TestCLIEndToEnd(t *testing.T) {
 	ws := filepath.Join(dir, "ws")
 	run := func(args ...string) string {
 		t.Helper()
-		full := append([]string{"run", "./cmd/pub", "--workspace", ws}, args...)
+		full := append([]string{"run", "./cmd/pub", "--workspace", ws, "--keystore", filepath.Join(dir, "keys")}, args...)
 		cmd := exec.Command("go", full...)
 		cmd.Dir = ".."
 		out, err := cmd.CombinedOutput()
@@ -237,7 +238,7 @@ func TestCLIEndToEnd(t *testing.T) {
 	}
 	runWith := func(global []string, args ...string) string {
 		t.Helper()
-		full := append(append([]string{"run", "./cmd/pub", "--workspace", ws}, global...), args...)
+		full := append(append([]string{"run", "./cmd/pub", "--workspace", ws, "--keystore", filepath.Join(dir, "keys")}, global...), args...)
 		cmd := exec.Command("go", full...)
 		cmd.Dir = ".."
 		out, err := cmd.CombinedOutput()
@@ -247,7 +248,7 @@ func TestCLIEndToEnd(t *testing.T) {
 		return string(out)
 	}
 	run("init", "--domain", "company.example", "--name", "ACME s.r.o.", "--base", "https://cdn.example.com/keryx")
-	run("channel", "add", "news", "--simple")
+	run("channel", "add", "news", "--simple", "--generate-keys")
 	run("keys", "generate", "author", "--role", "author")
 	// author side: sign a draft without any repo access
 	draftPath := filepath.Join(dir, "draft.json")

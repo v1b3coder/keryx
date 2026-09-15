@@ -27,6 +27,9 @@ func (a *app) deployCmd() *cobra.Command {
 		Use:   "local",
 		Short: "Copy anchor/ + repo/ to a local directory",
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if err := a.requireRole("ci", "operator"); err != nil {
+				return err
+			}
 			if _, err := a.publisher().Validate(a.ctx()); err != nil {
 				return fmt.Errorf("refusing to deploy an invalid repo: %w", err)
 			}
@@ -45,6 +48,9 @@ func (a *app) deployCmd() *cobra.Command {
 		Use:   "s3",
 		Short: "Upload to an S3-compatible bucket",
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if err := a.requireRole("ci", "operator"); err != nil {
+				return err
+			}
 			if _, err := a.publisher().Validate(a.ctx()); err != nil {
 				return fmt.Errorf("refusing to deploy an invalid repo: %w", err)
 			}
@@ -77,6 +83,9 @@ func (a *app) pullCmd() *cobra.Command {
 		Use:   "pull",
 		Short: "Fetch + verify the repo from the deployed base",
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if err := a.requireRole("ci", "operator"); err != nil {
+				return err
+			}
 			if base == "" {
 				return fmt.Errorf("--base is required")
 			}

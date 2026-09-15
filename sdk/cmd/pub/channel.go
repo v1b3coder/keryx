@@ -22,17 +22,22 @@ func (a *app) channelCmd() *cobra.Command {
 
 func (a *app) channelAddCmd() *cobra.Command {
 	var spec publisher.ChannelSpec
-	var simple bool
+	var simple, generateKeys bool
 	cmd := &cobra.Command{
 		Use:   "add <name>",
 		Short: "Add a channel (authored by default; --simple opts out)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.requireRole("operator"); err != nil {
+				return err
+			}
 			spec.Name = args[0]
 			spec.Simple = simple
+			pub := a.publisher()
+			pub.GenerateKeys = generateKeys
 			res, err := runOrStage(cmd,
-				func(dir, pass string) (publisher.Result, error) { return a.publisher().StageChannelAdd(a.ctx(), spec, dir, pass) },
-				func() (publisher.Result, error) { return a.publisher().ChannelAdd(a.ctx(), spec) })
+				func(dir, pass string) (publisher.Result, error) { return pub.StageChannelAdd(a.ctx(), spec, dir, pass) },
+				func() (publisher.Result, error) { return pub.ChannelAdd(a.ctx(), spec) })
 			if err != nil {
 				return err
 			}
@@ -48,6 +53,7 @@ func (a *app) channelAddCmd() *cobra.Command {
 	f.StringSliceVar(&spec.Authors, "author", nil, "existing author keyids (authored mode)")
 	f.IntVar(&spec.Threshold, "threshold", 1, "authors-role threshold")
 	f.BoolVar(&simple, "simple", false, "simple mode: no authors role")
+	f.BoolVar(&generateKeys, "generate-keys", false, "mint the channel/author keys")
 	return cmd
 }
 
@@ -57,6 +63,9 @@ func (a *app) channelRemoveCmd() *cobra.Command {
 		Short: "Remove a channel",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.requireRole("operator"); err != nil {
+				return err
+			}
 			res, err := runOrStage(cmd,
 				func(dir, pass string) (publisher.Result, error) {
 					return a.publisher().StageChannelRemove(a.ctx(), args[0], dir, pass)
@@ -75,11 +84,15 @@ func (a *app) channelRemoveCmd() *cobra.Command {
 
 func (a *app) channelModeCmd() *cobra.Command {
 	var channel string
+	var generateKeys bool
 	cmd := &cobra.Command{
 		Use:   "mode [name] simple|authored",
 		Short: "Master-signed channel mode change (re-signs items)",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.requireRole("operator"); err != nil {
+				return err
+			}
 			name := channel
 			mode := args[0]
 			if len(args) == 2 {
@@ -88,11 +101,13 @@ func (a *app) channelModeCmd() *cobra.Command {
 			if name == "" {
 				return fmt.Errorf("--channel is required")
 			}
+			pub := a.publisher()
+			pub.GenerateKeys = generateKeys
 			res, err := runOrStage(cmd,
 				func(dir, pass string) (publisher.Result, error) {
-					return a.publisher().StageChannelMode(a.ctx(), name, mode, dir, pass)
+					return pub.StageChannelMode(a.ctx(), name, mode, dir, pass)
 				},
-				func() (publisher.Result, error) { return a.publisher().ChannelMode(a.ctx(), name, mode) })
+				func() (publisher.Result, error) { return pub.ChannelMode(a.ctx(), name, mode) })
 			if err != nil {
 				return err
 			}
@@ -102,6 +117,7 @@ func (a *app) channelModeCmd() *cobra.Command {
 	}
 	addStageFlags(cmd)
 	cmd.Flags().StringVar(&channel, "channel", "", "channel name (alternative to the positional arg)")
+	cmd.Flags().BoolVar(&generateKeys, "generate-keys", false, "mint the author key when switching to authored")
 	return cmd
 }
 
@@ -115,6 +131,9 @@ func (a *app) rotateCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if channel == "" {
 				return fmt.Errorf("--channel is required")
+			}
+			if err := a.requireRole("ci", "operator"); err != nil {
+				return err
 			}
 			res, err := runOrStage(cmd,
 				func(dir, pass string) (publisher.Result, error) {
@@ -148,6 +167,9 @@ func (a *app) revokeCmd() *cobra.Command {
 			if channel == "" {
 				return fmt.Errorf("--channel is required")
 			}
+			if err := a.requireRole("ci", "operator"); err != nil {
+				return err
+			}
 			res, err := runOrStage(cmd,
 				func(dir, pass string) (publisher.Result, error) {
 					return a.publisher().StageChannelKeyRevoke(a.ctx(), channel, keyid, dir, pass)
@@ -180,6 +202,9 @@ func (a *app) channelSetCmd() *cobra.Command {
 		Use:   "set",
 		Short: "Update master-signed channel display metadata",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := a.requireRole("operator"); err != nil {
+				return err
+			}
 			res, err := runOrStage(cmd,
 				func(dir, pass string) (publisher.Result, error) {
 					return a.publisher().StageChannelSet(a.ctx(), channel, displayName, description, dir, pass)
@@ -237,6 +262,9 @@ func (a *app) channelKeyCmd() *cobra.Command {
 				Short: "Add a new channel key alongside the old (overlap)",
 				Args:  cobra.ExactArgs(1),
 				RunE: func(cmd *cobra.Command, args []string) error {
+					if err := a.requireRole("ci", "operator"); err != nil {
+						return err
+					}
 					res, err := runOrStage(cmd,
 						func(dir, pass string) (publisher.Result, error) {
 							return a.publisher().StageChannelKeyRotate(a.ctx(), args[0], dir, pass, announce)
@@ -263,6 +291,9 @@ func (a *app) channelKeyCmd() *cobra.Command {
 				Short: "Drop a channel keyid",
 				Args:  cobra.ExactArgs(1),
 				RunE: func(cmd *cobra.Command, args []string) error {
+					if err := a.requireRole("ci", "operator"); err != nil {
+						return err
+					}
 					res, err := runOrStage(cmd,
 						func(dir, pass string) (publisher.Result, error) {
 							return a.publisher().StageChannelKeyRevoke(a.ctx(), args[0], keyid, dir, pass)

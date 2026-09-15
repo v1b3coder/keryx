@@ -70,11 +70,16 @@ channel keys).
    can fetch it (git checkout, rsync, or `pub pull` from the deployed base)
    and every role that reads it verifies the chain first. Nothing else is
    shared.
-2. **Keys never leave their role.** No single workspace holds all keys.
-   Each role's machine has only its own keys; a role that does not hold a
-   key simply cannot run the commands that need it — the CLI fails fast with
-   a typed `missing key: channel key "security" — run this on the pipeline
-   machine` error instead of producing half-signed metadata.
+2. **Keys never leave their role, and never enter the repo.** The key
+   store is a sibling of the workspace (default
+   `~/.local/share/keryx/keys`, overridable with `--keystore`/
+   `$KERYX_KEYSTORE`), so private seeds can never be committed with the
+   repo. No single workspace holds all keys; each role's machine has only its
+   own keys. A role that does not hold a key simply cannot run the commands
+   that need it — the CLI fails fast with a typed `missing key: channel key
+   "security" — run this on the pipeline machine` error instead of producing
+   half-signed metadata. Keys are minted only when a ceremony explicitly asks
+   (`--generate-keys`); a signing command never generates silently.
 3. **Every handoff is a signed artifact, verified at the boundary.** Author
    → pipeline: signed item. Operator → pipeline: ceremony bundle
    (master-signed metadata). Operator → author: key export (encrypted).
@@ -90,8 +95,8 @@ channel keys).
 ```
 operator (ceremony machine)        CI / pipeline                  author's machine
 ┌──────────────────────────┐      ┌──────────────────────────┐   ┌────────────────┐
-│ keys/  master (+ ops)    │      │ keys/  channel key(s)    │   │ keys/ author   │
-│ repo/  checkout          │      │        + ops             │   │                │
+│ keystore/ master (+ops)  │      │ keystore/ channel keys  │   │ keystore/ author│
+│ repo/  checkout          │      │           + ops         │   │                 │
 │ anchor/ root.json+chain  │      │ repo/  checkout          │   │ (no repo, no   │
 │ config: role=operator    │      │ anchor/ read-only copy   │   │  anchor —      │
 └──────────────────────────┘      │ config: role=ci          │   │  item sign     │
@@ -99,6 +104,12 @@ operator (ceremony machine)        CI / pipeline                  author's machi
           │  git: repo + anchor                                    │  the keystore)│
           └───────────────────────────────────────────────────────┘
 ```
+
+- **The key store is never inside the repo.** It is a per-machine
+  directory (default `~/.local/share/keryx/keys`, overridable with
+  `--keystore`/`$KERYX_KEYSTORE`) that `pub init` refuses to place
+  inside the workspace. Only the role-tagged public keys land in the signed
+  metadata.
 
 - **Author** is the minimal case: no repo, no anchor, no metadata. `pub
   item sign --channel security --file draft.json --out signed.json` needs
@@ -316,17 +327,23 @@ can be re-ported onto it (or retired) in a later pass.
 Command names follow the normative contract in spec/clients.md §2; additions
 are marked **(new)**. `--stage`/`apply` implement the two-step ceremonies
 (§3.5); without `--stage` the same commands run single-step when the
-keystore holds the required keys.
+keystore holds the required keys. Every command takes `--keystore DIR` (or
+`$KERYX_KEYSTORE`, default `~/.local/share/keryx/keys`) — the key store is
+never inside the workspace. Ceremonies that mint keys require
+`--generate-keys`; otherwise a missing key is a typed error. The workspace
+`role` (`operator|ci|author`) gates the commands each machine may run, and
+signing resolves keys by role, requiring `--keyid` only when more than one key
+of that role is present.
 
 ```
 pub init --domain company.example --name "ACME s.r.o."
          [--base https://cdn.example.com/keryx] [--logo URL|FILE]
-         [--mode full] [--workspace .keryx]
+         [--mode full] [--workspace .keryx] [--keystore DIR]
 pub keys list | generate <name> [--role master|ops|channel|author|engine]
 pub keys export [--role …] [--name …] [--public] --out bundle   # (new) role-tagged, encrypted
 pub keys import --file bundle                                    # (new)
-pub channel add <name> --display-name … [--description …] [--keyid …] [--author <keyid>] [--simple] [--stage out/]
-pub channel mode <name> simple|authored [--stage out/]                # (new) master-signed mode change
+pub channel add <name> --display-name … [--description …] [--keyid …] [--author <keyid>] [--simple] [--generate-keys] [--stage out/]
+pub channel mode <name> simple|authored [--generate-keys] [--stage out/]  # (new) master-signed mode change
 pub channel set --channel <name> [--display-name …] [--description …] [--stage out/]  # (new)
 pub channel remove <name> [--stage out/]
 pub channel list

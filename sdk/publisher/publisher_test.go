@@ -31,6 +31,7 @@ func newEnv(t *testing.T) *env {
 	ks := keys.NewDirStore(filepath.Join(dir, "keys"), "")
 	pub := publisher.New(repo.NewDirRepo(filepath.Join(dir, "repo")), repo.NewDirRepo(filepath.Join(dir, "anchor")), ks)
 	pub.Now = func() time.Time { return time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC) }
+	pub.GenerateKeys = true // single-step: the operator machine holds every key
 	ctx := context.Background()
 	if _, err := pub.Init(ctx, publisher.InitParams{
 		RepoBase: "https://cdn.example.com/keryx", CompanyName: "ACME s.r.o.",
@@ -410,6 +411,7 @@ func TestTwoStepCeremony(t *testing.T) {
 	}
 	operator := publisher.New(base, anchor, operatorKeys)
 	operator.Now = func() time.Time { return time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC) }
+	operator.GenerateKeys = true // the offline machine mints the channel key into the bundle
 	if _, err := operator.Init(context.Background(), publisher.InitParams{
 		RepoBase: "https://cdn.example.com/keryx", CompanyName: "ACME",
 	}); err != nil {

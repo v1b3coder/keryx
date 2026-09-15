@@ -51,14 +51,22 @@ func demoDir() string {
 	return filepath.Join("..", "..", "..", "..", "keryx-demo")
 }
 
+// keystoreDir locates the demo key store (outside the published site).
+func keystoreDir() string {
+	if dir := os.Getenv("KERYX_KEYSTORE"); dir != "" {
+		return dir
+	}
+	return filepath.Join("..", "..", "..", ".demo-keys")
+}
+
 // resealRoot copies the demo repository, points custom.repo_base at the local
 // HTTPS server and re-signs the root with the demo's master key.
-func resealRoot(t *testing.T, src, dst, repoBase string) {
+func resealRoot(t *testing.T, src, dst, keysDir, repoBase string) {
 	t.Helper()
 	if err := os.CopyFS(dst, os.DirFS(src)); err != nil {
 		t.Fatal(err)
 	}
-	keyFile := filepath.Join(dst, "keys", "master.json")
+	keyFile := filepath.Join(keysDir, "master.json")
 	raw, err := os.ReadFile(keyFile)
 	if err != nil {
 		t.Fatal(err)
@@ -109,9 +117,9 @@ func resealRoot(t *testing.T, src, dst, repoBase string) {
 }
 
 // channelKey reads a demo channel key's Ed25519 private key.
-func channelKey(t *testing.T, dir, channel string) (ed25519.PrivateKey, string) {
+func channelKey(t *testing.T, keysDir, channel string) (ed25519.PrivateKey, string) {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(dir, "keys", channel+".json"))
+	raw, err := os.ReadFile(filepath.Join(keysDir, channel+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,6 +246,10 @@ func TestEndToEndDemoRepository(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(src, ".well-known", "keryx", "root.json")); err != nil {
 		t.Skipf("demo repository not present at %s: %v", src, err)
 	}
+	keys := keystoreDir()
+	if _, err := os.Stat(filepath.Join(keys, "master.json")); err != nil {
+		t.Skipf("demo key store not present at %s: %v", keys, err)
+	}
 	logger := discardLogger()
 
 	// Serve a copy of the demo repository over local HTTPS with a test CA,
@@ -247,7 +259,7 @@ func TestEndToEndDemoRepository(t *testing.T) {
 	repoBase := repoSrv.URL + "/keryx/"
 	repoSrv.Config.Handler = http.FileServer(http.Dir(serveDir))
 	defer repoSrv.Close()
-	resealRoot(t, src, serveDir, repoBase)
+	resealRoot(t, src, serveDir, keystoreDir(), repoBase)
 
 	pool := x509Pool(t, repoSrv.Certificate())
 
@@ -321,7 +333,7 @@ func TestEndToEndDemoRepository(t *testing.T) {
 	if !ok {
 		t.Fatalf("security scope %s missing from %d scopes", scopeID, table.Len())
 	}
-	priv, keyID := channelKey(t, serveDir, "security")
+	priv, keyID := channelKey(t, keystoreDir(), "security")
 	if _, ok := entry.Keys[keyID]; !ok {
 		t.Fatalf("channel key %s is not authorized for scope %s", keyID, scopeID)
 	}

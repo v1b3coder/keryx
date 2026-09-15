@@ -57,6 +57,8 @@ hashes.sha512 = sha512;
 
 const demoDir =
   process.env.KERYX_DEMO_DIR ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'demo');
+// private keys live outside the published demo site (design/tooling.md §3.2)
+const keystoreDir = process.env.KERYX_KEYSTORE ?? join(demoDir, '..', '.demo-keys');
 const origin = 'http://localhost:8000';
 
 function fileFor(url: string): string {
@@ -83,7 +85,7 @@ function privateFeedRelPath(): string {
 }
 
 function seedOf(name: string): Uint8Array {
-  const f = loadJson<{ seed_hex: string }>(`keys/${name}.json`);
+  const f = JSON.parse(readFileSync(join(keystoreDir, `${name}.json`), 'utf8')) as { seed_hex: string };
   return new Uint8Array(Buffer.from(f.seed_hex, 'hex'));
 }
 

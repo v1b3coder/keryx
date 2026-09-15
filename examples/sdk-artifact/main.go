@@ -25,15 +25,16 @@ const pngDataURL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAA
 func main() {
 	out := flag.String("out", "../demo-sdk", "output directory")
 	base := flag.String("base", "http://localhost:8000", "public origin")
+	keysDir := flag.String("keys", "", "key store directory (default <out>.keys, outside the artifact)")
 	flag.Parse()
 
-	if err := run(*out, *base); err != nil {
+	if err := run(*out, *base, *keysDir); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
 
-func run(out, base string) error {
+func run(out, base, keysDir string) error {
 	ctx := context.Background()
 	now := func() time.Time { return time.Now().UTC().Truncate(time.Second) }
 	if err := os.RemoveAll(out); err != nil {
@@ -41,6 +42,10 @@ func run(out, base string) error {
 	}
 	cfg := config.Default(out)
 	cfg.RepoBase = base + "/keryx"
+	if keysDir == "" {
+		keysDir = out + ".keys"
+	}
+	cfg.Keystore = keysDir
 	if err := cfg.Save(); err != nil {
 		return err
 	}
@@ -49,6 +54,7 @@ func run(out, base string) error {
 	ks := keys.NewDirStore(cfg.KeysDir(), "")
 	pub := publisher.New(repo.NewDirRepo(repoDir), repo.NewDirRepo(anchorDir), ks)
 	pub.Now = now
+	pub.GenerateKeys = true // single-step showcase: this machine mints every key
 
 	if _, err := pub.Init(ctx, publisher.InitParams{
 		RepoBase: cfg.RepoBase, CompanyName: "Trezor (demo)",

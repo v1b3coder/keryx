@@ -34,6 +34,9 @@ type Publisher struct {
 	// AllowLocalHTTP permits plain-HTTP loopback/RFC 1918 linked media (the
 	// local demo; never set in production).
 	AllowLocalHTTP bool
+	// GenerateKeys lets a ceremony command mint keys it does not hold. When
+	// false, a missing key is a typed error instead of a silent generation.
+	GenerateKeys bool
 }
 
 // New returns a Publisher over the two output directories.
@@ -67,11 +70,11 @@ func (p *Publisher) Init(ctx context.Context, params InitParams) (Result, error)
 	if params.CompanyName == "" {
 		return Result{}, fmt.Errorf("company name is required")
 	}
-	master, err := p.ensureKey(ctx, keys.RoleMaster, "master")
+	master, err := p.keyForInit(ctx, keys.RoleMaster, "master")
 	if err != nil {
 		return Result{}, err
 	}
-	ops, err := p.ensureKey(ctx, keys.RoleOps, "ops")
+	ops, err := p.keyForInit(ctx, keys.RoleOps, "ops")
 	if err != nil {
 		return Result{}, err
 	}
@@ -169,25 +172,9 @@ func (p *Publisher) exp() tufrepo.Expiries {
 	return tufrepo.DefaultExpiries()
 }
 
-// key returns the store key matching role (and name when non-empty).
+// key returns the unique store key matching role (and name when non-empty).
 func (p *Publisher) key(ctx context.Context, role keys.Role, name string) (*keys.Key, error) {
-	store, ok := p.Keys.(*keys.DirStore)
-	if ok {
-		return store.Find(ctx, role, name)
-	}
-	if name != "" {
-		return p.Keys.Get(ctx, name)
-	}
-	infos, err := p.Keys.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, info := range infos {
-		if info.Role == role {
-			return p.Keys.Get(ctx, info.KeyID)
-		}
-	}
-	return nil, &keys.ErrMissingKey{Role: string(role)}
+	return p.Keys.Find(ctx, role, name)
 }
 
 // keyByID returns the key with the given keyid.
@@ -215,26 +202,31 @@ func (p *Publisher) opsKey(ctx context.Context, st *tufrepo.State) (*keys.Key, e
 	return p.keyByID(ctx, role.KeyIDs[0])
 }
 
-// ensureKey loads a key by role/name, generating and storing it when missing.
-func (p *Publisher) ensureKey(ctx context.Context, role keys.Role, name string) (*keys.Key, error) {
-	if store, ok := p.Keys.(*keys.DirStore); ok {
-		k, err := store.Find(ctx, role, name)
-		if err == nil {
-			return k, nil
-		}
-		if !keys.IsNotFound(err) {
-			return nil, err
-		}
-		k, err = keys.Generate(role, name)
-		if err != nil {
-			return nil, err
-		}
-		if err := p.Keys.Add(ctx, k); err != nil {
-			return nil, err
-		}
+// Generate creates a fresh key for role and stores it. Ceremony commands that
+// mint keys call it explicitly; signing paths never generate implicitly.
+func (p *Publisher) Generate(ctx context.Context, role keys.Role, name string) (*keys.Key, error) {
+	k, err := keys.Generate(role, name)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.Keys.Add(ctx, k); err != nil {
+		return nil, err
+	}
+	return k, nil
+}
+
+// keyForInit returns the key for role/name, generating and storing it when the
+// store holds none. Only the bootstrap (init) uses it: a second init on the same
+// workspace reuses the keys it created, so the output stays deterministic.
+func (p *Publisher) keyForInit(ctx context.Context, role keys.Role, name string) (*keys.Key, error) {
+	k, err := p.Keys.Find(ctx, role, name)
+	if err == nil {
 		return k, nil
 	}
-	return p.key(ctx, role, name)
+	if !keys.IsNotFound(err) {
+		return nil, err
+	}
+	return p.Generate(ctx, role, name)
 }
 
 // signFresh clears signatures, bumps the version and refreshes expires.
@@ -884,7 +876,7 @@ func (p *Publisher) channelModeMutation(ctx context.Context, name, mode string) 
 		if st.HasAuthors(name) {
 			return mutation{}, fmt.Errorf("channel %q is already authored", name)
 		}
-		author, err := p.ensureKey(ctx, keys.RoleAuthor, name+"-author")
+		author, err := p.authorKey(ctx, name)
 		if err != nil {
 			return mutation{}, err
 		}
@@ -1249,7 +1241,7 @@ func (p *Publisher) reissueChannelKeyMutation(ctx context.Context, channel, keyi
 	if !contains(role.KeyIDs, keyid) {
 		return mutation{}, fmt.Errorf("key %s is not on channel %q", keyid, channel)
 	}
-	newKey, err := p.ensureKey(ctx, keys.RoleChannel, channel+"-"+shortID(p.now()))
+	newKey, err := p.Generate(ctx, keys.RoleChannel, channel+"-"+shortID(p.now()))
 	if err != nil {
 		return mutation{}, err
 	}
@@ -1283,7 +1275,7 @@ func (p *Publisher) rotateChannelKeyMutation(ctx context.Context, channel string
 	if st.Channels[channel] == nil {
 		return mutation{}, fmt.Errorf("unknown channel %q", channel)
 	}
-	newKey, err := p.ensureKey(ctx, keys.RoleChannel, channel+"-"+shortID(p.now()))
+	newKey, err := p.Generate(ctx, keys.RoleChannel, channel+"-"+shortID(p.now()))
 	if err != nil {
 		return mutation{}, err
 	}
@@ -1381,7 +1373,7 @@ func (p *Publisher) RotateRoot(ctx context.Context, announceNext bool) (Result, 
 	}
 	// always mint a fresh key: reusing the current master would sign the new
 	// root twice with the same key
-	newMaster, err := p.ensureKey(ctx, keys.RoleMaster, "master-"+shortID(p.now())+"-"+randSuffix())
+	newMaster, err := p.Generate(ctx, keys.RoleMaster, "master-"+shortID(p.now())+"-"+randSuffix())
 	if err != nil {
 		return Result{}, err
 	}
@@ -1536,7 +1528,19 @@ func (p *Publisher) resolveChannelKey(ctx context.Context, spec ChannelSpec) (*k
 	if spec.KeyID != "" {
 		return p.keyByID(ctx, spec.KeyID)
 	}
-	return p.ensureKey(ctx, keys.RoleChannel, spec.Name)
+	if p.GenerateKeys {
+		return p.Generate(ctx, keys.RoleChannel, spec.Name)
+	}
+	return p.key(ctx, keys.RoleChannel, spec.Name)
+}
+
+// authorKey resolves the author key for a channel, generating one when the
+// caller opted in (GenerateKeys); otherwise it must already be in the store.
+func (p *Publisher) authorKey(ctx context.Context, channel string) (*keys.Key, error) {
+	if p.GenerateKeys {
+		return p.Generate(ctx, keys.RoleAuthor, channel+"-author")
+	}
+	return p.key(ctx, keys.RoleAuthor, channel+"-author")
 }
 
 func (p *Publisher) resolveAuthorKeys(ctx context.Context, spec ChannelSpec) ([]*keys.Key, error) {
@@ -1551,7 +1555,7 @@ func (p *Publisher) resolveAuthorKeys(ctx context.Context, spec ChannelSpec) ([]
 		}
 		return out, nil
 	}
-	k, err := p.ensureKey(ctx, keys.RoleAuthor, spec.Name+"-author")
+	k, err := p.authorKey(ctx, spec.Name)
 	if err != nil {
 		return nil, err
 	}

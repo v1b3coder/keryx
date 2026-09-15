@@ -27,6 +27,9 @@ DEMO_BASE      ?= http://localhost:8000
 DEMO_PORT      ?= 8000
 DEMO_DIR       ?= demo
 DEMO_SDK_DIR   ?= .demo-sdk
+# Key stores live outside the generated sites (design/tooling.md §3.2).
+DEMO_KEYS_DIR     ?= $(CURDIR)/.demo-keys
+DEMO_SDK_KEYS_DIR ?= $(CURDIR)/.demo-sdk-keys
 KERYX_DEMO_REPO ?= ../keryx-demo
 KERYX_DEMO_BASE ?= https://keryx-demo.github.io
 
@@ -79,28 +82,28 @@ relay-test: ## Run the relay test suite
 	cd $(RELAY_DIR) && $(GO) test ./...
 
 relay-e2e: ## Run the relay end-to-end test against the sibling demo repo
-	cd $(RELAY_DIR) && KERYX_DEMO_DIR=$(abspath $(KERYX_DEMO_REPO)) $(GO) test -run TestEndToEndDemoRepository ./internal/e2e/...
+	cd $(RELAY_DIR) && KERYX_DEMO_DIR=$(abspath $(KERYX_DEMO_REPO)) KERYX_KEYSTORE=$(DEMO_KEYS_DIR) $(GO) test -run TestEndToEndDemoRepository ./internal/e2e/...
 
 # --- demo publisher artifact --------------------------------------------------
 
 .PHONY: demo demo-verify demo-sdk serve-demo keryx-demo demo-tool
 demo: ## Regenerate the local demo site (SDK-backed)
-	cd $(DEMO_TOOL_DIR) && $(GO) run . -mode build -site $(CURDIR)/$(DEMO_DIR) -base $(DEMO_BASE)
+	cd $(DEMO_TOOL_DIR) && $(GO) run . -mode build -site $(CURDIR)/$(DEMO_DIR) -keys $(DEMO_KEYS_DIR) -base $(DEMO_BASE)
 
 demo-verify: $(DEMO_DIR)/join.txt ## Verify the generated demo site
-	cd $(DEMO_TOOL_DIR) && $(GO) run . -mode verify -site $(CURDIR)/$(DEMO_DIR) -base $(DEMO_BASE)
+	cd $(DEMO_TOOL_DIR) && $(GO) run . -mode verify -site $(CURDIR)/$(DEMO_DIR) -keys $(DEMO_KEYS_DIR) -base $(DEMO_BASE)
 
 demo-sdk: ## Generate a minimal artifact from examples/sdk-artifact (SDK consumer)
 	mkdir -p $(BIN)
 	cd $(EXAMPLES_DIR) && $(GO) build -o $(CURDIR)/$(BIN)/keryxdemo ./sdk-artifact
-	$(BIN)/keryxdemo --out $(CURDIR)/$(DEMO_SDK_DIR) --base $(DEMO_BASE)
+	$(BIN)/keryxdemo --out $(CURDIR)/$(DEMO_SDK_DIR) --keys $(DEMO_SDK_KEYS_DIR) --base $(DEMO_BASE)
 
 serve-demo: ## Serve the demo site with CORS (default port 8000)
 	$(PYTHON) tools/serve.py --port $(DEMO_PORT) $(DEMO_DIR)
 
 keryx-demo: ## Regenerate the published sibling repo (../keryx-demo)
 	@test -d $(KERYX_DEMO_REPO) || { echo "missing sibling repo $(KERYX_DEMO_REPO)"; exit 1; }
-	cd $(DEMO_TOOL_DIR) && $(GO) run . -mode build -site $(abspath $(KERYX_DEMO_REPO)) -base $(KERYX_DEMO_BASE)
+	cd $(DEMO_TOOL_DIR) && $(GO) run . -mode build -site $(abspath $(KERYX_DEMO_REPO)) -keys $(DEMO_KEYS_DIR) -base $(KERYX_DEMO_BASE)
 
 demo-tool: ## Build the demo site generator into bin/demo-tool
 	mkdir -p $(BIN)
@@ -127,10 +130,10 @@ app-build-pages: $(APP_DEPS_STAMP) ## Build the PWA for a GitHub Pages project s
 	cd $(APP_DIR) && VITE_BASE=/keryx/ $(NPM) run build
 
 app-test: $(DEMO_DIR)/join.txt $(APP_DEPS_STAMP) ## Run the protocol tests against the generated demo
-	cd $(APP_DIR) && $(NPM) test
+	cd $(APP_DIR) && KERYX_KEYSTORE=$(DEMO_KEYS_DIR) $(NPM) test
 
 app-test-sdk: demo-sdk $(APP_DEPS_STAMP) ## Run the protocol tests against an SDK-generated artifact
-	cd $(APP_DIR) && KERYX_DEMO_DIR=$(CURDIR)/$(DEMO_SDK_DIR) $(NPM) test
+	cd $(APP_DIR) && KERYX_DEMO_DIR=$(CURDIR)/$(DEMO_SDK_DIR) KERYX_KEYSTORE=$(DEMO_SDK_KEYS_DIR) $(NPM) test
 
 app-icons: $(APP_DEPS_STAMP) ## Regenerate the PWA icons
 	cd $(APP_DIR) && $(NPM) run icons
@@ -154,4 +157,4 @@ clean: ## Remove build outputs (bin/, app/dist)
 	rm -rf $(BIN) $(APP_DIR)/dist
 
 distclean: clean ## Also remove node_modules and generated demo artifacts
-	rm -rf $(APP_DIR)/node_modules $(DEMO_DIR) $(DEMO_SDK_DIR)
+	rm -rf $(APP_DIR)/node_modules $(DEMO_DIR) $(DEMO_SDK_DIR) $(DEMO_KEYS_DIR) $(DEMO_SDK_KEYS_DIR)

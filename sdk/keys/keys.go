@@ -52,6 +52,23 @@ func (e *ErrMissingKey) Error() string {
 	return fmt.Sprintf("missing key: %s", e.Role)
 }
 
+// ErrAmbiguousKey is returned when a role (and name) resolves to more than one
+// key and no keyid was given to disambiguate. Candidates are sorted keyids.
+type ErrAmbiguousKey struct {
+	Role       string
+	Name       string
+	Candidates []string
+}
+
+func (e *ErrAmbiguousKey) Error() string {
+	label := e.Role + " key"
+	if e.Name != "" {
+		label = fmt.Sprintf("%s key %q", e.Role, e.Name)
+	}
+	return fmt.Sprintf("ambiguous key: %s matches %d keys (%s) — pass a keyid",
+		label, len(e.Candidates), strings.Join(e.Candidates, ", "))
+}
+
 // Key is one Ed25519 software key plus its TUF key object. The keyid is the
 // SHA-256 of the canonical key object {keytype,scheme,keyval} (spec/core.md §1);
 // the human-readable name is attached as an unrecognized field *after* the keyid
@@ -133,6 +150,7 @@ type Info struct {
 type Store interface {
 	List(ctx context.Context) ([]Info, error)
 	Get(ctx context.Context, keyid string) (*Key, error)
+	Find(ctx context.Context, role Role, name string) (*Key, error)
 	Add(ctx context.Context, k *Key) error
 	Remove(ctx context.Context, keyid string) error
 }
@@ -187,13 +205,15 @@ func (s *DirStore) List(_ context.Context) ([]Info, error) {
 	return out, nil
 }
 
+// Get returns the key with the given keyid. Names are not identities: a
+// lookup by name is a miss, so pinned resolution can never pick a wrong key.
 func (s *DirStore) Get(_ context.Context, keyid string) (*Key, error) {
 	infos, err := s.List(context.Background())
 	if err != nil {
 		return nil, err
 	}
 	for _, info := range infos {
-		if info.KeyID != keyid && info.Name != keyid {
+		if info.KeyID != keyid {
 			continue
 		}
 		return s.loadFile(s.path(info.Name))
@@ -201,12 +221,14 @@ func (s *DirStore) Get(_ context.Context, keyid string) (*Key, error) {
 	return nil, &ErrMissingKey{Role: "any", KeyID: keyid, Hint: fmt.Sprintf("key %q not in %s", keyid, s.Dir)}
 }
 
-// Find returns the first key matching role (and name when non-empty).
+// Find resolves the unique key matching role (and name when non-empty).
+// No match returns ErrMissingKey; more than one match returns ErrAmbiguousKey.
 func (s *DirStore) Find(_ context.Context, role Role, name string) (*Key, error) {
 	infos, err := s.List(context.Background())
 	if err != nil {
 		return nil, err
 	}
+	var matches []Info
 	for _, info := range infos {
 		if info.Role != "" && info.Role != role {
 			continue
@@ -214,13 +236,33 @@ func (s *DirStore) Find(_ context.Context, role Role, name string) (*Key, error)
 		if name != "" && info.Name != name {
 			continue
 		}
-		return s.loadFile(s.path(info.Name))
+		matches = append(matches, info)
 	}
-	hint := fmt.Sprintf("%s key", role)
-	if name != "" {
-		hint = fmt.Sprintf("%s key %q", role, name)
+	switch len(matches) {
+	case 0:
+		hint := fmt.Sprintf("%s key", role)
+		if name != "" {
+			hint = fmt.Sprintf("%s key %q", role, name)
+		}
+		return nil, &ErrMissingKey{Role: string(role), Hint: hint + " — run this on the machine that holds it"}
+	case 1:
+		return s.loadFile(s.path(matches[0].Name))
+	default:
+		keyids := make([]string, 0, len(matches))
+		for _, m := range matches {
+			keyids = append(keyids, m.KeyID)
+		}
+		return nil, &ErrAmbiguousKey{Role: string(role), Name: name, Candidates: keyids}
 	}
-	return nil, &ErrMissingKey{Role: string(role), Hint: hint + " — run this on the machine that holds it"}
+}
+
+// Resolve picks the signing key: an explicit keyid is used verbatim,
+// otherwise the unique key for role (and name) is selected via Find.
+func Resolve(ctx context.Context, store Store, role Role, name, keyid string) (*Key, error) {
+	if keyid != "" {
+		return store.Get(ctx, keyid)
+	}
+	return store.Find(ctx, role, name)
 }
 
 // FindAll returns every key with the given role.

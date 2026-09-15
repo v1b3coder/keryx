@@ -47,6 +47,7 @@ import (
 
 type config struct {
 	demoDir      string
+	keysDir      string
 	relayListen  string
 	httpsListen  string
 	vapidPrivate string
@@ -76,6 +77,7 @@ type harness struct {
 func main() {
 	var cfg config
 	flag.StringVar(&cfg.demoDir, "demo", "../../keryx-demo", "demo repository source")
+	flag.StringVar(&cfg.keysDir, "keys", os.Getenv("KERYX_KEYSTORE"), "key store directory (outside the demo repo)")
 	flag.StringVar(&cfg.relayListen, "relay-listen", "127.0.0.1:18099", "relay listen address")
 	flag.StringVar(&cfg.httpsListen, "https-listen", "127.0.0.1:8443", "demo HTTPS listen address")
 	flag.StringVar(&cfg.vapidPrivate, "vapid-private", "", "VAPID private key (base64url)")
@@ -94,6 +96,9 @@ func main() {
 func run(cfg config, logger *slog.Logger) error {
 	if _, err := os.Stat(filepath.Join(cfg.demoDir, ".well-known", "keryx", "root.json")); err != nil {
 		return fmt.Errorf("demo repository: %w", err)
+	}
+	if cfg.keysDir == "" {
+		return fmt.Errorf("key store required (-keys or KERYX_KEYSTORE)")
 	}
 	h := &harness{cfg: cfg}
 
@@ -117,12 +122,12 @@ func run(cfg config, logger *slog.Logger) error {
 	if err := copyDir(cfg.demoDir, h.serveDir); err != nil {
 		return err
 	}
-	if err := resealRoot(h.serveDir, repoBase); err != nil {
+	if err := resealRoot(h.serveDir, cfg.keysDir, repoBase); err != nil {
 		return err
 	}
 
 	// 3. The demo channel key signs the wake-ups.
-	h.key, h.keyID, err = channelKey(h.serveDir, cfg.channel)
+	h.key, h.keyID, err = channelKey(cfg.keysDir, cfg.channel)
 	if err != nil {
 		return err
 	}
@@ -382,8 +387,8 @@ func copyDir(src, dst string) error {
 	})
 }
 
-func resealRoot(dir, repoBase string) error {
-	raw, err := os.ReadFile(filepath.Join(dir, "keys", "master.json"))
+func resealRoot(dir, keysDir, repoBase string) error {
+	raw, err := os.ReadFile(filepath.Join(keysDir, "master.json"))
 	if err != nil {
 		return err
 	}
@@ -429,8 +434,8 @@ func resealRoot(dir, repoBase string) error {
 	return nil
 }
 
-func channelKey(dir, channel string) (ed25519.PrivateKey, string, error) {
-	raw, err := os.ReadFile(filepath.Join(dir, "keys", channel+".json"))
+func channelKey(keysDir, channel string) (ed25519.PrivateKey, string, error) {
+	raw, err := os.ReadFile(filepath.Join(keysDir, channel+".json"))
 	if err != nil {
 		return nil, "", err
 	}

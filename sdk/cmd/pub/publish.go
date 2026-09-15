@@ -27,6 +27,12 @@ func (a *app) initCmd() *cobra.Command {
 			if domain == "" {
 				return fmt.Errorf("--domain is required")
 			}
+			if err := a.requireRole("operator"); err != nil {
+				return err
+			}
+			if err := a.checkKeystoreOutside(a.keysPath()); err != nil {
+				return err
+			}
 			if name == "" {
 				return fmt.Errorf("--name is required")
 			}
@@ -120,6 +126,9 @@ func (a *app) publishCmd() *cobra.Command {
 		Use:   "publish",
 		Short: "Publish a signed item to a channel",
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if err := a.requireRole("ci", "operator"); err != nil {
+				return err
+			}
 			if file == "" {
 				return fmt.Errorf("--file is required")
 			}
@@ -152,6 +161,9 @@ func (a *app) refreshCmd() *cobra.Command {
 		Use:   "refresh-timestamp",
 		Short: "Cron line: re-sign timestamp with a fresh expiry",
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if err := a.requireRole("ci", "operator"); err != nil {
+				return err
+			}
 			var res publisher.Result
 			var err error
 			if expires != "" {
@@ -180,6 +192,9 @@ func (a *app) rotateRootCmd() *cobra.Command {
 		Use:   "rotate-root",
 		Short: "Root ceremony: root v+1 at the well-known anchor only",
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if err := a.requireRole("operator"); err != nil {
+				return err
+			}
 			res, err := a.publisher().RotateRoot(a.ctx(), announceNext)
 			if err != nil {
 				return err
