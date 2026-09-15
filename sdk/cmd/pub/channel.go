@@ -152,6 +152,7 @@ func (a *app) channelKeyCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "key", Short: "Channel key rotation / revocation"}
 	cmd.AddCommand(
 		func() *cobra.Command {
+			var announce bool
 			c := &cobra.Command{
 				Use:   "rotate <channel>",
 				Short: "Add a new channel key alongside the old (overlap)",
@@ -159,9 +160,11 @@ func (a *app) channelKeyCmd() *cobra.Command {
 				RunE: func(cmd *cobra.Command, args []string) error {
 					res, err := runOrStage(cmd,
 						func(dir, pass string) (publisher.Result, error) {
-							return a.publisher().StageChannelKeyRotate(a.ctx(), args[0], dir, pass)
+							return a.publisher().StageChannelKeyRotate(a.ctx(), args[0], dir, pass, announce)
 						},
-						func() (publisher.Result, error) { return a.publisher().RotateChannelKey(a.ctx(), args[0]) })
+						func() (publisher.Result, error) {
+							return a.publisher().RotateChannelKeyOptions(a.ctx(), args[0], announce)
+						})
 					if err != nil {
 						return err
 					}
@@ -170,10 +173,12 @@ func (a *app) channelKeyCmd() *cobra.Command {
 				},
 			}
 			addStageFlags(c)
+			c.Flags().BoolVar(&announce, "announce-next-key", false, "pre-announce the next channel key")
 			return c
 		}(),
 		func() *cobra.Command {
 			var keyid string
+			var reissue bool
 			c := &cobra.Command{
 				Use:   "revoke <channel>",
 				Short: "Drop a channel keyid",
@@ -183,7 +188,12 @@ func (a *app) channelKeyCmd() *cobra.Command {
 						func(dir, pass string) (publisher.Result, error) {
 							return a.publisher().StageChannelKeyRevoke(a.ctx(), args[0], keyid, dir, pass)
 						},
-						func() (publisher.Result, error) { return a.publisher().RevokeChannelKey(a.ctx(), args[0], keyid) })
+						func() (publisher.Result, error) {
+							if reissue {
+								return a.publisher().RevokeChannelKeyReissue(a.ctx(), args[0], keyid)
+							}
+							return a.publisher().RevokeChannelKey(a.ctx(), args[0], keyid)
+						})
 					if err != nil {
 						return err
 					}
@@ -193,6 +203,7 @@ func (a *app) channelKeyCmd() *cobra.Command {
 			}
 			addStageFlags(c)
 			c.Flags().StringVar(&keyid, "keyid", "", "keyid to revoke")
+			c.Flags().BoolVar(&reissue, "reissue", false, "revoke and reissue in one update")
 			_ = c.MarkFlagRequired("keyid")
 			return c
 		}(),

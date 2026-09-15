@@ -78,6 +78,7 @@ func (a *app) keysExportCmd() *cobra.Command {
 	var out string
 	var public bool
 	var keyids []string
+	var role, name string
 	cmd := &cobra.Command{
 		Use:   "export",
 		Short: "Export role-tagged keys as a bundle",
@@ -86,6 +87,21 @@ func (a *app) keysExportCmd() *cobra.Command {
 				return fmt.Errorf("--out is required")
 			}
 			store := keys.NewDirStore(a.keysPath(), a.passphrase)
+			if role != "" || name != "" {
+				infos, err := store.List(a.ctx())
+				if err != nil {
+					return err
+				}
+				for _, info := range infos {
+					if role != "" && string(info.Role) != role {
+						continue
+					}
+					if name != "" && info.Name != name {
+						continue
+					}
+					keyids = append(keyids, info.KeyID)
+				}
+			}
 			var data []byte
 			var err error
 			if public {
@@ -124,6 +140,8 @@ func (a *app) keysExportCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&out, "out", "", "output bundle path")
 	cmd.Flags().StringSliceVar(&keyids, "keyid", nil, "limit to these keyids/names")
+	cmd.Flags().StringVar(&role, "role", "", "limit to this role")
+	cmd.Flags().StringVar(&name, "name", "", "limit to this key name")
 	cmd.Flags().BoolVar(&public, "public", false, "export public keys only")
 	return cmd
 }
@@ -142,7 +160,7 @@ func (a *app) keysImportCmd() *cobra.Command {
 				return err
 			}
 			store := keys.NewDirStore(a.keysPath(), a.passphrase)
-			infos, err := keys.Import(a.ctx(), store, data)
+			infos, err := keys.Import(a.ctx(), store, data, a.passphrase)
 			if err != nil {
 				return err
 			}

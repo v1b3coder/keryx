@@ -1145,7 +1145,13 @@ func (p *Publisher) companySetMutation(_ context.Context, name, logo, logoSHA256
 // overlap), re-signs the channel role metadata with old+new and, in simple
 // mode, re-signs the channel's items with the new key (spec/repository.md §5).
 func (p *Publisher) RotateChannelKey(ctx context.Context, channel string) (Result, error) {
-	m, err := p.rotateChannelKeyMutation(ctx, channel)
+	return p.RotateChannelKeyOptions(ctx, channel, false)
+}
+
+// RotateChannelKeyOptions also pre-announces the next key when announceNext is
+// set (spec/repository.md §5, RECOMMENDED).
+func (p *Publisher) RotateChannelKeyOptions(ctx context.Context, channel string, announceNext bool) (Result, error) {
+	m, err := p.rotateChannelKeyMutation(ctx, channel, announceNext)
 	if err != nil {
 		return Result{}, err
 	}
@@ -1153,15 +1159,64 @@ func (p *Publisher) RotateChannelKey(ctx context.Context, channel string) (Resul
 }
 
 // StageChannelKeyRotate stages the master-signed overlap rotation.
-func (p *Publisher) StageChannelKeyRotate(ctx context.Context, channel, out, passphrase string) (Result, error) {
-	m, err := p.rotateChannelKeyMutation(ctx, channel)
+func (p *Publisher) StageChannelKeyRotate(ctx context.Context, channel, out, passphrase string, announceNext bool) (Result, error) {
+	m, err := p.rotateChannelKeyMutation(ctx, channel, announceNext)
 	if err != nil {
 		return Result{}, err
 	}
 	return p.stageMutation(ctx, m, out, passphrase)
 }
 
-func (p *Publisher) rotateChannelKeyMutation(ctx context.Context, channel string) (mutation, error) {
+// RevokeChannelKeyReissue revokes a channel key and reissues in the same
+// update (spec/repository.md §5 compromise response): the new key replaces the
+// old one and the channel role metadata is re-signed with it.
+func (p *Publisher) RevokeChannelKeyReissue(ctx context.Context, channel, keyid string) (Result, error) {
+	m, err := p.reissueChannelKeyMutation(ctx, channel, keyid)
+	if err != nil {
+		return Result{}, err
+	}
+	return p.runMutation(ctx, m)
+}
+
+func (p *Publisher) reissueChannelKeyMutation(ctx context.Context, channel, keyid string) (mutation, error) {
+	st, err := p.loadVerified(ctx)
+	if err != nil {
+		return mutation{}, err
+	}
+	role := st.Delegation("channels." + channel)
+	if role == nil {
+		return mutation{}, fmt.Errorf("unknown channel %q", channel)
+	}
+	if !contains(role.KeyIDs, keyid) {
+		return mutation{}, fmt.Errorf("key %s is not on channel %q", keyid, channel)
+	}
+	newKey, err := p.ensureKey(ctx, keys.RoleChannel, channel+"-"+shortID(p.now()))
+	if err != nil {
+		return mutation{}, err
+	}
+	remaining := append(removeString(role.KeyIDs, keyid), newKey.KeyID())
+	return mutation{
+		apply: func(st *tufrepo.State) error {
+			role := st.Delegation("channels." + channel)
+			ids := removeString(role.KeyIDs, keyid)
+			if !contains(ids, newKey.KeyID()) {
+				ids = append(ids, newKey.KeyID())
+			}
+			role.KeyIDs = ids
+			delete(st.Targets.Signed.Delegations.Keys, keyid)
+			st.Targets.Signed.Delegations.Keys[newKey.KeyID()] = newKey.TUF()
+			return nil
+		},
+		steps: []ceremony.Step{{
+			Kind: "channel-keys", Channel: channel, KeyIDs: remaining, Resign: !st.HasAuthors(channel),
+		}},
+		keys:  []*keys.Key{newKey},
+		msg:   "channel key revoked and reissued",
+		chans: []string{channel},
+	}, nil
+}
+
+func (p *Publisher) rotateChannelKeyMutation(ctx context.Context, channel string, announceNext bool) (mutation, error) {
 	st, err := p.loadVerified(ctx)
 	if err != nil {
 		return mutation{}, err
@@ -1181,8 +1236,19 @@ func (p *Publisher) rotateChannelKeyMutation(ctx context.Context, channel string
 	return mutation{
 		apply: func(st *tufrepo.State) error {
 			role := st.Delegation("channels." + channel)
-			role.KeyIDs = append(role.KeyIDs, newKey.KeyID())
+			if !contains(role.KeyIDs, newKey.KeyID()) {
+				role.KeyIDs = append(role.KeyIDs, newKey.KeyID())
+			}
 			st.Targets.Signed.Delegations.Keys[newKey.KeyID()] = newKey.TUF()
+			if announceNext {
+				// pre-announced rotation: a signed next_key record ahead
+				// of time (spec/repository.md §5)
+				chMeta := st.Channels[channel]
+				if chMeta.Signed.UnrecognizedFields == nil {
+					chMeta.Signed.UnrecognizedFields = map[string]any{}
+				}
+				chMeta.Signed.UnrecognizedFields["next_key"] = map[string]any{"keyid": newKey.KeyID()}
+			}
 			return nil
 		},
 		steps: []ceremony.Step{{

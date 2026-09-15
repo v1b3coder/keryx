@@ -300,6 +300,9 @@ func (s *DirStore) loadFile(path string) (*Key, error) {
 	}
 	var seed []byte
 	if kf.KDF == "" {
+		if s.Passphrase != "" {
+			return nil, fmt.Errorf("%s: key %q is stored unencrypted; refusing to read it with a passphrase", path, kf.Name)
+		}
 		seed, err = hex.DecodeString(kf.SeedHex)
 		if err != nil {
 			return nil, fmt.Errorf("%s: seed: %w", path, err)
@@ -343,8 +346,12 @@ func (s *DirStore) loadFile(path string) (*Key, error) {
 // ExportBundle is a role-tagged, optionally encrypted set of keys
 // (spec/clients.md §2 handoff artifacts).
 type ExportBundle struct {
-	Version int       `json:"version"`
-	Keys    []KeyFile `json:"keys"`
+	Version    int       `json:"version"`
+	Keys       []KeyFile `json:"keys,omitempty"`
+	Enc        bool      `json:"enc,omitempty"`
+	Salt       string    `json:"salt,omitempty"`
+	Nonce      string    `json:"nonce,omitempty"`
+	Ciphertext string    `json:"ciphertext,omitempty"`
 }
 
 // KeyFile is the exported form of one key.
@@ -379,18 +386,31 @@ func Export(_ context.Context, store Store, keyids []string, passphrase string) 
 			KeyID:   k.id,
 		})
 	}
+	if passphrase != "" {
+		if err := bundle.encrypt(passphrase); err != nil {
+			return nil, err
+		}
+	}
 	return json.MarshalIndent(bundle, "", "  ")
 }
 
-// Import adds every key in a bundle to store. Encrypted bundles are not
-// supported here yet (they are decrypted by the caller's tooling).
-func Import(_ context.Context, store Store, data []byte) ([]Info, error) {
+// Import adds every key in a bundle to store, decrypting it with passphrase
+// when the bundle is encrypted (scrypt + AES-256-GCM).
+func Import(_ context.Context, store Store, data []byte, passphrase ...string) ([]Info, error) {
 	var bundle ExportBundle
 	if err := json.Unmarshal(data, &bundle); err != nil {
 		return nil, err
 	}
 	if bundle.Version != 1 {
 		return nil, fmt.Errorf("key bundle: unknown version %d", bundle.Version)
+	}
+	if bundle.Enc {
+		if len(passphrase) == 0 || passphrase[0] == "" {
+			return nil, fmt.Errorf("key bundle is encrypted; a passphrase is required")
+		}
+		if err := bundle.decrypt(passphrase[0]); err != nil {
+			return nil, err
+		}
 	}
 	var out []Info
 	for _, kf := range bundle.Keys {
@@ -414,6 +434,74 @@ func Import(_ context.Context, store Store, data []byte) ([]Info, error) {
 		out = append(out, Info{Name: k.Name, Role: k.Role, KeyID: k.id})
 	}
 	return out, nil
+}
+
+// encrypt encrypts the bundle's seeds with a passphrase (scrypt + AES-256-GCM).
+func (b *ExportBundle) encrypt(passphrase string) error {
+	raw, err := json.Marshal(b.Keys)
+	if err != nil {
+		return err
+	}
+	salt := make([]byte, 16)
+	nonce := make([]byte, 12)
+	if _, err := rand.Read(salt); err != nil {
+		return err
+	}
+	if _, err := rand.Read(nonce); err != nil {
+		return err
+	}
+	dk, err := scrypt.Key([]byte(passphrase), salt, 1<<15, 8, 1, 32)
+	if err != nil {
+		return err
+	}
+	block, err := aes.NewCipher(dk)
+	if err != nil {
+		return err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return err
+	}
+	ct := gcm.Seal(nil, nonce, raw, nil)
+	b.Enc = true
+	b.Salt = hex.EncodeToString(salt)
+	b.Nonce = hex.EncodeToString(nonce)
+	b.Ciphertext = hex.EncodeToString(ct)
+	b.Keys = nil
+	return nil
+}
+
+// decrypt restores the bundle's seeds from their encrypted form.
+func (b *ExportBundle) decrypt(passphrase string) error {
+	salt, err := hex.DecodeString(b.Salt)
+	if err != nil {
+		return err
+	}
+	nonce, err := hex.DecodeString(b.Nonce)
+	if err != nil {
+		return err
+	}
+	ct, err := hex.DecodeString(b.Ciphertext)
+	if err != nil {
+		return err
+	}
+	dk, err := scrypt.Key([]byte(passphrase), salt, 1<<15, 8, 1, 32)
+	if err != nil {
+		return err
+	}
+	block, err := aes.NewCipher(dk)
+	if err != nil {
+		return err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return err
+	}
+	raw, err := gcm.Open(nil, nonce, ct, nil)
+	if err != nil {
+		return fmt.Errorf("key bundle: wrong passphrase")
+	}
+	return json.Unmarshal(raw, &b.Keys)
 }
 
 // KeyID computes the TUF-standard keyid of a public key object.
