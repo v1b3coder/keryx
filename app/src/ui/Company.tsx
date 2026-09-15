@@ -460,6 +460,17 @@ function SettingsSheet({
           {company.prefs.loadRemoteMedia ? 'Load images from the web' : 'Images off (privacy)'}
         </button>
 
+        <div className="t-small" style={{ fontWeight: 600, margin: '16px 0 4px' }}>
+          Notifications
+        </div>
+        <button
+          className={`chip ${company.relay ? 'chip-accent' : ''}`}
+          disabled={!!company.relay}
+          onClick={() => void actions.enableNotifications(company.origin)}
+        >
+          {company.relay ? 'Wake-ups enabled' : 'Enable wake-up notifications'}
+        </button>
+
         <hr className="divider" style={{ margin: '20px 0' }} />
         <button
           className="btn btn-danger"

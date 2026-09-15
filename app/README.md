@@ -57,7 +57,7 @@ worker come from vite-plugin-pwa
 | Script | Purpose |
 |---|---|
 | `npm run dev` | Vite dev server (HMR) |
-| `npm run test` | Vitest protocol tests against the real `../demo` artifacts |
+| `npm run test` | Vitest protocol + relay tests against the real `../demo` artifacts |
 | `npm run build` | Production build + PWA service worker (`dist/`) |
 | `npm run icons` | Regenerate PWA icons (`public/icons/`) |
 | `npm run cap:sync` | Build + sync web assets into `android/` and `ios/` |
@@ -156,8 +156,20 @@ worker come from vite-plugin-pwa
   read when they scroll into view.
 - **Offline-first** — IndexedDB cache of pinned metadata + verified items +
   media bytes; sync on open + manual refresh.
+- **Wake-ups (relay/SPECIFICATION.md §4.2)** — the app derives the same topic
+  as the relay (`keryx/relay/v1|` + OLPC `{company_id, scope_id, h}`), registers
+  the installation's WebPush subscription with the relay (§5.3) and keeps the
+  followed-topic set in step; the custom service worker receives the decrypted §4
+  envelope, parses it strictly, verifies the Ed25519 threshold against the
+  topic's exact scope from the company's verified targets, persists the accepted
+  `seq` (replay), allows at most one metadata refresh per company per
+  persisted cooldown, reconciles content and shows a locally authored generic
+  notice — never unverified content. Configure `VITE_RELAY_URL` and
+  `VITE_VAPID_PUBLIC` at build time to enable it; without them the app runs
+  exactly as before (polling is the backstop).
 
-**Out of scope** (per spec Phase 1/2): push wake-ups (FCM/UnifiedPush — WIP; relay shape per [relay spec](../relay/SPECIFICATION.md)),
+**Out of scope** (per spec Phase 1/2): FCM/native wake-ups (the relay's topic
+leg is implemented; the native shell does not yet embed a UnifiedPush connector),
 lite mode (spec/clients.md §3), backup/restore export/import (Phase 2).
 
 ## Architecture
@@ -187,6 +199,13 @@ src/state.tsx       app state + sync orchestration
 src/ui/             screens: AddCompany (input → confirm → consent), Contacts,
                     Company (full-article feed + settings sheet), SanitizedHtml
 src/lib/protocol.test.ts  tests against the real ../demo artifacts
+src/lib/relay.ts       relay protocol: topic/scope derivation, wake-up parse +
+                       Ed25519 threshold verification, registration client
+src/lib/relay-sw.ts    service-worker wake-up handling: replay, recovery
+                       cooldown, content reconciliation, topic bindings
+src/lib/relay.test.ts  topic derivation + the relay-emitted wake-up fixture
+src/lib/relay-sw.test.ts  handlePush against fake-indexeddb
+src/sw.ts              custom service worker (workbox precache + push)
 ```
 
 ## Protocol tests

@@ -59,6 +59,8 @@ export interface CompanyRecord {
   /** transient sync problems (feed fetch failures etc.) — shown to the user, never suspension */
   lastSyncErrors?: string[];
   prefs: { languages: string[]; tags: string[]; loadRemoteMedia: boolean };
+  /** relay wake-up registration + derived-topic bindings (relay/SPECIFICATION.md §5.3) */
+  relay?: import('./relay').RelayRegistration;
 }
 
 export interface StoredItem {
@@ -95,7 +97,7 @@ export const defaultPrefs = (): Prefs => ({
 });
 
 const DB_NAME = 'keryx';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 let dbPromise: Promise<IDBPDatabase> | null = null;
 
@@ -107,7 +109,7 @@ export function openAppDb(): Promise<IDBPDatabase> {
         // client, or pre-rewrite shapes) are incompatible — drop and rebuild
         // rather than attempt an unreliable migration.
         if (oldVersion > 0) {
-          for (const name of ['contacts', 'items', 'media', 'companies']) {
+          for (const name of ['contacts', 'items', 'media', 'companies', 'relay']) {
             if (db.objectStoreNames.contains(name)) db.deleteObjectStore(name);
           }
         }
@@ -116,6 +118,9 @@ export function openAppDb(): Promise<IDBPDatabase> {
         items.createIndex('by-origin', 'origin');
         const media = db.createObjectStore('media', { keyPath: 'url' });
         media.createIndex('by-origin', 'origin');
+        // relay wake-up state: per-topic replay high-water marks and the
+        // per-company recovery cooldown (relay/SPECIFICATION.md §4.2)
+        db.createObjectStore('relay', { keyPath: 'key' });
       },
     });
   }
@@ -240,6 +245,53 @@ export async function deleteMediaFor(origin: string): Promise<void> {
 }
 
 // --- prefs (per company, stored on the company record) ---
+
+// --- relay wake-up state (relay/SPECIFICATION.md §4.2) -----------------------
+
+interface RelayStateRecord {
+  key: string;
+  seq?: number;
+  at?: number;
+}
+
+/** The last accepted `seq` for a topic (zero when never accepted). */
+export async function relaySeq(origin: string, topic: string): Promise<number> {
+  const db = await openAppDb();
+  const rec = (await db.get('relay', `seq\u0000${origin}\u0000${topic}`)) as RelayStateRecord | undefined;
+  return rec?.seq ?? 0;
+}
+
+/** Persist the last accepted `seq` for a topic (verified wake-ups only). */
+export async function setRelaySeq(origin: string, topic: string, seq: number): Promise<void> {
+  const db = await openAppDb();
+  await db.put('relay', { key: `seq\u0000${origin}\u0000${topic}`, seq });
+}
+
+/** The recovery-cooldown expiry for a company (0 when never attempted). */
+export async function relayRecoveryAt(origin: string): Promise<number> {
+  const db = await openAppDb();
+  const rec = (await db.get('relay', `recovery\u0000${origin}`)) as RelayStateRecord | undefined;
+  return rec?.at ?? 0;
+}
+
+/**
+ * Atomically reserve the one recovery allowance per company per cooldown
+ * (relay/SPECIFICATION.md §4.2): persist `next_recovery_at` BEFORE
+ * networking. Returns false when the allowance is still in force.
+ */
+export async function reserveRecovery(origin: string, now: number, cooldownMs: number): Promise<boolean> {
+  const db = await openAppDb();
+  const tx = db.transaction('relay', 'readwrite');
+  const key = `recovery\u0000${origin}`;
+  const rec = (await tx.store.get(key)) as RelayStateRecord | undefined;
+  if (rec?.at && now < rec.at) {
+    await tx.done;
+    return false;
+  }
+  await tx.store.put({ key, at: now + cooldownMs });
+  await tx.done;
+  return true;
+}
 
 export function makeCompany(
   origin: string,

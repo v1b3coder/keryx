@@ -17,6 +17,8 @@ import {
   type StoredItem,
 } from './lib/store';
 import { syncCompany, applyOutcomeItems } from './lib/sync';
+import { ensureRelayRegistration, heartbeatRelay } from './lib/relay-sw';
+import { deleteRegistration, relayBaseUrl } from './lib/relay';
 import { initDebugBuild } from './lib/build';
 import { safeFetch } from './lib/urlpolicy';
 
@@ -34,6 +36,8 @@ export interface AppActions {
   saveCompany: (company: CompanyRecord, items?: StoredItem[]) => Promise<void>;
   /** re-pair after a company_name change: update the identity snapshot and clear the warning */
   rePairCompany: (origin: string, company: CompanyRecord, newItems?: StoredItem[]) => Promise<void>;
+  /** ask for notification permission and register the installation with the relay */
+  enableNotifications: (origin: string) => Promise<boolean>;
 }
 
 interface AppContextValue {
@@ -84,6 +88,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             await putCompany(outcome.company);
             if (outcome.toPut.length > 0) await putItems(outcome.toPut);
             if (outcome.toDelete.length > 0) await deleteItems(outcome.toDelete);
+            void heartbeatRelay(outcome.company);
           }
           const list = await getAllCompanies();
           setCompanies(list);
@@ -104,6 +109,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           await putCompany(outcome.company);
           if (outcome.toPut.length > 0) await putItems(outcome.toPut);
           if (outcome.toDelete.length > 0) await deleteItems(outcome.toDelete);
+          void heartbeatRelay(outcome.company);
           const list = await getAllCompanies();
           setCompanies(list);
         } finally {
@@ -116,8 +122,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const channels = company.channels.map((c) =>
           c.name === channel ? { ...c, followed, isNew: false } : c,
         );
-        await putCompany({ ...company, channels });
+        // keep the relay registration's followed-topic set in step (§5.3)
+        const updated = await ensureRelayRegistration({ ...company, channels });
+        await putCompany(updated);
         setCompanies(await getAllCompanies());
+      },
+      async enableNotifications(origin) {
+        if (typeof Notification === 'undefined') return false;
+        if ((await Notification.requestPermission()) !== 'granted') return false;
+        const company = await getCompany(origin);
+        if (!company) return false;
+        const updated = await ensureRelayRegistration(company);
+        if (!updated.relay) return false;
+        await putCompany(updated);
+        setCompanies(await getAllCompanies());
+        return true;
       },
       async setPrefs(origin, prefs) {
         const company = await getCompany(origin);
@@ -144,6 +163,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setCompanies(await getAllCompanies());
       },
       async removeCompany(origin) {
+        const company = await getCompany(origin);
+        if (company?.relay && relayBaseUrl() === company.relay.baseUrl) {
+          void deleteRegistration(company.relay.baseUrl, company.relay.id, company.relay.managementToken);
+        }
         await deleteCompany(origin);
         itemsRef.current = itemsRef.current.filter((i) => i.origin !== origin);
         setCompanies(await getAllCompanies());

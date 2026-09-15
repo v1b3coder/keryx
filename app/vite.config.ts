@@ -14,6 +14,14 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      // Custom service worker (src/sw.ts): workbox precache plus the relay
+      // wake-up push handler (relay/SPECIFICATION.md §4.2).
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
+      injectManifest: {
+        globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
+      },
       manifest: {
         name: 'Keryx',
         short_name: 'Keryx',
@@ -34,11 +42,6 @@ export default defineConfig({
             purpose: 'maskable',
           },
         ],
-      },
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
-        navigateFallback: 'index.html',
-        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
     }),
   ],
