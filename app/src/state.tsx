@@ -16,7 +16,7 @@ import {
   type CompanyRecord,
   type StoredItem,
 } from './lib/store';
-import { syncCompany } from './lib/sync';
+import { syncCompany, applyOutcomeItems } from './lib/sync';
 import { initDebugBuild } from './lib/build';
 
 export interface AppActions {
@@ -65,10 +65,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   /** Replace the in-memory items of one origin with the post-sync state. */
   const applyOutcome = (origin: string, existing: Map<string, StoredItem>) => {
-    itemsRef.current = [
-      ...itemsRef.current.filter((i) => i.origin !== origin),
-      ...existing.values(),
-    ];
+    itemsRef.current = applyOutcomeItems(itemsRef.current, origin, existing);
   };
 
   const actions = useMemo<AppActions>(

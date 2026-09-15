@@ -195,6 +195,19 @@ export function mergeSourceItems(
   return { newItems, rejected, toPut, toDelete, seen };
 }
 
+/**
+ * Replace one origin's items with its post-sync state (spec/feeds.md §1.3):
+ * `existing` already has added/updated items and removed absent ones, so this
+ * preserves read state and drops unpublished items across a refresh.
+ */
+export function applyOutcomeItems(
+  all: StoredItem[],
+  origin: string,
+  existing: Map<string, StoredItem>,
+): StoredItem[] {
+  return [...all.filter((i) => i.origin !== origin), ...existing.values()];
+}
+
 export async function syncCompany(
   company: CompanyRecord,
   fetchFn: typeof fetch = fetch,

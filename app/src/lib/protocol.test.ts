@@ -45,7 +45,7 @@ import { logoDisplayable, readLimitedBody } from './media';
 import { PUBLIC_ITEM_MAX_BYTES } from './item';
 import { parseJoinUrl, rootAnchorUrl, joinUrlFromDeepLink } from './payload';
 import { buildPairingOffer, createCompanyFromOffer } from './pair';
-import { syncCompany } from './sync';
+import { syncCompany, applyOutcomeItems } from './sync';
 import { setDebugBuild } from './build';
 import { patternMatches, pathPatternMatches } from './pattern';
 import { olpcCanonical } from './olpc';
@@ -612,6 +612,31 @@ describe('unpublish semantics (spec/feeds.md §1.3)', () => {
     );
     expect(rejected).toBe(1);
     expect(toDelete).toContain(key);
+  });
+});
+
+describe('refresh item state (spec/feeds.md §1.3)', () => {
+  it('applying a sync outcome drops absent items and keeps read state', () => {
+    const origin = 'https://company.example';
+    const key = (id: string) => `${origin}\u0000public:news\u0000${id}`;
+    const read: StoredItem = {
+      id: key('a'), origin, channel: 'news', feedUrl: '', isPrivate: false,
+      item: { id: 'a', title: 'A' }, published: '', receivedAt: 1, read: true,
+    };
+    const unread: StoredItem = {
+      id: key('b'), origin, channel: 'news', feedUrl: '', isPrivate: false,
+      item: { id: 'b', title: 'B' }, published: '', receivedAt: 2, read: false,
+    };
+    const other: StoredItem = {
+      id: `${origin}\u0000public:other\u0000x`, origin, channel: 'other', feedUrl: '', isPrivate: false,
+      item: { id: 'x' }, published: '', receivedAt: 3, read: false,
+    };
+    // b was unpublished: the post-sync map for the origin no longer has it,
+    // while a (read) and the other channel's item remain published
+    const existing = new Map<string, StoredItem>([[read.id, read], [other.id, other]]);
+    const next = applyOutcomeItems([read, unread, other], origin, existing);
+    expect(next.map((i) => i.id).sort()).toEqual([other.id, read.id].sort());
+    expect(next.find((i) => i.id === read.id)?.read).toBe(true);
   });
 });
 
