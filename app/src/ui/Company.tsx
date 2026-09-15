@@ -15,7 +15,7 @@ import { loadImage } from '../lib/media';
 import { CompanyLogo } from './CompanyLogo';
 import { SanitizedHtml, LinkConfirm } from './SanitizedHtml';
 import { useApp } from '../state';
-import { sha256Hex } from '../lib/bytes';
+import { attachmentSha, bytesMatchSha } from '../lib/item';
 import type { FeedItem } from '../lib/item';
 
 async function openExternal(url: string) {
@@ -33,12 +33,12 @@ async function openExternal(url: string) {
  * ordinary web links, mutable by design.
  */
 async function openAttachment(url: string, item: FeedItem) {
-  const att = item.attachments?.find((a) => a.url === url);
-  if (att?.sha256) {
+  const sha = attachmentSha(item, url);
+  if (sha) {
     let ok = false;
     try {
       const res = await fetch(url);
-      if (res.ok) ok = sha256Hex(new Uint8Array(await res.arrayBuffer())) === att.sha256.toLowerCase();
+      if (res.ok) ok = bytesMatchSha(new Uint8Array(await res.arrayBuffer()), sha);
     } catch {
       ok = false;
     }
@@ -447,6 +447,18 @@ function SettingsSheet({
             ))}
           </div>
         )}
+
+        <div className="t-small" style={{ fontWeight: 600, margin: '16px 0 4px' }}>
+          Remote media
+        </div>
+        <button
+          className={`chip ${company.prefs.loadRemoteMedia ? 'chip-accent' : ''}`}
+          onClick={() =>
+            void actions.setPrefs(company.origin, { loadRemoteMedia: !company.prefs.loadRemoteMedia })
+          }
+        >
+          {company.prefs.loadRemoteMedia ? 'Load images from the web' : 'Images off (privacy)'}
+        </button>
 
         <hr className="divider" style={{ margin: '20px 0' }} />
         <button

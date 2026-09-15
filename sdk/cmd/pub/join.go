@@ -17,6 +17,12 @@ func (a *app) joinCmd() *cobra.Command {
 		Short: "Build the join URL (no QR)",
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if origin == "" {
+				origin = a.cfg().Origin
+			}
+			if origin == "" {
+				origin = a.cfg().Origin
+			}
+			if origin == "" {
 				o, err := a.publisher().JoinOrigin(a.ctx())
 				if err != nil {
 					return err
@@ -57,6 +63,12 @@ func (a *app) qrCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if out == "" {
 				return fmt.Errorf("--out is required")
+			}
+			if origin == "" {
+				origin = a.cfg().Origin
+			}
+			if origin == "" {
+				origin = a.cfg().Origin
 			}
 			if origin == "" {
 				o, err := a.publisher().JoinOrigin(a.ctx())

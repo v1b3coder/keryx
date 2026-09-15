@@ -127,8 +127,9 @@ worker come from vite-plugin-pwa
   (loopback exception for the local demo).
 - **Identity (spec/core.md §2)** — the app remembers the identity confirmed at
   pairing; `company_name` change → prominent rebranding warning, content
-  hidden until re-pair (rescan a fresh QR, same origin); `logo` change →
-  one-tap acknowledgement (never silent, never auto-accept); name and logo are
+  hidden until re-pair (rescan a fresh QR, same origin); `logo` or
+  `logo_sha256` change → one-tap acknowledgement (never silent, never
+  auto-accept); name and logo are
   never shown before the chain verifies and always alongside the join origin;
   the logo is either an inline data URL in the master-signed metadata
   (authenticated with it) or a linked URL pinned by the required

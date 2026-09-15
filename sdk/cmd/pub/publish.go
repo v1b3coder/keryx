@@ -43,6 +43,7 @@ func (a *app) initCmd() *cobra.Command {
 			cfg := config.Default(a.workspace)
 			cfg.Role = "operator"
 			cfg.RepoBase = base
+			cfg.Origin = "https://" + strings.TrimPrefix(strings.TrimPrefix(domain, "https://"), "http://")
 			if err := cfg.Save(); err != nil {
 				return err
 			}

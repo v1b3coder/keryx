@@ -48,7 +48,7 @@ Output is two directories (defaults under `--workspace .keryx`):
 
 | Command | Role | Notes |
 |---|---|---|
-| `init` | operator | master + ops keys, full 4-role repo, anchor + repo |
+| `init` | operator | master + ops keys, full 4-role repo, anchor + repo; remembers the join origin |
 | `keys list \| generate <name> \| export \| import` | operator | role-tagged, encrypted bundle (`--role`/`--name`/`--keyid` filters) |
 | `channel add <name>` | operator | authored by default (`--simple` opts out) |
 | `channel remove <name>` | operator | drops delegation + role metadata |
@@ -63,10 +63,10 @@ Output is two directories (defaults under `--workspace .keryx`):
 | `item sign --file draft.json --out signed.json` | author | OLPC + Ed25519, no repo |
 | `item unpublish --channel <name> --id <id>` | pipeline | absence = unpublished |
 | `publish --channel <name> --file signed.json` | pipeline | verifies the authors threshold |
-| `refresh-timestamp` | ops/cron | the one cron line |
+| `refresh-timestamp` | ops/cron | the one cron line (`--expires` overrides the TTL) |
 | `rotate-root [--announce-next-key]` | operator | anchor only |
 | `validate` | anyone | full chain check |
-| `join-url`, `qr` | operator | payload + QR (PNG) |
+| `join-url`, `qr` | operator | payload + QR (PNG); default origin is the `init --domain` join origin |
 | `pull [--base URL]` | CI/ops | fetch + verify without git |
 | `deploy local --target DIR` / `deploy s3` | deployer | thin `Deployer` interface |
 | `private-feed new\|update\|expire` | engine | capability-feed documents |

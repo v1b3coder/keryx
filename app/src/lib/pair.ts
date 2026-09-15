@@ -147,6 +147,7 @@ export function createCompanyFromOffer(offer: PairingOffer, followed: string[]):
   return makeCompany(offer.origin, offer.joinUrl, offer._meta.root, offer._meta.targets, {
     companyName: offer.companyName,
     logo: offer.logo,
+    logoSHA256: offer.logoSHA256,
   }, channels, privateFeeds);
 }
 

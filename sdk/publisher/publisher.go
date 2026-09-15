@@ -962,6 +962,35 @@ func (p *Publisher) authorChangeMutation(ctx context.Context, channel, keyid str
 	if revoke {
 		action = "revoked"
 	}
+	steps := []ceremony.Step{{
+		Kind: "authors-create", Channel: channel, KeyIDs: append([]string(nil), role.KeyIDs...),
+	}}
+	mutationKeys := []*keys.Key{key}
+	if revoke {
+		// spec/repository.md §5: items signed by the revoked author MUST be
+		// re-signed with the remaining author key(s) during the overlap,
+		// otherwise they are dropped on the next client fetch.
+		remaining := removeString(role.KeyIDs, keyid)
+		if len(remaining) < role.Threshold {
+			return mutation{}, fmt.Errorf("cannot meet the %d-of-%d authors threshold after revoking %s; add a replacement author first", role.Threshold, len(role.KeyIDs), keyid)
+		}
+		chKey, err := p.channelKey(ctx, st, channel)
+		if err != nil {
+			return mutation{}, err
+		}
+		signers := append(append([]string(nil), remaining...), chKey.KeyID())
+		steps = []ceremony.Step{
+			{Kind: "authors-create", Channel: channel, KeyIDs: remaining},
+			{Kind: "resign-items", Channel: channel, KeyIDs: signers},
+		}
+		for _, kid := range remaining {
+			k, err := p.keyByID(ctx, kid)
+			if err != nil {
+				return mutation{}, err
+			}
+			mutationKeys = append(mutationKeys, k)
+		}
+	}
 	return mutation{
 		apply: func(st *tufrepo.State) error {
 			role := st.Delegation(roleName)
@@ -973,10 +1002,8 @@ func (p *Publisher) authorChangeMutation(ctx context.Context, channel, keyid str
 			}
 			return nil
 		},
-		steps: []ceremony.Step{{
-			Kind: "authors-create", Channel: channel, KeyIDs: append([]string(nil), role.KeyIDs...),
-		}},
-		keys:  []*keys.Key{key},
+		steps: steps,
+		keys:  mutationKeys,
 		msg:   "author " + action,
 		chans: []string{channel},
 	}, nil

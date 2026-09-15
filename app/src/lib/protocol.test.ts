@@ -36,6 +36,8 @@ import {
   verifyImage,
   itemIdFromPath,
   signedContentKey,
+  attachmentSha,
+  bytesMatchSha,
   type FeedItem,
 } from './item';
 import { verifyPrivateFeedDocument, matchesPattern, PRIVATE_FEED_MAX_BYTES } from './private';
@@ -504,6 +506,21 @@ describe('media and size policy', () => {
     const ok = await readLimitedBody(new Response(new Uint8Array(500)), 1000);
     expect(ok.length).toBe(500);
   });
+
+  it('verifies an attachment hash before opening (spec/feeds.md §1.1)', () => {
+    const item = channelItems('news')[0];
+    item.attachments = [
+      { url: 'https://cdn.example.com/fw.pdf', sha256: 'a'.repeat(64) },
+      { url: 'https://cdn.example.com/faq' },
+    ];
+    expect(attachmentSha(item, 'https://cdn.example.com/fw.pdf')).toBe('a'.repeat(64));
+    expect(attachmentSha(item, 'https://cdn.example.com/faq')).toBeUndefined();
+    const bytes = new Uint8Array([1, 2, 3]);
+    // unhashed resources are mutable by design
+    expect(bytesMatchSha(bytes, undefined)).toBe(true);
+    // a mismatching hash makes the resource unavailable
+    expect(bytesMatchSha(bytes, 'a'.repeat(64))).toBe(false);
+  });
 });
 
 describe('pattern matching', () => {
@@ -653,5 +670,17 @@ describe('sync failure semantics (spec/core.md §4)', () => {
     const stale = { ...company, identity: { ...company.identity, logoSHA256: 'stale-hash' } };
     const after = await syncCompany(stale, fetchTyped, new Map());
     expect(after.company.logoChangePending).toBe(true);
+  });
+
+  it('createCompanyFromOffer records the pairing-time logo hash (no spurious change on first sync)', async () => {
+    const joinUrl = readFileSync(join(demoDir, 'join.txt'), 'utf8').trim();
+    const parsed = parseJoinUrl(joinUrl);
+    const fetchTyped = fetchLike as unknown as typeof fetch;
+    const offer = await buildPairingOffer(parsed.origin, joinUrl, parsed.payload, fetchTyped);
+    offer.logo = 'https://cdn.example.com/logo.png';
+    offer.logoSHA256 = 'abc123';
+    const company = createCompanyFromOffer(offer, []);
+    expect(company.identity.logo).toBe('https://cdn.example.com/logo.png');
+    expect(company.identity.logoSHA256).toBe('abc123');
   });
 });

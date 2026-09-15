@@ -131,6 +131,17 @@ export function verifyItemSignatures(
   }
 }
 
+/** The pinned hash of an attachment URL, when present (spec/feeds.md §1.1). */
+export function attachmentSha(item: FeedItem, url: string): string | undefined {
+  return item.attachments?.find((a) => a.url === url)?.sha256?.toLowerCase();
+}
+
+/** True when bytes satisfy a pinned sha256 (absent hash = unhashed, mutable by design). */
+export function bytesMatchSha(bytes: Uint8Array, sha?: string): boolean {
+  if (!sha) return true;
+  return sha256Hex(bytes) === sha.toLowerCase();
+}
+
 /** The id is the TUF target path segment (spec/feeds.md §1.1). */
 export function itemIdFromPath(path: string): string {
   const base = path.split('/').pop() ?? '';

@@ -36,5 +36,5 @@
   refresh-timestamp → rotate-root → validate → deploy local → pull).
 - Two-step ceremony exercised (`--stage` then `ceremony apply`).
 - `cd app && npx tsc --noEmit && npm run build` → ok
-- `cd app && npm test` → 49/49 against the SDK-built `demo/` artifact
-- `KERYX_DEMO_DIR=<sdk artifact> npm test` → 49/49
+- `cd app && npm test` → 51/51 against the SDK-built `demo/` artifact
+- `KERYX_DEMO_DIR=<sdk artifact> npm test` → 51/51

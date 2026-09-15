@@ -15,6 +15,10 @@ type Config struct {
 	Workspace string `json:"workspace"`
 	Role      string `json:"role"` // operator | ci | author
 	RepoBase  string `json:"repo_base,omitempty"`
+	// Origin is the join origin (the company's own HTTPS origin whose
+	// /.well-known/keryx/root.json anchors the protocol). It is not part of
+	// the signed metadata, so it is persisted here.
+	Origin string `json:"origin,omitempty"`
 }
 
 // Default returns the default config for a workspace directory.

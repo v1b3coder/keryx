@@ -496,3 +496,53 @@ func TestCompanySetLogoRules(t *testing.T) {
 		t.Fatalf("validate after inline logo: %v", err)
 	}
 }
+
+func TestAuthorRevokeResignsItems(t *testing.T) {
+	e := newEnv(t)
+	ctx := e.ctx()
+	alice, err := keys.Generate(keys.RoleAuthor, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := keys.Generate(keys.RoleAuthor, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []*keys.Key{alice, bob} {
+		if err := e.ks.Add(ctx, k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := e.pub.ChannelAdd(ctx, publisher.ChannelSpec{
+		Name: "security", Threshold: 1, Authors: []string{alice.KeyID(), bob.KeyID()},
+	}); err != nil {
+		t.Fatalf("channel add: %v", err)
+	}
+	item := draft("hello")
+	if err := feed.SignItem(item, alice); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pub.Publish(ctx, publisher.PublishParams{Channel: "security", Item: item}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	// revoking the author whose key signed the item must re-sign it with the
+	// remaining author, otherwise it would be dropped on the next client fetch
+	if _, err := e.pub.AuthorRevoke(ctx, "security", alice.KeyID()); err != nil {
+		t.Fatalf("author revoke: %v", err)
+	}
+	if _, err := e.pub.Validate(ctx); err != nil {
+		t.Fatalf("validate after revoke: %v", err)
+	}
+	// the item still verifies against the remaining author
+	data, err := e.pub.Base.(*repo.DirRepo).Read(ctx, "channels/security/hello.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj, err := feed.Decode(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := feed.VerifyItem(obj, map[string]ed25519.PublicKey{bob.KeyID(): bob.Public()}, 1, nil, 0); err != nil {
+		t.Fatalf("item does not verify under the remaining author: %v", err)
+	}
+}
