@@ -128,6 +128,22 @@ describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
     expect(now).toBeLessThan(now + RECOVERY_COOLDOWN_MS);
   });
 
+  it('heartbeats the relay on wake-up receipt (§5.3)', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', (url: string) => {
+      calls.push(String(url));
+      return Promise.resolve(new Response(null, { status: 204 }));
+    });
+    const origin = 'heartbeat-' + Math.random();
+    const c = company(origin, fixture.topic);
+    c.relay = { baseUrl: 'https://relay.example', id: 'reg-hb', managementToken: 'tok-hb', topics: { [fixture.topic]: { channel: 'security', scopeId: fixture.scopeId } } };
+    await putCompany(c);
+    const outcome = await handlePush(JSON.stringify(fixture.wakeup));
+    expect(outcome.accepted).toBe(true);
+    await new Promise((r) => setTimeout(r, 0)); // let the best-effort heartbeat run
+    expect(calls.some((u) => u.includes('/v1/registrations/reg-hb/heartbeat'))).toBe(true);
+  });
+
   it('ignores a topic that is not currently followed', async () => {
     const origin = 'unfollowed-' + Math.random();
     const c = company(origin, fixture.topic);

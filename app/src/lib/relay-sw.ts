@@ -148,6 +148,10 @@ export async function handlePush(data: string | ArrayBuffer | Uint8Array): Promi
   if (wakeup.seq <= last) return { accepted: false }; // replay
   await setRelaySeq(company.origin, wakeup.t, wakeup.seq);
 
+  // The service worker acks receipt so the relay's registry TTL sweep keeps
+  // the installation alive (§5.3); best-effort, never blocks the notification.
+  void heartbeatRelay(company);
+
   if (!recovered) await sync(company);
 
   const name = company.targets.signed.custom?.company_name ?? company.origin;
