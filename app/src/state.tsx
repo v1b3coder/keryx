@@ -18,6 +18,7 @@ import {
 } from './lib/store';
 import { syncCompany, applyOutcomeItems } from './lib/sync';
 import { initDebugBuild } from './lib/build';
+import { safeFetch } from './lib/urlpolicy';
 
 export interface AppActions {
   refreshAll: () => Promise<void>;
@@ -43,6 +44,9 @@ interface AppContextValue {
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
+
+/** App-wide fetch: cross-origin redirects are blocked (spec/core.md §1.2). */
+const netFetch = safeFetch();
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [companies, setCompanies] = useState<CompanyRecord[]>([]);
@@ -75,7 +79,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         try {
           for (const company of companies) {
             const existing = new Map(itemsRef.current.filter((i) => i.origin === company.origin).map((i) => [i.id, i]));
-            const outcome = await syncCompany(company, fetch, existing);
+            const outcome = await syncCompany(company, netFetch, existing);
             applyOutcome(company.origin, existing);
             await putCompany(outcome.company);
             if (outcome.toPut.length > 0) await putItems(outcome.toPut);
@@ -95,7 +99,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const existing = new Map(
             itemsRef.current.filter((i) => i.origin === origin).map((i) => [i.id, i]),
           );
-          const outcome = await syncCompany(company, fetch, existing);
+          const outcome = await syncCompany(company, netFetch, existing);
           applyOutcome(origin, existing);
           await putCompany(outcome.company);
           if (outcome.toPut.length > 0) await putItems(outcome.toPut);

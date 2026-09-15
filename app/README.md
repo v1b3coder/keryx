@@ -80,7 +80,9 @@ worker come from vite-plugin-pwa
   verification (keyid = SHA-256 of the canonical key object), and anti-rollback
   via client-side version memory. `consistent_snapshot: true` repos are
   handled (versioned/hash-prefixed fetch with plain-path fallback). Repo base
-  comes from the master-signed `custom.repo_base`. Expired-but-verified
+  comes from the master-signed `custom.repo_base`; cross-origin redirects are
+  blocked (at most one canonical http→https / www↔apex hop, spec/core.md §1.2).
+  Expired-but-verified
   metadata → cached content kept, retry (expiry ≠ suspension).
   > The spec names `tuf-js` as the standard client; it is Node-only and
   > cannot run in this browser app, so the standard TUF 1.0 client workflow

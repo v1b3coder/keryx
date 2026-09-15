@@ -42,6 +42,7 @@ import {
 } from './item';
 import { verifyPrivateFeedDocument, matchesPattern, PRIVATE_FEED_MAX_BYTES } from './private';
 import { logoDisplayable, readLimitedBody } from './media';
+import { redirectAllowed, safeFetch } from './urlpolicy';
 import { PUBLIC_ITEM_MAX_BYTES } from './item';
 import { parseJoinUrl, rootAnchorUrl, joinUrlFromDeepLink } from './payload';
 import { buildPairingOffer, createCompanyFromOffer } from './pair';
@@ -486,6 +487,33 @@ describe('sync engine end to end', () => {
     for (const stored of synced.toPut) {
       if (!stored.isPrivate) expect(stored.hash).toBeDefined();
     }
+  });
+});
+
+describe('redirect policy (spec/core.md §1.2)', () => {
+  it('allows same-origin and the canonical http→https / www↔apex hops only', () => {
+    expect(redirectAllowed('https://company.example/a', 'https://company.example/b')).toBe(true);
+    expect(redirectAllowed('http://company.example/a', 'https://company.example/a')).toBe(true);
+    expect(redirectAllowed('https://www.company.example/a', 'https://company.example/a')).toBe(true);
+    // cross-origin stays blocked
+    expect(redirectAllowed('https://company.example/a', 'https://evil.example/a')).toBe(false);
+    // never downgrade to plain HTTP
+    expect(redirectAllowed('https://company.example/a', 'http://company.example/a')).toBe(false);
+    // a non-canonical port change is not a canonical redirect
+    expect(redirectAllowed('https://company.example:8443/a', 'https://company.example/a')).toBe(false);
+  });
+
+  it('safeFetch rejects a cross-origin redirect and passes a same-origin response', async () => {
+    const ok = (async () => ({ ok: true, url: 'https://company.example/keryx/targets.json' })) as unknown as typeof fetch;
+    const fetchSafe = safeFetch(ok);
+    await expect(fetchSafe('https://company.example/keryx/targets.json')).resolves.toBeTruthy();
+
+    const crossOrigin = (async () => ({ ok: true, url: 'https://evil.example/targets.json' })) as unknown as typeof fetch;
+    const blocked = safeFetch(crossOrigin);
+    await expect(blocked('https://company.example/keryx/targets.json')).rejects.toThrow(/cross-origin/);
+
+    const canonical = (async () => ({ ok: true, url: 'https://company.example/targets.json' })) as unknown as typeof fetch;
+    await expect(safeFetch(canonical)('http://company.example/targets.json')).resolves.toBeTruthy();
   });
 });
 
