@@ -8,7 +8,6 @@
 import { parseJoinUrl, rootAnchorUrl, type JoinPayload } from './payload';
 import {
   loadAndVerifyMetadata,
-  loadChannelRole,
   extractAuthorization,
   ChainBreakError,
   ProtocolError,
@@ -45,7 +44,6 @@ export interface PairingOffer {
 interface PairingMeta {
   root: RootDoc;
   targets: TargetsDoc;
-  roles: Map<string, TargetsDoc>;
   base: string;
   consistent: boolean;
 }
@@ -77,18 +75,6 @@ export async function buildPairingOffer(
     throw new PairingError(err instanceof Error ? err.message : String(err), 'network');
   }
   const auth = extractAuthorization(meta.targets);
-  const roles = new Map<string, TargetsDoc>();
-  for (const [channel] of auth.channels) {
-    try {
-      roles.set(
-        `channels.${channel}`,
-        await loadChannelRole(fetchFn, meta, `channels.${channel}`, meta.root.signed.consistent_snapshot === true),
-      );
-    } catch (err) {
-      if (err instanceof ProtocolError) throw new PairingError(err.message, 'verify');
-      throw new PairingError(err instanceof Error ? err.message : String(err), 'network');
-    }
-  }
 
   const custom = meta.targets.signed.custom;
   const companyName = typeof custom?.company_name === 'string' ? custom.company_name : origin;
@@ -131,7 +117,6 @@ export async function buildPairingOffer(
     _meta: {
       root: meta.root,
       targets: meta.targets,
-      roles,
       base: meta.base,
       consistent: meta.root.signed.consistent_snapshot === true,
     },
