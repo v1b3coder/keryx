@@ -7,6 +7,7 @@ package publisher
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -101,6 +102,11 @@ func (p *Publisher) Init(ctx context.Context, params InitParams) (Result, error)
 	if err := tufrepo.SignAndTag(st.Root, master); err != nil {
 		return Result{}, err
 	}
+	rootBytes, err := st.Root.ToBytes(true)
+	if err != nil {
+		return Result{}, err
+	}
+	st.Roots[st.Root.Signed.Version] = rootBytes
 	if err := tufrepo.SignAndTag(st.Targets, master); err != nil {
 		return Result{}, err
 	}
@@ -187,6 +193,26 @@ func (p *Publisher) key(ctx context.Context, role keys.Role, name string) (*keys
 // keyByID returns the key with the given keyid.
 func (p *Publisher) keyByID(ctx context.Context, keyid string) (*keys.Key, error) {
 	return p.Keys.Get(ctx, keyid)
+}
+
+// masterKey resolves the key currently authorized for the root role (which also
+// signs targets). After a root rotation the store holds several master keys, so the
+// authorized keyid from the current root decides — never a name/ordering guess.
+func (p *Publisher) masterKey(ctx context.Context, st *tufrepo.State) (*keys.Key, error) {
+	role := st.Root.Signed.Roles[metadata.ROOT]
+	if role == nil || len(role.KeyIDs) == 0 {
+		return nil, &keys.ErrMissingKey{Role: "master", Hint: "root.json has no root role key"}
+	}
+	return p.keyByID(ctx, role.KeyIDs[0])
+}
+
+// opsKey resolves the key currently authorized for snapshot/timestamp.
+func (p *Publisher) opsKey(ctx context.Context, st *tufrepo.State) (*keys.Key, error) {
+	role := st.Root.Signed.Roles[metadata.SNAPSHOT]
+	if role == nil || len(role.KeyIDs) == 0 {
+		return nil, &keys.ErrMissingKey{Role: "ops", Hint: "root.json has no snapshot role key"}
+	}
+	return p.keyByID(ctx, role.KeyIDs[0])
 }
 
 // ensureKey loads a key by role/name, generating and storing it when missing.
@@ -392,7 +418,7 @@ func (p *Publisher) runMutation(ctx context.Context, m mutation) (Result, error)
 	}
 	now := p.now()
 	signFresh(st.Targets, p.exp().Targets, now)
-	master, err := p.key(ctx, keys.RoleMaster, "")
+	master, err := p.masterKey(ctx, st)
 	if err != nil {
 		return Result{}, err
 	}
@@ -420,7 +446,7 @@ func (p *Publisher) stageMutation(ctx context.Context, m mutation, out, passphra
 	}
 	now := p.now()
 	signFresh(st.Targets, p.exp().Targets, now)
-	master, err := p.key(ctx, keys.RoleMaster, "")
+	master, err := p.masterKey(ctx, st)
 	if err != nil {
 		return Result{}, err
 	}
@@ -1343,11 +1369,13 @@ func (p *Publisher) RotateRoot(ctx context.Context, announceNext bool) (Result, 
 	if err != nil {
 		return Result{}, err
 	}
-	old, err := p.key(ctx, keys.RoleMaster, "")
+	old, err := p.masterKey(ctx, st)
 	if err != nil {
 		return Result{}, err
 	}
-	newMaster, err := p.ensureKey(ctx, keys.RoleMaster, "master-"+shortID(p.now()))
+	// always mint a fresh key: reusing the current master would sign the new
+	// root twice with the same key
+	newMaster, err := p.ensureKey(ctx, keys.RoleMaster, "master-"+shortID(p.now())+"-"+randSuffix())
 	if err != nil {
 		return Result{}, err
 	}
@@ -1367,7 +1395,7 @@ func (p *Publisher) RotateRoot(ctx context.Context, announceNext bool) (Result, 
 		}
 	}
 	for _, role := range []string{metadata.SNAPSHOT, metadata.TIMESTAMP} {
-		ops, err := p.key(ctx, keys.RoleOps, "")
+		ops, err := p.opsKey(ctx, st)
 		if err != nil {
 			return Result{}, err
 		}
@@ -1382,6 +1410,11 @@ func (p *Publisher) RotateRoot(ctx context.Context, announceNext bool) (Result, 
 		return Result{}, err
 	}
 	st.Root = next
+	nextBytes, err := next.ToBytes(true)
+	if err != nil {
+		return Result{}, err
+	}
+	st.Roots[next.Signed.Version] = nextBytes
 	// targets.json was signed by the previous master key; the new root
 	// authorizes only the new key, so re-sign it during the ceremony
 	if err := tufrepo.SignAndTag(st.Targets, newMaster); err != nil {
@@ -1415,7 +1448,7 @@ func (p *Publisher) RefreshTimestampExpires(ctx context.Context, expires time.Du
 	if err != nil {
 		return Result{}, err
 	}
-	ops, err := p.key(ctx, keys.RoleOps, "")
+	ops, err := p.opsKey(ctx, st)
 	if err != nil {
 		return Result{}, err
 	}
@@ -1463,7 +1496,7 @@ func (p *Publisher) ValidateStrict(ctx context.Context) (Result, error) {
 // signFreshness re-signs snapshot + timestamp with the ops key and bumps
 // their versions.
 func (p *Publisher) signFreshness(st *tufrepo.State, now time.Time) error {
-	ops, err := p.key(context.Background(), keys.RoleOps, "")
+	ops, err := p.opsKey(context.Background(), st)
 	if err != nil {
 		return err
 	}
@@ -1680,6 +1713,14 @@ func removeString(xs []string, s string) []string {
 
 func shortID(t time.Time) string {
 	return fmt.Sprintf("%d", t.Unix())
+}
+
+func randSuffix() string {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "x"
+	}
+	return hex.EncodeToString(b)
 }
 
 func deepCopy(m map[string]any) map[string]any {

@@ -188,11 +188,10 @@ func Load(_ context.Context, base, anchor repo.Repo) (*State, error) {
 	}
 	st.Root = root
 	st.Roots[root.Signed.Version] = rootBytes
-	// every released N.root.json (TUF mandate)
+	// every released N.root.json (TUF mandate). The versioned file is
+	// authoritative for the chain walk; root.json is the same bytes and is the
+	// fallback for repositories that predate the versioned file.
 	for v := int64(1); v <= root.Signed.Version; v++ {
-		if v == root.Signed.Version {
-			continue
-		}
 		data, err := anchor.Read(context.Background(), fmt.Sprintf("%d.root.json", v))
 		if err == nil {
 			st.Roots[v] = data
@@ -450,6 +449,9 @@ func findRole(roles []metadata.DelegatedRole, name string) *metadata.DelegatedRo
 // timestamp → snapshot → targets → channel role chain, delegation invariants,
 // item hash/length + signature rules, and master-signed custom.
 func (s *State) Verify() error {
+	if err := s.verifyRootChain(); err != nil {
+		return err
+	}
 	if err := s.Root.VerifyDelegate(metadata.ROOT, s.Root); err != nil {
 		return fmt.Errorf("root self-signature: %w", err)
 	}
@@ -707,6 +709,42 @@ func (s *State) verifyChannelItems(channel string, chMeta *metadata.Metadata[met
 		if err := feed.VerifyItem(obj, authorKeys, authorThreshold, channelKeys, channelThreshold); err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
+	}
+	return nil
+}
+
+// verifyRootChain walks every released N.root.json from version 1 to the current
+// root, checking the TUF root-update rule: each version is signed by the previous
+// root's keys (per its threshold) and self-signed by its own keys. A root that
+// fails this would make compliant clients suspend (spec/repository.md §1/§5), so the
+// publisher must never write one.
+func (s *State) verifyRootChain() error {
+	maxV := s.Root.Signed.Version
+	var prev *metadata.Metadata[metadata.RootType]
+	for v := int64(1); v <= maxV; v++ {
+		data, ok := s.Roots[v]
+		if !ok {
+			return fmt.Errorf("root chain: %d.root.json missing", v)
+		}
+		cur, err := metadata.Root().FromBytes(data)
+		if err != nil {
+			return fmt.Errorf("root chain: %d.root.json: %w", v, err)
+		}
+		if cur.Signed.Version != v {
+			return fmt.Errorf("root chain: %d.root.json declares version %d", v, cur.Signed.Version)
+		}
+		if prev != nil {
+			if err := prev.VerifyDelegate(metadata.ROOT, cur); err != nil {
+				return fmt.Errorf("root chain: v%d not signed by v%d root keys: %w", v, v-1, err)
+			}
+		}
+		if err := cur.VerifyDelegate(metadata.ROOT, cur); err != nil {
+			return fmt.Errorf("root chain: v%d not self-signed: %w", v, err)
+		}
+		prev = cur
+	}
+	if prev == nil || prev.Signed.Version != maxV {
+		return fmt.Errorf("root chain: current root version not in the anchor chain")
 	}
 	return nil
 }

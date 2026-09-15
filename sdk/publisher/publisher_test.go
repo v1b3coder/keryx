@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"encoding/json"
+
 	"github.com/v1b3coder/keryx/sdk/feed"
 	"github.com/v1b3coder/keryx/sdk/join"
 	"github.com/v1b3coder/keryx/sdk/keys"
@@ -544,5 +546,55 @@ func TestAuthorRevokeResignsItems(t *testing.T) {
 	}
 	if err := feed.VerifyItem(obj, map[string]ed25519.PublicKey{bob.KeyID(): bob.Public()}, 1, nil, 0); err != nil {
 		t.Fatalf("item does not verify under the remaining author: %v", err)
+	}
+}
+
+func TestRotateRootThenMasterCeremony(t *testing.T) {
+	e := newEnv(t)
+	ctx := e.ctx()
+	if _, err := e.pub.RotateRoot(ctx, false); err != nil {
+		t.Fatalf("rotate root: %v", err)
+	}
+	// after the rotation every master ceremony must use the NEW master key
+	// (root.json authorizes only it)
+	if _, err := e.pub.CompanySet(ctx, "ACME a.s.", "", ""); err != nil {
+		t.Fatalf("company set after rotate-root: %v", err)
+	}
+	if _, err := e.pub.ChannelAdd(ctx, publisher.ChannelSpec{Name: "offers", Simple: true}); err != nil {
+		t.Fatalf("channel add after rotate-root: %v", err)
+	}
+	if _, err := e.pub.RotateRoot(ctx, false); err != nil {
+		t.Fatalf("second rotate root: %v", err)
+	}
+	if _, err := e.pub.Validate(ctx); err != nil {
+		t.Fatalf("validate after two rotations: %v", err)
+	}
+}
+
+func TestValidateDetectsBrokenRootChain(t *testing.T) {
+	e := newEnv(t)
+	ctx := e.ctx()
+	if _, err := e.pub.RotateRoot(ctx, false); err != nil {
+		t.Fatalf("rotate root: %v", err)
+	}
+	// corrupt the released 2.root.json: the current root is no longer chained to
+	// the anchor, which compliant clients treat as a chain break
+	anchor := e.pub.Anchor.(*repo.DirRepo).Root
+	path := filepath.Join(anchor, "2.root.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["signed"].(map[string]any)["version"] = float64(99)
+	tampered, _ := json.Marshal(doc)
+	if err := os.WriteFile(path, tampered, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pub.Validate(ctx); err == nil {
+		t.Fatal("validate accepted a broken root chain")
 	}
 }
