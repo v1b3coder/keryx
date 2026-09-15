@@ -2,3 +2,4 @@
 *.db
 *.db-wal
 *.db-shm
+relay-e2e
