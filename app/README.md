@@ -192,6 +192,12 @@ make relay relay-e2e        # relay end-to-end against ../keryx-demo
 cd app && npm test          # app derivation + handlePush against the fixture
 ```
 
+The full live path (a real browser push subscription and a real notification)
+was also run with `relay/cmd/relay-e2e`: it serves a resealed copy of
+`../keryx-demo` over local HTTPS, exposes `/test/info` + `/test/publish`, and
+the browser's service worker verified the relay's wake-up and showed the notice.
+Build the app with `VITE_RELAY_URL` and `VITE_VAPID_PUBLIC` to repeat it.
+
 ## Architecture
 
 ```

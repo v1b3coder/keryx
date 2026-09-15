@@ -39,6 +39,19 @@ export function privateScopeId(channel: string, pattern: string): string {
   return sha256Hex(utf8(SCOPE_SALT, olpcCanonical({ kind: 'private', channel, pattern })));
 }
 
+/**
+ * The canonical company_id of a join origin (relay/SPECIFICATION.md §2):
+ * lowercase ASCII host, punycode for IDNs, no scheme, no port, no slash.
+ * The app stores the full origin; topics are always derived from this host.
+ */
+export function companyIdFromOrigin(origin: string): string {
+  try {
+    return new URL(origin).hostname.toLowerCase();
+  } catch {
+    return origin.toLowerCase();
+  }
+}
+
 /** Source hash h = hex(sha256(company_id + "|" + subject)) (§3). */
 export function sourceHash(companyId: string, subject: string): string {
   return sha256Hex(utf8(`${companyId}|${subject}`));

@@ -332,6 +332,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, topic string, wakeup []byte) 
 			res.WebPush.Dead++
 		default:
 			res.WebPush.Failed++
+			d.logger.Warn("webpush send failed", "err", err)
 		}
 		return nil
 	})

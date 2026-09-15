@@ -56,8 +56,24 @@ Every flag has a `RELAY_*` environment variable (`RELAY_LISTEN`,
 disable it (the relay still runs and reports `0`/`disabled` for it).
 
 Test-only flags exist for local end-to-end runs and **must not** be used in
-production: `-allow-private-destinations`, `-allow-http-destinations` and
-`-test-ca-file`.
+production: `-allow-private-destinations`, `-allow-http-destinations`,
+`-test-ca-file`, `-test-well-known company=base` and `-cors-origin origin`.
+
+## Local browser end-to-end
+
+`cmd/relay-e2e` is a TEST-ONLY harness that serves a resealed copy of the demo
+repository over local HTTPS, starts the relay in-process with the test flags, and
+exposes `/test/info` (join URL, topic, scope, VAPID public key) and
+`/test/publish` (signs a wake-up with the demo channel key and publishes it):
+
+```sh
+relay-e2e -demo ../../keryx-demo -relay-listen 127.0.0.1:18099 -https-listen 127.0.0.1:8443
+```
+
+With a browser built against the relay URL and VAPID key, the app pairs the demo
+company, registers its real WebPush subscription, and receives the wake-up through
+the browser's push service — the service worker verifies it and shows the notice.
+The relay's own `internal/e2e` test covers the same path without a browser.
 
 ## API
 

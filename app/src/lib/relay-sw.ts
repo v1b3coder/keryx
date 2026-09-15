@@ -29,6 +29,7 @@ import {
   sourceHash,
   publicScopeId,
   privateScopeId,
+  companyIdFromOrigin,
   createRegistration,
   updateRegistration,
   relayHeartbeat,
@@ -59,11 +60,12 @@ export function orderTokenFromUrl(url: string): string | null {
  */
 export function topicBindings(company: CompanyRecord): Record<string, TopicBinding> {
   const out: Record<string, TopicBinding> = {};
+  const companyId = companyIdFromOrigin(company.origin);
   for (const ch of company.channels) {
     if (!ch.followed) continue;
     const scopeId = publicScopeId(ch.name);
-    const h = sourceHash(company.origin, ch.name);
-    out[deriveTopic(company.origin, scopeId, h)] = { channel: ch.name, scopeId };
+    const h = sourceHash(companyId, ch.name);
+    out[deriveTopic(companyId, scopeId, h)] = { channel: ch.name, scopeId };
   }
   for (const sub of company.privateFeeds) {
     if (sub.closed) continue;
@@ -72,8 +74,8 @@ export function topicBindings(company: CompanyRecord): Record<string, TopicBindi
     const entry = company.targets.signed.custom?.private_feed_patterns?.find((e) => e.channel === sub.channel);
     if (!entry) continue;
     const scopeId = privateScopeId(entry.channel, entry.pattern);
-    const h = sourceHash(company.origin, token);
-    out[deriveTopic(company.origin, scopeId, h)] = { channel: entry.channel, scopeId };
+    const h = sourceHash(companyId, token);
+    out[deriveTopic(companyId, scopeId, h)] = { channel: entry.channel, scopeId };
   }
   return out;
 }

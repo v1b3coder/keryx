@@ -84,9 +84,11 @@ type Config struct {
 	DebugAPIKey string
 
 	ApprovedPushOrigins      []string
+	CORSOrigins              []string
 	AllowPrivateDestinations bool
 	AllowHTTPDestinations    bool
 	TestCAFile               string
+	TestWellKnown            []string // TEST ONLY: company=base overrides
 }
 
 func env(name, def string) string {
@@ -161,9 +163,11 @@ func loadConfig(fs *flag.FlagSet) *Config {
 		Debug:                    envBool("RELAY_DEBUG_TRANSPORT", false),
 		DebugAPIKey:              env("RELAY_DEBUG_API_KEY", ""),
 		ApprovedPushOrigins:      envList("RELAY_PUSH_ORIGINS"),
+		CORSOrigins:              envList("RELAY_CORS_ORIGINS"),
 		AllowPrivateDestinations: envBool("RELAY_ALLOW_PRIVATE_DESTINATIONS", false),
 		AllowHTTPDestinations:    envBool("RELAY_ALLOW_HTTP_DESTINATIONS", false),
 		TestCAFile:               env("RELAY_TEST_CA_FILE", ""),
+		TestWellKnown:            envList("RELAY_TEST_WELL_KNOWN"),
 	}
 	fs.StringVar(&cfg.Listen, "listen", cfg.Listen, "listen address")
 	fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "main SQLite database path")
@@ -205,7 +209,19 @@ func loadConfig(fs *flag.FlagSet) *Config {
 	fs.BoolVar(&cfg.AllowPrivateDestinations, "allow-private-destinations", cfg.AllowPrivateDestinations, "TEST ONLY: allow private/loopback outbound destinations")
 	fs.BoolVar(&cfg.AllowHTTPDestinations, "allow-http-destinations", cfg.AllowHTTPDestinations, "TEST ONLY: allow http outbound destinations")
 	fs.StringVar(&cfg.TestCAFile, "test-ca-file", cfg.TestCAFile, "TEST ONLY: extra CA bundle for outbound HTTPS")
+	fs.Var((*listFlag)(&cfg.CORSOrigins), "cors-origin", "allowed PWA origin for cross-origin API calls (repeatable)")
+	fs.Var((*listFlag)(&cfg.TestWellKnown), "test-well-known", "TEST ONLY: company=base well-known override (repeatable)")
 	return cfg
+}
+
+// listFlag collects a repeatable string flag.
+type listFlag []string
+
+func (l *listFlag) String() string { return strings.Join(*l, ",") }
+
+func (l *listFlag) Set(v string) error {
+	*l = append(*l, v)
+	return nil
 }
 
 func main() {
@@ -264,7 +280,10 @@ func serve(cfg Config, logger *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("test CA file: %w", err)
 		}
-		pool := x509.NewCertPool()
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			pool = x509.NewCertPool()
+		}
 		if !pool.AppendCertsFromPEM(pem) {
 			return errors.New("test CA file: no certificates found")
 		}
@@ -272,6 +291,16 @@ func serve(cfg Config, logger *slog.Logger) error {
 	}
 
 	client := tufclient.New(policy)
+	for _, override := range cfg.TestWellKnown {
+		companyID, base, ok := strings.Cut(override, "=")
+		if !ok || companyID == "" || base == "" {
+			return fmt.Errorf("test-well-known: want company=base, got %q", override)
+		}
+		if client.TestWellKnown == nil {
+			client.TestWellKnown = map[string]string{}
+		}
+		client.TestWellKnown[companyID] = base
+	}
 	companies := companytuf.New(st, client, companytuf.Options{
 		Interval:        cfg.RefreshInterval,
 		Cadence:         cfg.RefreshCadence,
@@ -341,6 +370,7 @@ func serve(cfg Config, logger *slog.Logger) error {
 		GlobalProbeBurst:    cfg.GlobalProbeBurst,
 		SeqFutureTolerance:  cfg.SeqFutureTol,
 		ApprovedPushOrigins: cfg.ApprovedPushOrigins,
+		CORSOrigins:         cfg.CORSOrigins,
 		Policy:              policy,
 		Logger:              logger,
 	})
@@ -353,7 +383,7 @@ func serve(cfg Config, logger *slog.Logger) error {
 	if cfg.Debug {
 		logger.Warn("transport-debug mode enabled; production publish routes are not mounted")
 	}
-	if cfg.AllowPrivateDestinations || cfg.AllowHTTPDestinations || cfg.TestCAFile != "" {
+	if cfg.AllowPrivateDestinations || cfg.AllowHTTPDestinations || cfg.TestCAFile != "" || len(cfg.TestWellKnown) > 0 {
 		logger.Warn("test-only outbound destination overrides enabled; do not use in production")
 	}
 

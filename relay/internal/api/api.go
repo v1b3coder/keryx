@@ -52,6 +52,7 @@ type Options struct {
 
 	SeqFutureTolerance  time.Duration // default 5m
 	ApprovedPushOrigins []string      // additional approved push-service origins
+	CORSOrigins         []string      // allowed PWA origins (cross-origin API)
 	Policy              *netpolicy.Policy
 	Logger              *slog.Logger
 }
@@ -74,6 +75,7 @@ type Server struct {
 	pubLimiters map[string]*ratelimit.Limiter
 
 	pushOrigins map[string]bool
+	corsOrigins map[string]bool
 }
 
 // New builds the API server.
@@ -133,9 +135,13 @@ func New(st *store.Store, d *relay.Dispatcher, companies *companytuf.Manager, op
 		probeGlobal: ratelimit.New(opts.GlobalProbePerMin, opts.GlobalProbeBurst),
 		pubLimiters: map[string]*ratelimit.Limiter{},
 		pushOrigins: defaultPushOrigins(),
+		corsOrigins: map[string]bool{},
 	}
 	for _, origin := range opts.ApprovedPushOrigins {
 		s.pushOrigins[origin] = true
+	}
+	for _, origin := range opts.CORSOrigins {
+		s.corsOrigins[origin] = true
 	}
 	return s
 }
@@ -155,7 +161,28 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /v1/publishes/{request_id}", s.handleProbe)
 		mux.HandleFunc("POST /v1/companies/{company_id}/refresh", s.handleCompanyRefresh)
 	}
-	return s.logRequests(mux)
+	return s.logRequests(s.cors(mux))
+}
+
+// cors answers preflight and adds the configured PWA origins. The relay is a
+// separate origin from the app, so the app's API calls are cross-origin; an
+// origin that is not listed gets no CORS headers.
+func (s *Server) cors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" && s.corsOrigins[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Access-Control-Max-Age", "600")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Cleanup drops idle rate-limit state.

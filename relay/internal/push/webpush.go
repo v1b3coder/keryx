@@ -166,7 +166,12 @@ func (c *WebPush) Send(ctx context.Context, endpoint, p256dh, auth string, paylo
 		return req, nil
 	}, 3, c.backoff)
 	if err != nil {
-		return err
+		// Never include the endpoint (a capability URL) in errors or logs
+		// (relay/SPECIFICATION.md §5.1.1/§9).
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errors.New("webpush: request failed")
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
