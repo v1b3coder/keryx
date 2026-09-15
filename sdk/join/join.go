@@ -27,6 +27,12 @@ const MaxPrivateFeeds = 2
 
 // BuildPayload builds and validates a payload.
 func BuildPayload(channels, privateFeeds []string) ([]byte, error) {
+	return BuildPayloadOptions(channels, privateFeeds, false)
+}
+
+// BuildPayloadOptions allows plain-HTTP private feeds for local-dev origins
+// when allowLocalHTTP is set (a documented dev-only exception, spec/feeds.md §3).
+func BuildPayloadOptions(channels, privateFeeds []string, allowLocalHTTP bool) ([]byte, error) {
 	if len(privateFeeds) > MaxPrivateFeeds {
 		return nil, fmt.Errorf("at most %d private feeds per QR", MaxPrivateFeeds)
 	}
@@ -37,9 +43,16 @@ func BuildPayload(channels, privateFeeds []string) ([]byte, error) {
 	}
 	for _, f := range privateFeeds {
 		u, err := url.Parse(f)
-		if err != nil || u.Scheme != "https" {
-			return nil, fmt.Errorf("private feed %q must be an absolute HTTPS URL", f)
+		if err != nil {
+			return nil, fmt.Errorf("private feed %q is not a URL", f)
 		}
+		if u.Scheme == "https" {
+			continue
+		}
+		if allowLocalHTTP && u.Scheme == "http" && isLocalDevOrigin(u) {
+			continue
+		}
+		return nil, fmt.Errorf("private feed %q must be an absolute HTTPS URL", f)
 	}
 	p := Payload{V: 1, Channels: channels, PrivateFeeds: privateFeeds}
 	if p.Channels == nil {
@@ -60,11 +73,16 @@ func BuildPayload(channels, privateFeeds []string) ([]byte, error) {
 
 // JoinURL builds the join URL for an origin + payload.
 func JoinURL(origin string, payload []byte) (string, error) {
+	return JoinURLOptions(origin, payload, false)
+}
+
+// JoinURLOptions allows a plain-HTTP local-dev origin when allowLocalHTTP is set.
+func JoinURLOptions(origin string, payload []byte, allowLocalHTTP bool) (string, error) {
 	u, err := url.Parse(origin)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return "", fmt.Errorf("invalid origin %q", origin)
 	}
-	if u.Scheme != "https" {
+	if u.Scheme != "https" && !(allowLocalHTTP && u.Scheme == "http" && isLocalDevOrigin(u)) {
 		return "", fmt.Errorf("join origin must be HTTPS")
 	}
 	u.Path = strings.TrimSuffix(u.Path, "/") + "/join"
@@ -117,4 +135,23 @@ func validChannel(name string) bool {
 		return false
 	}
 	return true
+}
+
+// isLocalDevOrigin reports loopback / RFC 1918 hosts (the local demo).
+func isLocalDevOrigin(u *url.URL) bool {
+	host := u.Hostname()
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+	var a, b int
+	if n, err := fmt.Sscanf(host, "%d.%d.", &a, &b); n != 2 || err != nil {
+		return false
+	}
+	if a == 10 {
+		return true
+	}
+	if a == 172 && b >= 16 && b <= 31 {
+		return true
+	}
+	return a == 192 && b == 168
 }

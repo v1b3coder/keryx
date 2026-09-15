@@ -254,13 +254,13 @@ function FeedArticle({
     let alive = true;
     const url = item.image;
     if (!url) return;
-    void loadImage(url, stored.origin, item._sig?.resources?.[url]).then((objectUrl) => {
+    void loadImage(url, stored.origin, item.attachments?.find((a) => a.url === url)?.sha256).then((objectUrl) => {
       if (alive) setImg(objectUrl);
     });
     return () => {
       alive = false;
     };
-  }, [item.image, item._sig, stored.origin]);
+  }, [item.image, item.attachments, stored.origin]);
 
   // mark as read when it scrolls into view (no detail view anymore)
   useEffect(() => {
@@ -297,13 +297,7 @@ function FeedArticle({
             </span>
           ))}
         </div>
-        {item.content_html ? (
-          <SanitizedHtml html={item.content_html} origin={company.origin} item={item} onLinkTap={onLinkTap} />
-        ) : (
-          <div className="article-body" style={{ whiteSpace: 'pre-wrap' }}>
-            {item.content_text ?? ''}
-          </div>
-        )}
+        <SanitizedHtml html={item.content_html ?? ''} origin={company.origin} item={item} onLinkTap={onLinkTap} />
       </div>
     </article>
   );

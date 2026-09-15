@@ -1,33 +1,31 @@
 /**
  * Protocol tests against the REAL demo artifacts in ../demo (signed by the
- * Go publisher tool): full TUF chain verification (OLPC canonical metadata
- * signatures, root chain, timestamp/snapshot/targets, per-channel delegated
- * role metadata, hash-pinned feed targets), JCS item verification (default +
- * editor mode), whole-document private-feed verification, authorization,
- * pattern matching, payload parsing, suspension and rollback detection.
+ * reference publisher tool): full TUF chain verification (OLPC canonical
+ * metadata signatures, root chain, timestamp/snapshot/targets, per-channel
+ * delegated role metadata, per-item hash-pinned targets), OLPC item
+ * verification (authors role by default, simple-mode channel keys otherwise),
+ * whole-document private-feed verification, authorization, pattern matching,
+ * payload parsing, suspension, rollback and unpublish semantics.
  *
  * The fetch stub serves exact file bytes (not re-serialized JSON) because
- * metadata and feed targets are hash-pinned — byte fidelity matters.
+ * metadata and item targets are hash-pinned — byte fidelity matters.
  */
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
-import canonicalize from 'canonicalize';
 import { sign, hashes } from '@noble/ed25519';
 import { sha512 } from '@noble/hashes/sha2.js';
 import {
   loadAndVerifyMetadata,
   loadChannelRole,
   extractAuthorization,
-  channelFromRole as chainFromRole,
+  channelFromRole,
   ChainBreakError,
   ProtocolError,
-  fetchRootDoc,
   verifyRootTransition,
   verifyKeyid,
-  versionedRootUrl,
   targetFileUrl,
   verifyTargetBytes,
   type RootDoc,
@@ -35,9 +33,8 @@ import {
 } from './tuf';
 import {
   verifyItemSignatures,
-  verifyChannelCrossCheck,
-  isWithdrawn,
-  canonicalItemBytes,
+  verifyImage,
+  itemIdFromPath,
   signedContentKey,
   type FeedItem,
 } from './item';
@@ -51,11 +48,12 @@ import type { StoredItem } from './store';
 
 hashes.sha512 = sha512;
 
-const demoDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'demo');
-const origin = 'http://10.110.147.178:8000';
+const demoDir =
+  process.env.KERYX_DEMO_DIR ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'demo');
+const origin = 'http://localhost:8000';
 
 function fileFor(url: string): string {
-  return join(demoDir, url.replace(/^http:\/\/10\.110\.147\.178:8000\//, ''));
+  return join(demoDir, url.replace(/^http:\/\/localhost:8000\//, ''));
 }
 
 function readBytes(url: string): Uint8Array {
@@ -82,13 +80,20 @@ function seedOf(name: string): Uint8Array {
   return new Uint8Array(Buffer.from(f.seed_hex, 'hex'));
 }
 
-/** JCS canonical bytes of an object with a `_sig.signatures` field removed — the publisher's rule. */
-function signJcs(obj: Record<string, unknown>, seed: Uint8Array): string {
+/** OLPC canonical bytes of an object with a `sig` field removed — the publisher's rule. */
+function signOlpc(obj: Record<string, unknown>, seed: Uint8Array): string {
   const clone = JSON.parse(JSON.stringify(obj)) as Record<string, any>;
-  delete clone._sig?.signatures;
-  const canonical = canonicalize(clone)!;
+  delete clone.sig;
+  const canonical = olpcCanonical(clone);
   const sig = sign(new TextEncoder().encode(canonical), seed);
   return bytesToBase64url(sig);
+}
+
+function channelItems(channel: string): FeedItem[] {
+  const dir = join(demoDir, 'keryx', 'channels', channel);
+  return readdirSync(dir)
+    .filter((f) => f.endsWith('.json'))
+    .map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as FeedItem);
 }
 
 describe('join payload (spec/core.md §3)', () => {
@@ -144,8 +149,8 @@ describe('join payload (spec/core.md §3)', () => {
     expect(joinUrlFromDeepLink('https://keryx-demo.github.io/', 'eyJ2IjoxfQ')).toBe(
       'https://keryx-demo.github.io/join?p=eyJ2IjoxfQ',
     );
-    expect(joinUrlFromDeepLink('http://10.110.147.178:8000', 'eyJ2IjoxfQ')).toBe(
-      'http://10.110.147.178:8000/join?p=eyJ2IjoxfQ',
+    expect(joinUrlFromDeepLink('http://localhost:8000', 'eyJ2IjoxfQ')).toBe(
+      'http://localhost:8000/join?p=eyJ2IjoxfQ',
     );
     expect(joinUrlFromDeepLink('', null)).toBeNull();
   });
@@ -156,7 +161,6 @@ describe('join payload (spec/core.md §3)', () => {
       expect(parsed.origin).toBe('https://company.example');
       expect(parsed.payload).toEqual({ v: 1, channels: [], privateFeeds: [] });
     }
-    // an explicit scheme is honored (the local-dev HTTP exception)
     expect(parseJoinUrl(`${origin}/join`).origin).toBe(origin);
   });
 
@@ -184,39 +188,41 @@ describe('TUF chain against the real demo repo', () => {
     expect(meta.rootRotated).toBe(false);
     const auth = extractAuthorization(meta.targets);
     expect([...auth.channels.keys()].sort()).toEqual(['insights', 'news', 'security']);
-    // editor mode: security is 2-of-2
-    expect(auth.editor.get('security')?.threshold).toBe(2);
-    expect(auth.editor.get('security')?.keys).toHaveLength(2);
-    expect(auth.editor.get('news')).toBeUndefined();
-    // private pattern
+    // authored is the default: security has a 2-of-2 authors role
+    expect(auth.authors.get('security')?.threshold).toBe(2);
+    expect(auth.authors.get('security')?.keys).toHaveLength(2);
+    expect(auth.authors.get('news')).toBeUndefined();
     expect(auth.privatePatterns).toHaveLength(1);
     expect(auth.privatePatterns[0].channel).toBe('tracking');
   });
 
-  it('verifies each channel role metadata and the pinned feed target', async () => {
+  it('verifies each channel role metadata and its per-item targets', async () => {
     const meta = await loadAndVerifyMetadata(fetchLike, `${origin}/.well-known/keryx/root.json`, null, null);
     for (const channel of ['security', 'news', 'insights']) {
       const role = await loadChannelRole(fetchLike, meta, `channels.${channel}`, false);
-      const path = `channels/${channel}/feed.json`;
-      const info = role.signed.targets[path];
-      expect(info).toBeDefined();
-      const bytes = readBytes(`${origin}/keryx/${path}`);
-      verifyTargetBytes(bytes, info, path); // length + sha256 must match
+      const paths = Object.keys(role.signed.targets);
+      expect(paths.length).toBeGreaterThan(0);
+      for (const path of paths) {
+        expect(path.startsWith(`channels/${channel}/`)).toBe(true);
+        const info = role.signed.targets[path];
+        const bytes = readBytes(`${origin}/keryx/${path}`);
+        verifyTargetBytes(bytes, info, path); // length + sha256 must match
+      }
     }
   });
 
-  it('rejects a tampered feed (bytes swapped after signing)', async () => {
+  it('rejects a tampered item target (bytes swapped after signing)', async () => {
     const meta = await loadAndVerifyMetadata(fetchLike, `${origin}/.well-known/keryx/root.json`, null, null);
     const role = await loadChannelRole(fetchLike, meta, 'channels.news', false);
-    const path = 'channels/news/feed.json';
+    const path = Object.keys(role.signed.targets)[0];
     const info = role.signed.targets[path];
     const bytes = readBytes(`${origin}/keryx/${path}`);
     const tampered = new Uint8Array(bytes);
-    tampered[100] ^= 0xff;
+    tampered[10] ^= 0xff;
     expect(() => verifyTargetBytes(tampered, info, path)).toThrow(ProtocolError);
   });
 
-  it('rejects a root rotation not signed by the previous root keys (chain break)', async () => {
+  it('rejects a root rotation not signed by the previous root keys (chain break)', () => {
     const v1 = loadJson<RootDoc>('.well-known/keryx/root.json');
     const v2 = JSON.parse(JSON.stringify(v1)) as RootDoc;
     v2.signed.version = 2;
@@ -229,7 +235,7 @@ describe('TUF chain against the real demo repo', () => {
     expect(() => verifyRootTransition(v1, v2)).toThrow(ChainBreakError);
   });
 
-  it('rejects a root rotation not signed by the previous keys at all (chain break)', async () => {
+  it('rejects a root rotation not signed by the previous keys at all (chain break)', () => {
     const v1 = loadJson<RootDoc>('.well-known/keryx/root.json');
     const v2 = JSON.parse(JSON.stringify(v1)) as RootDoc;
     v2.signed.version = 2;
@@ -263,7 +269,6 @@ describe('TUF chain against the real demo repo', () => {
     for (const [keyid, key] of Object.entries(targets.signed.delegations!.keys)) {
       expect(() => verifyKeyid(keyid, key, 'test')).not.toThrow();
     }
-    // a keyid computed WITH the extra `name` field must be rejected
     const key = targets.signed.delegations!.keys[Object.keys(targets.signed.delegations!.keys)[0]];
     expect(() => verifyKeyid('0000000000000000000000000000000000000000000000000000000000000000', key, 'test')).toThrow(
       ProtocolError,
@@ -271,160 +276,178 @@ describe('TUF chain against the real demo repo', () => {
   });
 
   it('ignores delegated roles that are not channels.<name> (spec/repository.md §2)', () => {
-    const targets = loadJson<TargetsDoc>('keryx/targets.json');
-    expect(chainFromRole({ name: 'security', keyids: ['x'], threshold: 1, paths: ['channels/security/*'] })).toBeNull();
-    expect(chainFromRole({ name: 'channels.security', keyids: ['x'], threshold: 1, paths: ['channels/security/*'] })).toBe(
+    expect(channelFromRole({ name: 'security', keyids: ['x'], threshold: 1, paths: ['channels/security/*'] })).toBeNull();
+    expect(channelFromRole({ name: 'channels.security', keyids: ['x'], threshold: 1, paths: ['channels/security/*'] })).toBe(
       'security',
     );
+    // an authors role is not a channel
     expect(
-      chainFromRole({ name: 'channels.security', keyids: ['x'], threshold: 1, paths: ['channels/other/*'] }),
+      channelFromRole({ name: 'channels.security.authors', keyids: ['x'], threshold: 1, paths: ['channels/security/*'] }),
     ).toBeNull();
-    // roles with paths outside the namespace are not channels
-    void targets;
+    expect(
+      channelFromRole({ name: 'channels.security', keyids: ['x'], threshold: 1, paths: ['channels/other/*'] }),
+    ).toBeNull();
   });
 });
 
 describe('item verification (spec/feeds.md §1.2)', () => {
-  const securityFeed = loadJson<{ items: FeedItem[] }>('channels/security/feed.json').items;
-  const newsFeed = loadJson<{ items: FeedItem[] }>('channels/news/feed.json').items;
+  const meta = async () => loadAndVerifyMetadata(fetchLike, `${origin}/.well-known/keryx/root.json`, null, null);
 
-  it('editor mode: 2-of-2 security items verify (channel-key extra is not load-bearing)', async () => {
-    const meta = await loadAndVerifyMetadata(fetchLike, `${origin}/.well-known/keryx/root.json`, null, null);
-    const auth = extractAuthorization(meta.targets);
-    const editor = auth.editor.get('security')!;
-    const channelKeys = auth.channels.get('security')!.keys;
-    for (const item of securityFeed) {
-      verifyChannelCrossCheck(item, 'security');
-      expect(() => verifyItemSignatures(item, editor, channelKeys)).not.toThrow();
+  it('authored channel: 2-of-2 security items verify (channel-key extra is not load-bearing)', async () => {
+    const m = await meta();
+    const auth = extractAuthorization(m.targets);
+    const authors = auth.authors.get('security')!;
+    const channel = auth.channels.get('security')!;
+    for (const item of channelItems('security')) {
+      expect(() => verifyImage(item)).not.toThrow();
+      expect(() => verifyItemSignatures(item, authors, channel)).not.toThrow();
     }
   });
 
-  it('default mode: news items verify via attribution signatures', async () => {
-    const meta = await loadAndVerifyMetadata(fetchLike, `${origin}/.well-known/keryx/root.json`, null, null);
-    const auth = extractAuthorization(meta.targets);
-    const channelKeys = auth.channels.get('news')!.keys;
-    for (const item of newsFeed) {
-      verifyChannelCrossCheck(item, 'news');
-      expect(() => verifyItemSignatures(item, undefined, channelKeys)).not.toThrow();
+  it('simple mode: news and insights items verify via channel-key signatures', async () => {
+    const m = await meta();
+    const auth = extractAuthorization(m.targets);
+    for (const name of ['news', 'insights']) {
+      const channel = auth.channels.get(name)!;
+      for (const item of channelItems(name)) {
+        expect(() => verifyItemSignatures(item, undefined, channel)).not.toThrow();
+      }
     }
   });
 
   it('rejects a modified item (signatures no longer verify)', async () => {
-    const meta = await loadAndVerifyMetadata(fetchLike, `${origin}/.well-known/keryx/root.json`, null, null);
-    const auth = extractAuthorization(meta.targets);
-    const editor = auth.editor.get('security')!;
-    const item = JSON.parse(JSON.stringify(securityFeed[0])) as FeedItem;
+    const m = await meta();
+    const auth = extractAuthorization(m.targets);
+    const item = JSON.parse(JSON.stringify(channelItems('security')[0])) as FeedItem;
     item.title = 'Tampered title';
-    expect(() => verifyItemSignatures(item, editor, auth.channels.get('security')!.keys)).toThrow(ProtocolError);
-  });
-
-  it('rejects an item with missing editor signatures', async () => {
-    const meta = await loadAndVerifyMetadata(fetchLike, `${origin}/.well-known/keryx/root.json`, null, null);
-    const auth = extractAuthorization(meta.targets);
-    const item = JSON.parse(JSON.stringify(securityFeed[0])) as FeedItem;
-    item._sig!.signatures = [];
-    expect(() => verifyItemSignatures(item, auth.editor.get('security')!, auth.channels.get('security')!.keys)).toThrow(
+    expect(() => verifyItemSignatures(item, auth.authors.get('security')!, auth.channels.get('security')!)).toThrow(
       ProtocolError,
     );
   });
 
-  it('editor mode: an unknown keyid signature alone does not satisfy the threshold', async () => {
-    const meta = await loadAndVerifyMetadata(fetchLike, `${origin}/.well-known/keryx/root.json`, null, null);
-    const auth = extractAuthorization(meta.targets);
-    const item = JSON.parse(JSON.stringify(securityFeed[0])) as FeedItem;
-    // re-sign with the WRONG key (news channel key), keyid unknown to editor mode
-    const sig = signJcs(item as unknown as Record<string, unknown>, seedOf('news'));
-    item._sig!.signatures = [{ keyid: auth.channels.get('news')!.keys[0].keyid, sig }];
-    expect(() => verifyItemSignatures(item, auth.editor.get('security')!, auth.channels.get('security')!.keys)).toThrow(
+  it('rejects an item with missing author signatures', async () => {
+    const m = await meta();
+    const auth = extractAuthorization(m.targets);
+    const item = JSON.parse(JSON.stringify(channelItems('security')[0])) as FeedItem;
+    item.sig = [];
+    expect(() => verifyItemSignatures(item, auth.authors.get('security')!, auth.channels.get('security')!)).toThrow(
       ProtocolError,
     );
   });
 
-  it('default mode: a known keyid with a failing signature rejects the item (no third state)', async () => {
-    const meta = await loadAndVerifyMetadata(fetchLike, `${origin}/.well-known/keryx/root.json`, null, null);
-    const auth = extractAuthorization(meta.targets);
-    const item = JSON.parse(JSON.stringify(newsFeed[0])) as FeedItem;
+  it('authored channel: an unknown keyid signature alone does not satisfy the threshold', async () => {
+    const m = await meta();
+    const auth = extractAuthorization(m.targets);
+    const item = JSON.parse(JSON.stringify(channelItems('security')[0])) as FeedItem;
+    // re-sign with the news channel key, keyid unknown to the security authors role
+    const sig = signOlpc(item as unknown as Record<string, unknown>, seedOf('news'));
+    item.sig = [{ keyid: auth.channels.get('news')!.keys[0].keyid, sig }];
+    expect(() => verifyItemSignatures(item, auth.authors.get('security')!, auth.channels.get('security')!)).toThrow(
+      ProtocolError,
+    );
+  });
+
+  it('simple mode: a known keyid with a failing signature rejects the item (no third state)', async () => {
+    const m = await meta();
+    const auth = extractAuthorization(m.targets);
+    const item = JSON.parse(JSON.stringify(channelItems('news')[0])) as FeedItem;
     const channelKey = auth.channels.get('news')!.keys[0];
-    item._sig!.signatures = [{ keyid: channelKey.keyid, sig: 'AAAA' }];
-    expect(() => verifyItemSignatures(item, undefined, auth.channels.get('news')!.keys)).toThrow(ProtocolError);
+    item.sig = [{ keyid: channelKey.keyid, sig: 'AAAA' }];
+    expect(() => verifyItemSignatures(item, undefined, auth.channels.get('news')!)).toThrow(ProtocolError);
   });
 
-  it('default mode: signatures by unknown keys are ignored (attribution only)', async () => {
-    const meta = await loadAndVerifyMetadata(fetchLike, `${origin}/.well-known/keryx/root.json`, null, null);
-    const auth = extractAuthorization(meta.targets);
-    const item = JSON.parse(JSON.stringify(newsFeed[0])) as FeedItem;
-    const sig = signJcs(item as unknown as Record<string, unknown>, seedOf('insights'));
-    item._sig!.signatures = [{ keyid: 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', sig }];
-    expect(() => verifyItemSignatures(item, undefined, auth.channels.get('news')!.keys)).not.toThrow();
+  it('simple mode: signatures by unknown keys are ignored (attribution only)', async () => {
+    const m = await meta();
+    const auth = extractAuthorization(m.targets);
+    const item = JSON.parse(JSON.stringify(channelItems('news')[0])) as FeedItem;
+    const sig = signOlpc(item as unknown as Record<string, unknown>, seedOf('insights'));
+    // the valid channel signature stays; the unknown-key entry is ignored
+    item.sig = [
+      ...(item.sig ?? []),
+      { keyid: 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', sig },
+    ];
+    expect(() => verifyItemSignatures(item, undefined, auth.channels.get('news')!)).not.toThrow();
   });
 
-  it('rejects a channel cross-check mismatch', () => {
-    const item = JSON.parse(JSON.stringify(securityFeed[0])) as FeedItem;
-    expect(() => verifyChannelCrossCheck(item, 'news')).toThrow(ProtocolError);
-    expect(() => verifyChannelCrossCheck(item, 'security')).not.toThrow();
+  it('rejects a linked image without image_sha256 (schema violation)', () => {
+    const item = JSON.parse(JSON.stringify(channelItems('news')[0])) as FeedItem;
+    item.image = 'https://cdn.example.com/x.jpg';
+    delete item.image_sha256;
+    expect(() => verifyImage(item)).toThrow(ProtocolError);
+    // an inline data URL needs no separate hash
+    const inline = JSON.parse(JSON.stringify(channelItems('news')[0])) as FeedItem;
+    inline.image = 'data:image/png;base64,AAAA';
+    delete inline.image_sha256;
+    expect(() => verifyImage(inline)).not.toThrow();
   });
 
-  it('withdrawn items are hidden; signature-only re-signing is not an update', () => {
-    const item = JSON.parse(JSON.stringify(securityFeed[0])) as FeedItem;
-    expect(isWithdrawn(item)).toBe(false);
+  it('item id matches its TUF target path segment; content changes are updates', async () => {
+    const m = await meta();
+    const role = await loadChannelRole(fetchLike, m, 'channels.news', false);
+    const path = Object.keys(role.signed.targets)[0];
+    const item = JSON.parse(readFileSync(join(demoDir, 'keryx', path), 'utf8')) as FeedItem;
+    expect(item.id).toBe(itemIdFromPath(path));
     const copy = JSON.parse(JSON.stringify(item)) as FeedItem;
     expect(signedContentKey(item)).toBe(signedContentKey(copy));
-    // content change → different key
     copy.title = 'Changed';
     expect(signedContentKey(item)).not.toBe(signedContentKey(copy));
+  });
+
+  it('accepts a re-signed item (signature-only change is not an update)', async () => {
+    const item = JSON.parse(JSON.stringify(channelItems('news')[0])) as FeedItem;
+    const reSigned = JSON.parse(JSON.stringify(item)) as FeedItem;
+    const sig = signOlpc(reSigned as unknown as Record<string, unknown>, seedOf('news'));
+    reSigned.sig = [{ keyid: item.sig![0].keyid, sig }];
+    expect(signedContentKey(item)).toBe(signedContentKey(reSigned));
   });
 });
 
 describe('private capability feed (spec/feeds.md §3)', () => {
-  const meta = loadJson<{ _sig: { channel: string; url: string; version: number } }>(
-    privateFeedRelPath(),
-  );
-  const privateUrl = meta._sig.url;
+  const doc = () => loadJson<Record<string, any>>(privateFeedRelPath());
   const targets = loadJson<TargetsDoc>('keryx/targets.json');
   const entry = targets.signed.custom!.private_feed_patterns![0];
+  const privateUrl = doc().url as string;
 
   it('verifies the whole document (signature + channel + url + version)', () => {
-    const doc = loadJson<Record<string, any>>(privateFeedRelPath());
-    const result = verifyPrivateFeedDocument(doc, entry, privateUrl, undefined);
+    const result = verifyPrivateFeedDocument(doc(), entry, privateUrl, undefined);
     expect(result.closed).toBe(false);
-    expect(result.version).toBe(doc._sig.version);
+    expect(result.version).toBe(doc().version);
   });
 
   it('rejects a tampered document (whole-doc signature breaks)', () => {
-    const doc = loadJson<Record<string, any>>(privateFeedRelPath());
-    const tampered = JSON.parse(JSON.stringify(doc)) as Record<string, any>;
+    const tampered = JSON.parse(JSON.stringify(doc())) as Record<string, any>;
     tampered.items[0].title = 'Tampered';
     expect(() => verifyPrivateFeedDocument(tampered, entry, privateUrl, undefined)).toThrow(ProtocolError);
   });
 
   it('rejects a version rollback (anti-rollback via version memory)', () => {
-    const doc = loadJson<Record<string, any>>(privateFeedRelPath());
-    expect(() => verifyPrivateFeedDocument(doc, entry, privateUrl, 99)).toThrow(/rollback/);
+    expect(() => verifyPrivateFeedDocument(doc(), entry, privateUrl, 99)).toThrow(/rollback/);
   });
 
   it('rejects a document served for the wrong URL (cross-order mix-up)', () => {
-    const doc = loadJson<Record<string, any>>(privateFeedRelPath());
-    expect(() => verifyPrivateFeedDocument(doc, entry, privateUrl + 'x', undefined)).toThrow(/url/);
+    expect(() => verifyPrivateFeedDocument(doc(), entry, privateUrl + 'x', undefined)).toThrow(/url/);
   });
 
   it('rejects a document with the wrong channel label', () => {
-    const doc = loadJson<Record<string, any>>(privateFeedRelPath());
-    const clone = JSON.parse(JSON.stringify(doc)) as Record<string, any>;
-    clone._sig.channel = 'marketing';
+    const clone = JSON.parse(JSON.stringify(doc())) as Record<string, any>;
+    clone.channel = 'marketing';
     expect(() => verifyPrivateFeedDocument(clone, entry, privateUrl, undefined)).toThrow(/channel/);
   });
 
   it('marks the feed closed on expired: true but keeps it verified', () => {
-    const doc = loadJson<Record<string, any>>(privateFeedRelPath());
-    const clone = JSON.parse(JSON.stringify(doc)) as Record<string, any>;
+    const clone = JSON.parse(JSON.stringify(doc())) as Record<string, any>;
     clone.expired = true;
-    clone._sig.signatures = [{ keyid: entry.keyids[0], sig: signJcs(clone, seedOf('tracking')) }];
+    clone.sig = [{ keyid: entry.keyids[0], sig: signOlpc(clone, seedOf('tracking')) }];
     const result = verifyPrivateFeedDocument(clone, entry, privateUrl, undefined);
     expect(result.closed).toBe(true);
   });
 
   it('enforces the 1 MB document size limit', () => {
     expect(PRIVATE_FEED_MAX_BYTES).toBe(1024 * 1024);
+  });
+
+  it('matches the capability URL against the authorized pattern', () => {
+    expect(matchesPattern(entry, privateUrl)).toBe(true);
   });
 });
 
@@ -439,95 +462,101 @@ describe('pattern matching', () => {
   });
 
   it('TUF path globs: * matches exactly one segment, never crosses /', () => {
-    expect(pathPatternMatches('channels/marketing/*', 'channels/marketing/feed.json')).toBe(true);
-    expect(pathPatternMatches('channels/marketing/*', 'channels/marketing/x/feed.json')).toBe(false);
-    expect(pathPatternMatches('channels/marketing/*', 'channels/security/feed.json')).toBe(false);
+    expect(pathPatternMatches('channels/marketing/*', 'channels/marketing/x.json')).toBe(true);
+    expect(pathPatternMatches('channels/marketing/*', 'channels/marketing/x/y.json')).toBe(false);
+    expect(pathPatternMatches('channels/marketing/*', 'channels/security/x.json')).toBe(false);
   });
 });
 
-describe('feed processing semantics (spec/feeds.md §1.2)', () => {
-  it('withdrawn items are hidden and dropped from the cache (binary rule)', async () => {
-    const { processFeedItems } = await import('./sync');
+describe('unpublish semantics (spec/feeds.md §1.3)', () => {
+  it('absence from the index drops a cached item; new items are stored', async () => {
+    const { mergeSourceItems } = await import('./sync');
     const company = {
-      origin: 'http://10.110.147.178:8000',
+      origin,
       channels: [],
       privateFeeds: [],
       prefs: { languages: [], tags: [], loadRemoteMedia: true },
     } as never;
+    const m = await loadAndVerifyMetadata(fetchLike, `${origin}/.well-known/keryx/root.json`, null, null);
+    const auth = extractAuthorization(m.targets);
+    const channel = auth.channels.get('news')!;
+    const items = channelItems('news');
     const existing = new Map<string, StoredItem>();
-    const feed: FeedItem[] = [
-      { id: 'a', title: 'A', _sig: { channel: 'news', withdrawn: false } },
-      { id: 'b', title: 'B', _sig: { channel: 'news', withdrawn: true } },
-    ];
-    // seed a cached copy of b (previously displayed)
-    existing.set('http://10.110.147.178:8000\u0000public:news\u0000b', {
-      id: 'http://10.110.147.178:8000\u0000public:news\u0000b',
-      origin: 'http://10.110.147.178:8000',
-      channel: 'news',
-      feedUrl: '',
-      isPrivate: false,
-      item: { id: 'b', title: 'B old' },
-      published: '',
-      receivedAt: 1,
-      read: false,
-    });
-    const { outcome, toPut, toDelete } = processFeedItems(
-      company,
-      'news',
-      '',
-      false,
-      feed,
-      [],
-      undefined,
-      existing,
-    );
-    expect(outcome.rejected).toBe(0);
-    expect(toPut).toHaveLength(1);
-    expect(toDelete).toContain('http://10.110.147.178:8000\u0000public:news\u0000b');
+    const first = mergeSourceItems(company, 'news', '', false, items.map((item) => ({ item })), {
+      authors: undefined,
+      channel,
+    }, existing);
+    expect(first.toPut.length).toBe(items.length);
+    expect(first.toDelete).toHaveLength(0);
+
+    // drop one item from the published index → absence = unpublished
+    const dropped = items[0];
+    const remaining = items.slice(1);
+    const key = `${origin}\u0000public:news\u0000${dropped.id}`;
+    const second = mergeSourceItems(company, 'news', '', false, remaining.map((item) => ({ item })), {
+      authors: undefined,
+      channel,
+    }, existing);
+    expect(second.toDelete).toContain(key);
+    expect(second.toPut).toHaveLength(0);
   });
 
-  it('a previously displayed item that no longer verifies is dropped', async () => {
-    const { processFeedItems } = await import('./sync');
+  it('a previously displayed item that no longer verifies is dropped (binary rule)', async () => {
+    const { mergeSourceItems } = await import('./sync');
     const company = {
-      origin: 'http://10.110.147.178:8000',
+      origin,
       channels: [],
       privateFeeds: [],
       prefs: { languages: [], tags: [], loadRemoteMedia: true },
     } as never;
+    const m = await loadAndVerifyMetadata(fetchLike, `${origin}/.well-known/keryx/root.json`, null, null);
+    const auth = extractAuthorization(m.targets);
+    const channel = auth.channels.get('news')!;
+    const item = channelItems('news')[0];
+    const key = `${origin}\u0000public:news\u0000${item.id}`;
     const existing = new Map<string, StoredItem>();
-    const key = 'http://10.110.147.178:8000\u0000public:news\u0000c';
     existing.set(key, {
       id: key,
-      origin: 'http://10.110.147.178:8000',
+      origin,
       channel: 'news',
       feedUrl: '',
       isPrivate: false,
-      item: { id: 'c', title: 'C' },
-      published: '',
+      item,
+      published: item.date_published ?? '',
       receivedAt: 1,
       read: false,
     });
-    // a KNOWN channel key whose signature fails → item rejected (no third state)
-    const targets = loadJson<TargetsDoc>('keryx/targets.json');
-    const newsEntry = Object.entries(targets.signed.delegations!.keys)[0];
-    const known = { keyid: newsEntry[0], pub: hexToBytes(newsEntry[1].keyval.public) };
-    const { outcome, toDelete } = processFeedItems(
+    const tampered = JSON.parse(JSON.stringify(item)) as FeedItem;
+    tampered.title = 'Tampered';
+    tampered.sig = [{ keyid: channel.keys[0].keyid, sig: 'AAAA' }];
+    const { rejected, toDelete } = mergeSourceItems(
       company,
       'news',
       '',
       false,
-      [
-        {
-          id: 'c',
-          title: 'C tampered',
-          _sig: { channel: 'news', signatures: [{ keyid: known.keyid, sig: 'AAAA' }] },
-        },
-      ],
-      [known],
-      undefined,
+      [{ item: tampered }],
+      { authors: undefined, channel },
       existing,
     );
-    expect(outcome.rejected).toBe(1);
+    expect(rejected).toBe(1);
     expect(toDelete).toContain(key);
+  });
+});
+
+describe('channel role loading (spec/repository.md §3)', () => {
+  it('verifies the pinned item index and rejects a version mismatch', async () => {
+    const m = await loadAndVerifyMetadata(fetchLike, `${origin}/.well-known/keryx/root.json`, null, null);
+    const role = await loadChannelRole(fetchLike, m, 'channels.news', false);
+    expect(role.signed._type).toBe('targets');
+    expect(role.signed.delegations?.roles).toHaveLength(0);
+    expect(Object.keys(role.signed.targets).length).toBeGreaterThan(0);
+  });
+
+  it('resolves target file URLs from the repo base', async () => {
+    const m = await loadAndVerifyMetadata(fetchLike, `${origin}/.well-known/keryx/root.json`, null, null);
+    const role = await loadChannelRole(fetchLike, m, 'channels.news', false);
+    const path = Object.keys(role.signed.targets)[0];
+    const info = role.signed.targets[path];
+    expect(targetFileUrl(m.base, path, info, false)).toBe(`${origin}/keryx/${path}`);
   });
 });

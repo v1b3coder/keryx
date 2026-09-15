@@ -2,7 +2,7 @@
  * Sandboxed rich content: DOMPurify-sanitized HTML (no scripts, no forms,
  * no iframes/embeds — the "channel never asks for a password, seed, or code"
  * promise is structural), links intercepted with their real destination
- * domain shown, media hash-verified against `_sig.resources` when present.
+ * domain shown, media hash-verified against `attachments[].sha256` when present.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -63,11 +63,11 @@ export function SanitizedHtml({
     if (!el) return;
     annotateLinks(el);
 
-    // media: verify `_sig.resources` hashes before rendering; everything
-    // else is an ordinary (mutable-by-design) web resource.
+    // media: verify attachment hashes before rendering; everything else is
+    // an ordinary (mutable-by-design) web resource.
     for (const img of Array.from(el.querySelectorAll('img[src]'))) {
       const src = img.getAttribute('src') ?? '';
-      const want = item._sig?.resources?.[src];
+      const want = item.attachments?.find((a) => a.url === src)?.sha256;
       if (want) {
         img.removeAttribute('src');
         void loadImage(src, origin, want).then((objectUrl) => {

@@ -43,6 +43,7 @@ func (a *app) channelAddCmd() *cobra.Command {
 	f.StringVar(&spec.Description, "description", "", "description")
 	f.StringVar(&spec.KeyID, "keyid", "", "existing channel key")
 	f.StringSliceVar(&spec.Authors, "author", nil, "existing author keyids (authored mode)")
+	f.IntVar(&spec.Threshold, "threshold", 1, "authors-role threshold")
 	f.BoolVar(&simple, "simple", false, "simple mode: no authors role")
 	return cmd
 }

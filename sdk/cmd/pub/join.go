@@ -11,6 +11,7 @@ import (
 func (a *app) joinCmd() *cobra.Command {
 	var channels, privateFeeds []string
 	var origin string
+	var allowHTTP bool
 	cmd := &cobra.Command{
 		Use:   "join-url",
 		Short: "Build the join URL (no QR)",
@@ -22,11 +23,11 @@ func (a *app) joinCmd() *cobra.Command {
 				}
 				origin = o
 			}
-			payload, err := join.BuildPayload(channels, privateFeeds)
+			payload, err := join.BuildPayloadOptions(channels, privateFeeds, allowHTTP)
 			if err != nil {
 				return err
 			}
-			url, err := join.JoinURL(origin, payload)
+			url, err := join.JoinURLOptions(origin, payload, allowHTTP)
 			if err != nil {
 				return err
 			}
@@ -41,6 +42,7 @@ func (a *app) joinCmd() *cobra.Command {
 	cmd.Flags().StringVar(&origin, "origin", "", "join origin (default: repo base origin)")
 	cmd.Flags().StringSliceVar(&channels, "channels", nil, "suggested channels")
 	cmd.Flags().StringSliceVar(&privateFeeds, "private-feed", nil, "private capability feed URLs")
+	cmd.Flags().BoolVar(&allowHTTP, "allow-http", false, "allow local-dev HTTP private feeds (dev only)")
 	return cmd
 }
 
@@ -48,6 +50,7 @@ func (a *app) qrCmd() *cobra.Command {
 	var channels, privateFeeds []string
 	var origin, out string
 	var size int
+	var allowHTTP bool
 	cmd := &cobra.Command{
 		Use:   "qr",
 		Short: "Render the join URL as a PNG QR code",
@@ -62,11 +65,11 @@ func (a *app) qrCmd() *cobra.Command {
 				}
 				origin = o
 			}
-			payload, err := join.BuildPayload(channels, privateFeeds)
+			payload, err := join.BuildPayloadOptions(channels, privateFeeds, allowHTTP)
 			if err != nil {
 				return err
 			}
-			url, err := join.JoinURL(origin, payload)
+			url, err := join.JoinURLOptions(origin, payload, allowHTTP)
 			if err != nil {
 				return err
 			}
@@ -87,5 +90,6 @@ func (a *app) qrCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&privateFeeds, "private-feed", nil, "private capability feed URLs")
 	cmd.Flags().StringVar(&out, "out", "qr.png", "output PNG")
 	cmd.Flags().IntVar(&size, "size", 512, "PNG pixel size")
+	cmd.Flags().BoolVar(&allowHTTP, "allow-http", false, "allow local-dev HTTP private feeds (dev only)")
 	return cmd
 }

@@ -1,10 +1,10 @@
 /**
  * Sync engine (spec/clients.md §1): TUF metadata chain (root anchor →
- * timestamp → snapshot → targets) → followed channels' delegated role
- * metadata (`channels.<name>.json`) → hash-pinned public feed target files →
- * private capability feeds (whole-document verification) → verify every item
- * → store verified only. Anything that fails verification is never displayed
- * (binary rule); transport problems keep the cache and retry.
+ * timestamp → snapshot → targets) → followed channels' delegated role metadata
+ * (`channels.<name>.json`, the item index) → hash-pinned per-item TUF target
+ * files → private capability feeds (whole-document verification) → verify every
+ * item → store verified only. Anything that fails verification is never
+ * displayed (binary rule); transport problems keep the cache and retry.
  */
 
 import {
@@ -20,19 +20,18 @@ import {
   type SeenVersions,
   type PrivateFeedPattern,
   type AuthorizedKey,
-  type EditorAuth,
+  type KeySet,
 } from './tuf';
 import {
   verifyItemSignatures,
-  verifyChannelCrossCheck,
-  isWithdrawn,
+  verifyImage,
+  itemIdFromPath,
   signedContentKey,
-  type FeedDoc,
   type FeedItem,
 } from './item';
 import { verifyPrivateFeedDocument, matchesPattern, PRIVATE_FEED_MAX_BYTES } from './private';
 import { hexToBytes } from './bytes';
-import { isDebugBuild } from './build';
+import { isLocalDevOrigin, linkedUrlAllowed } from './urlpolicy';
 import {
   type CompanyRecord,
   type ChannelState,
@@ -50,7 +49,7 @@ export interface SyncOutcome {
   errors: string[];
   /** verified items to persist (added + content-updated) */
   toPut: StoredItem[];
-  /** cached items dropped: withdrawn or no longer verifying (binary rule) */
+  /** cached items dropped: unpublished or no longer verifying (binary rule) */
   toDelete: string[];
 }
 
@@ -58,59 +57,35 @@ function asRecord(v: unknown): Record<string, unknown> {
   return typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : {};
 }
 
-/** Channel display metadata from the role metadata's target custom (spec/repository.md §3). */
+/** Channel display metadata from master-signed `custom.channels` (spec/repository.md §2). */
 export function channelDisplay(
-  role: TargetsDoc | null,
+  targets: TargetsDoc,
   fallbackName: string,
 ): { displayName: string; description?: string } {
-  const first = Object.values(role?.signed.targets ?? {})[0];
-  const custom = asRecord(first?.custom);
+  const entry = targets.signed.custom?.channels?.[fallbackName];
   return {
-    displayName: typeof custom.display_name === 'string' ? custom.display_name : fallbackName,
-    description: typeof custom.description === 'string' ? custom.description : undefined,
+    displayName: typeof entry?.display_name === 'string' ? entry.display_name : fallbackName,
+    description: typeof entry?.description === 'string' ? entry.description : undefined,
   };
 }
 
 /** All public channel delegations (role name `channels.<name>`, spec/repository.md §2). */
 function publicChannelRoles(targets: TargetsDoc): { roleName: string; channel: string }[] {
   return (targets.signed.delegations?.roles ?? [])
-    .filter((r) => r.name.startsWith('channels.'))
+    .filter((r) => r.name.startsWith('channels.') && !r.name.endsWith('.authors'))
     .map((r) => ({ roleName: r.name, channel: r.name.slice('channels.'.length) }));
 }
 
 /**
  * Is this a local-dev origin? Loopback, or a private LAN address (RFC 1918).
  * The demo artifact is served over plain HTTP on a private network; the
- * protocol mandates HTTPS for private feeds, so this is a documented
- * dev-only exception — production origins stay HTTPS-only.
+ * protocol mandates HTTPS, so this is a documented dev-only exception.
  */
-export function isLocalDevOrigin(origin: string): boolean {
-  try {
-    const u = new URL(origin);
-    const host = u.hostname;
-    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
-    const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-    if (!m) return false;
-    const [a, b] = [Number(m[1]), Number(m[2])];
-    if (a === 10) return true;
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
-    return false;
-  } catch {
-    return false;
-  }
-}
+export { isLocalDevOrigin };
 
 /** Private-feed transport rule (spec/feeds.md §3): HTTPS only — HTTP allowed on local-dev origins in debug builds only. */
 export function privateFeedUrlAllowed(url: string): boolean {
-  try {
-    const u = new URL(url);
-    if (u.protocol === 'https:') return true;
-    if (u.protocol === 'http:' && isLocalDevOrigin(u.origin) && isDebugBuild()) return true;
-    return false;
-  } catch {
-    return false;
-  }
+  return linkedUrlAllowed(url);
 }
 
 function entryKeysOf(entry: PrivateFeedPattern): AuthorizedKey[] {
@@ -123,78 +98,95 @@ function entryKeysOf(entry: PrivateFeedPattern): AuthorizedKey[] {
   return out;
 }
 
-interface FeedOutcome {
-  newItems: number;
-  rejected: number;
+/** The key set authorizing an item in a channel (authors role or channel role). */
+function authorizingKeys(
+  targets: TargetsDoc,
+  channel: string,
+): { authors?: KeySet; channel: KeySet } {
+  const auth = extractAuthorization(targets);
+  return { authors: auth.authors.get(channel), channel: auth.channels.get(channel)! };
 }
 
-/**
- * Verify and merge feed items for one source (public channel or private
- * capability feed). Items that fail verification are rejected — never
- * displayed. Withdrawn items are hidden entirely (not counted as unread).
- * Returns StoredItem records to persist (added + content-updated).
- */
-export function processFeedItems(
+function toStored(
   company: CompanyRecord,
   channel: string,
   feedUrl: string,
   isPrivate: boolean,
-  feedItems: FeedItem[],
-  channelKeys: AuthorizedKey[],
-  editor: EditorAuth | undefined,
+  item: FeedItem,
+  hash: string | undefined,
+  prev: StoredItem | undefined,
+): StoredItem {
+  const feedKey = isPrivate ? privateFeedKey(feedUrl) : publicFeedKey(channel);
+  return {
+    id: itemKey(company.origin, feedKey, item.id!),
+    origin: company.origin,
+    channel,
+    feedUrl,
+    isPrivate,
+    item,
+    published: item.date_published ?? '',
+    hash,
+    receivedAt: prev?.receivedAt ?? Date.now(),
+    read: prev?.read ?? false,
+    updated: prev ? signedContentKey(item) !== signedContentKey(prev.item) : false,
+  };
+}
+
+/**
+ * Merge the fetched item set of one source. The channel role metadata IS the
+ * index (spec/feeds.md §1.3): an item absent from it is unpublished and is
+ * dropped from display and cache. Items that fail verification are dropped too,
+ * including ones previously displayed (binary rule).
+ */
+export function mergeSourceItems(
+  company: CompanyRecord,
+  channel: string,
+  feedUrl: string,
+  isPrivate: boolean,
+  items: { item: FeedItem; hash?: string }[],
+  authorizing: { authors?: KeySet; channel: KeySet },
   existing: Map<string, StoredItem>,
-): { outcome: FeedOutcome; toPut: StoredItem[]; toDelete: string[] } {
+): { newItems: number; rejected: number; toPut: StoredItem[]; toDelete: string[]; seen: Set<string> } {
   const feedKey = isPrivate ? privateFeedKey(feedUrl) : publicFeedKey(channel);
   let newItems = 0;
   let rejected = 0;
   const toPut: StoredItem[] = [];
   const toDelete: string[] = [];
   const seen = new Set<string>();
-  feedItems.forEach((item, feedIndex) => {
-    if (!item.id) return; // id is the dedup key; items without it are ignored
+  for (const { item, hash } of items) {
+    if (!item.id) continue;
     const key = itemKey(company.origin, feedKey, item.id);
     seen.add(key);
-    if (isWithdrawn(item)) {
-      // withdrawn (spec/feeds.md §1.2): hidden entirely — removed from display
-      if (existing.has(key)) {
-        existing.delete(key);
-        toDelete.push(key);
-      }
-      return;
-    }
     try {
-      verifyChannelCrossCheck(item, channel);
-      verifyItemSignatures(item, editor, channelKeys);
+      verifyImage(item);
+      verifyItemSignatures(item, authorizing.authors, authorizing.channel);
     } catch {
-      // binary rule: a failing item is dropped, including one previously displayed
       rejected++;
       if (existing.has(key)) {
         existing.delete(key);
         toDelete.push(key);
       }
-      return;
+      continue;
     }
     const prev = existing.get(key);
-    const published = item.date_published ?? '';
-    const stored: StoredItem = {
-      id: key,
-      origin: company.origin,
-      channel,
-      feedUrl,
-      isPrivate,
-      item,
-      published,
-      feedIndex,
-      receivedAt: prev?.receivedAt ?? Date.now(),
-      read: prev?.read ?? false,
-      updated: prev ? signedContentKey(item) !== signedContentKey(prev.item) : false,
-    };
+    if (prev && prev.hash === hash && signedContentKey(prev.item) === signedContentKey(item)) {
+      continue; // unchanged and already verified
+    }
     if (!prev) newItems++;
+    const stored = toStored(company, channel, feedUrl, isPrivate, item, hash, prev);
     existing.set(key, stored);
     toPut.push(stored);
-  });
-  void seen;
-  return { outcome: { newItems, rejected }, toPut, toDelete };
+  }
+  // absence from the index = unpublished: drop cached items of this source
+  for (const [key, cached] of existing) {
+    if (cached.origin !== company.origin || cached.isPrivate !== isPrivate) continue;
+    if (isPrivate ? cached.feedUrl !== feedUrl : cached.channel !== channel) continue;
+    if (!seen.has(key)) {
+      existing.delete(key);
+      toDelete.push(key);
+    }
+  }
+  return { newItems, rejected, toPut, toDelete, seen };
 }
 
 export async function syncCompany(
@@ -250,7 +242,7 @@ export async function syncCompany(
   if (companyName !== undefined && companyName !== company.identity.companyName) rebrandPending = true;
   if (logo !== undefined && logo !== company.identity.logo) logoChangePending = true;
 
-  // --- 3. channel role metadata (verified; pins feeds + display metadata) --
+  // --- 3. channel role metadata (verified; pins the item index) -----------
   const roles: Map<string, TargetsDoc> = new Map();
   for (const { roleName, channel } of publicChannelRoles(targets)) {
     try {
@@ -272,7 +264,7 @@ export async function syncCompany(
   // new channels surface as "new"; existing keep their followed state
   const channels: ChannelState[] = publicChannelRoles(targets).map(({ channel }) => {
     const prev = company.channels.find((c) => c.name === channel);
-    const display = channelDisplay(roles.get(`channels.${channel}`) ?? null, channel);
+    const display = channelDisplay(targets, channel);
     return prev
       ? { ...prev, ...display, isNew: false }
       : { ...display, name: channel, followed: false, isNew: true };
@@ -324,54 +316,61 @@ export async function syncCompany(
   const toPut: StoredItem[] = [];
   const toDelete: string[] = [];
 
-  // --- 4. public feeds: hash-pinned targets from each followed channel -----
+  // --- 4. public channels: one hash-pinned item file per TUF target ------
   const followed = new Set(updated.channels.filter((c) => c.followed).map((c) => c.name));
   const base = meta.base;
   for (const { roleName, channel } of publicChannelRoles(targets)) {
     if (!followed.has(channel) || !roles.has(roleName)) continue;
     const channelState = updated.channels.find((c) => c.name === channel);
-    if (channelState?.closed) continue; // feed finished — stop syncing, keep cache
+    if (channelState?.closed) continue;
     const role = roles.get(roleName)!;
-    const path = `channels/${channel}/feed.json`;
-    const info = role.signed.targets[path];
-    if (!info) {
-      errors.push(`channel ${channel}: role metadata does not pin ${path}`);
-      continue;
+    const authorizing = authorizingKeys(targets, channel);
+    const feedKey = publicFeedKey(channel);
+    const paths = Object.keys(role.signed.targets);
+    const present = new Set<string>();
+    for (const path of paths) {
+      const info = role.signed.targets[path];
+      if (!info) continue;
+      const id = itemIdFromPath(path);
+      const key = itemKey(updated.origin, feedKey, id);
+      present.add(key);
+      const prev = existing.get(key);
+      const wantHash = info.hashes?.sha256;
+      if (prev && wantHash && prev.hash === wantHash) continue; // unchanged, already verified
+      const url = targetFileUrl(base, path, info, consistent);
+      try {
+        const res = await fetchFn(url, { cache: 'no-cache' });
+        if (!res.ok) {
+          errors.push(`item ${path}: HTTP ${res.status}`);
+          continue;
+        }
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        verifyTargetBytes(bytes, info, path); // length + sha256 pinning
+        const item = JSON.parse(new TextDecoder().decode(bytes)) as FeedItem;
+        if (item.id !== id) {
+          throw new ProtocolError(`item ${path}: id "${item.id}" != path segment "${id}"`);
+        }
+        verifyImage(item);
+        verifyItemSignatures(item, authorizing.authors, authorizing.channel);
+        const stored = toStored(updated, channel, '', false, item, wantHash, prev);
+        if (!prev) newItems++;
+        existing.set(key, stored);
+        toPut.push(stored);
+      } catch (err) {
+        if (err instanceof ProtocolError) {
+          rejected++;
+          errors.push(`channel ${channel}: ${err.message}`);
+        } else {
+          errors.push(`channel ${channel}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
     }
-    const url = targetFileUrl(base, path, info, consistent);
-    try {
-      const res = await fetchFn(url, { cache: 'no-cache' });
-      if (!res.ok) {
-        errors.push(`feed ${url}: HTTP ${res.status}`);
-        continue;
-      }
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      verifyTargetBytes(bytes, info, path); // length + sha256 pinning
-      const doc = JSON.parse(new TextDecoder().decode(bytes)) as FeedDoc;
-      const { outcome, toPut: puts, toDelete: dels } = processFeedItems(
-        updated,
-        channel,
-        '',
-        false,
-        doc.items ?? [],
-        auth.channels.get(channel)?.keys ?? [],
-        auth.editor.get(channel),
-        existing,
-      );
-      newItems += outcome.newItems;
-      rejected += outcome.rejected;
-      toPut.push(...puts);
-      toDelete.push(...dels);
-      if (doc.expired === true) {
-        const st = updated.channels.find((c) => c.name === channel);
-        if (st) st.closed = true;
-      }
-    } catch (err) {
-      if (err instanceof ProtocolError) {
-        rejected++;
-        errors.push(`channel ${channel}: ${err.message}`);
-      } else {
-        errors.push(`channel ${channel}: ${err instanceof Error ? err.message : String(err)}`);
+    // absence = unpublished: drop cached items no longer in the index
+    for (const [key, cached] of existing) {
+      if (cached.origin !== updated.origin || cached.channel !== channel || cached.isPrivate) continue;
+      if (!present.has(key)) {
+        existing.delete(key);
+        toDelete.push(key);
       }
     }
   }
@@ -405,31 +404,29 @@ export async function syncCompany(
         errors.push(`delivery feed too large (${bytes.length} bytes), aborted`);
         continue;
       }
-      const doc = JSON.parse(new TextDecoder().decode(bytes)) as FeedDoc;
-      const verification = verifyPrivateFeedDocument(
-        doc as never,
-        entry,
-        sub.url,
-        sub.version,
-      );
+      const doc = JSON.parse(new TextDecoder().decode(bytes)) as never;
+      const verification = verifyPrivateFeedDocument(doc, entry, sub.url, sub.version);
       sub.version = verification.version;
-      sub.expires =
-        (doc._sig as { expires?: string } | undefined)?.expires ?? sub.expires;
+      const docExpires = (doc as { expires?: string }).expires;
+      if (docExpires) sub.expires = docExpires;
       if (verification.closed) sub.closed = true;
-      const { outcome, toPut: puts, toDelete: dels } = processFeedItems(
+      const privateItems = ((doc as { items?: FeedItem[] }).items ?? []).map((item) => ({
+        item,
+        hash: undefined,
+      }));
+      const merged = mergeSourceItems(
         updated,
         sub.channel,
         sub.url,
         true,
-        doc.items ?? [],
-        entryKeysOf(entry),
-        undefined,
+        privateItems,
+        { authors: undefined, channel: { keys: entryKeysOf(entry), threshold: Math.max(1, entry.threshold || 1) } },
         existing,
       );
-      newItems += outcome.newItems;
-      rejected += outcome.rejected;
-      toPut.push(...puts);
-      toDelete.push(...dels);
+      newItems += merged.newItems;
+      rejected += merged.rejected;
+      toPut.push(...merged.toPut);
+      toDelete.push(...merged.toDelete);
     } catch (err) {
       if (err instanceof ProtocolError) {
         rejected++;

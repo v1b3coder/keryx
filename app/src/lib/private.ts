@@ -1,14 +1,14 @@
 /**
  * Private (per-order) capability feed verification (spec/feeds.md §3).
  *
- * A private feed is a single JSON Feed document signed as a whole: Ed25519
- * over the JCS bytes of the document with the top-level `_sig.signatures`
- * field removed. App enforcement sequence: size limit → authorized pattern
- * → whole-document signature + `_sig.channel` + `_sig.url` → `_sig.version`
- * monotonic → `_sig.expires` (stale = keep cache + retry, never close).
+ * A private feed is a single signed document (NOT a JSON Feed document and NOT
+ * a TUF target): Ed25519 over the OLPC canonical JSON of the document with
+ * its top-level `sig` field removed. App enforcement sequence: size limit →
+ * authorized pattern → whole-document signature + `channel` + `url` →
+ * `version` monotonic → `expires` (stale = keep cache + retry, never close).
  */
 
-import canonicalize from 'canonicalize';
+import { olpcCanonical } from './olpc';
 import { base64urlToBytes, hexToBytes } from './bytes';
 import { ed25519Verify } from './ed';
 import { patternMatches } from './pattern';
@@ -33,19 +33,21 @@ function entryKeys(entry: PrivateFeedPattern): AuthorizedKey[] {
   return out;
 }
 
+export interface PrivateSigEntry {
+  keyid: string;
+  sig: string;
+  [extra: string]: unknown;
+}
+
 export interface PrivateFeedDoc {
-  version?: string;
+  v?: number;
+  channel?: string;
+  url?: string;
+  version?: number;
+  expires?: string;
   expired?: boolean;
   items?: unknown[];
-  _sig?: {
-    about?: string;
-    channel?: string;
-    url?: string;
-    version?: number;
-    expires?: string;
-    signatures?: { keyid: string; sig: string; [extra: string]: unknown }[];
-    [extra: string]: unknown;
-  };
+  sig?: PrivateSigEntry[];
   [extra: string]: unknown;
 }
 
@@ -68,25 +70,24 @@ export function verifyPrivateFeedDocument(
   fetchedUrl: string,
   lastVersion: number | undefined,
 ): PrivateVerification {
-  const sig = doc._sig;
-  if (!sig) throw new ProtocolError('private feed: missing top-level _sig');
-  if (sig.channel !== entry.channel) {
-    throw new ProtocolError(`private feed: _sig.channel "${sig.channel}" != pattern entry "${entry.channel}"`);
+  if (doc.v !== 1) throw new ProtocolError(`private feed: unknown schema version ${doc.v}`);
+  if (doc.channel !== entry.channel) {
+    throw new ProtocolError(`private feed: channel "${doc.channel}" != pattern entry "${entry.channel}"`);
   }
-  if (sig.url !== fetchedUrl) {
-    throw new ProtocolError(`private feed: _sig.url "${sig.url}" != fetched URL "${fetchedUrl}"`);
+  if (doc.url !== fetchedUrl) {
+    throw new ProtocolError(`private feed: url "${doc.url}" != fetched URL "${fetchedUrl}"`);
   }
-  const version = sig.version ?? 0;
+  const version = doc.version ?? 0;
   if (lastVersion !== undefined && version < lastVersion) {
-    throw new ProtocolError(`private feed: _sig.version ${version} older than last seen ${lastVersion} (rollback?)`);
+    throw new ProtocolError(`private feed: version ${version} older than last seen ${lastVersion} (rollback?)`);
   }
-  // whole-document signature: JCS of the doc with top-level _sig.signatures removed
+  // whole-document signature: OLPC of the doc with the top-level `sig` field removed
   const clone = JSON.parse(JSON.stringify(doc)) as PrivateFeedDoc;
-  if (clone._sig) delete clone._sig.signatures;
-  const canonical = canonicalize(clone);
-  if (canonical === undefined) throw new ProtocolError('private feed: not JCS-serializable');
+  delete clone.sig;
+  const canonical = olpcCanonical(clone);
+  if (canonical === undefined) throw new ProtocolError('private feed: not OLPC-serializable');
   const canonicalBytes = new TextEncoder().encode(canonical);
-  const sigs = sig.signatures ?? [];
+  const sigs = doc.sig ?? [];
   let valid = 0;
   const keys = entryKeys(entry);
   for (const s of sigs) {

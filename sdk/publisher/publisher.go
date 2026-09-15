@@ -356,7 +356,8 @@ type ChannelSpec struct {
 	DisplayName string
 	Description string
 	Simple      bool
-	KeyID       string // existing channel key; generated when empty
+	Threshold   int      // authors-role threshold (default 1)
+	KeyID       string   // existing channel key; generated when empty
 	Authors     []string // existing author keyids; a key is generated when empty
 }
 
@@ -391,7 +392,11 @@ func (p *Publisher) ChannelAdd(ctx context.Context, spec ChannelSpec) (Result, e
 			return Result{}, err
 		}
 		authRole := roleName + ".authors"
-		if err := addDelegation(st.Targets, authRole, tufKeys(authorKeys), 1, []string{"channels/" + spec.Name + "/*"}, false); err != nil {
+		threshold := spec.Threshold
+		if threshold < 1 {
+			threshold = 1
+		}
+		if err := addDelegation(st.Targets, authRole, tufKeys(authorKeys), threshold, []string{"channels/" + spec.Name + "/*"}, false); err != nil {
 			return Result{}, err
 		}
 		authMeta := metadata.Targets(p.now().Add(p.exp().Authors))

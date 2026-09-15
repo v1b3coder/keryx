@@ -1,8 +1,8 @@
 /**
- * Media loading with integrity checks: `_sig.resources` hashes (spec/feeds.md
- * §1.2) and `custom.logo_sha256` (spec/repository.md §2). Bytes are cached
- * in IndexedDB; a mismatch makes the resource unavailable (placeholder) —
- * the item itself stays valid.
+ * Media loading with integrity checks: `image_sha256` / `attachments[].sha256`
+ * (spec/feeds.md §1.1) and `custom.logo_sha256` (spec/repository.md §2).
+ * Bytes are cached in IndexedDB; a mismatch makes the resource unavailable
+ * (placeholder) — the item itself stays valid.
  */
 
 import { getMedia, putMedia } from './store';

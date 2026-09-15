@@ -8,7 +8,7 @@ import type { RootDoc, TargetsDoc, SeenVersions } from './tuf';
 import type { FeedItem } from './item';
 
 export interface ChannelState {
-  /** bare channel name (`_sig.channel`, path segment) */
+  /** bare channel name (the item target path segment) */
   name: string;
   displayName: string;
   description?: string;
@@ -26,9 +26,9 @@ export interface PrivateFeedSub {
   channel: string;
   displayName?: string;
   purpose?: string;
-  /** last seen `_sig.version` (anti-rollback via version memory) */
+  /** last seen document `version` (anti-rollback via version memory) */
   version?: number;
-  /** `_sig.expires` — the order window end (anti-freeze) */
+  /** document `expires` — the order window end (anti-freeze) */
   expires?: string;
   /** expired/404/410/pattern removed → stop polling, keep cached items */
   closed?: boolean;
@@ -72,6 +72,8 @@ export interface StoredItem {
   isPrivate: boolean;
   item: FeedItem;
   published: string;
+  /** TUF target sha256 of the signed item bytes (public channels) */
+  hash?: string;
   /** position in the feed document (ordering fallback when date_published is absent) */
   feedIndex?: number;
   receivedAt: number;

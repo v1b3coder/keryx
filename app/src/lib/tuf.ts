@@ -6,9 +6,9 @@
  * (`channels.<name>.json`) → hash-pinned feed target files.
  *
  * The metadata chain is verified with OLPC canonical JSON (the TUF library
- * convention, spec/core.md §1); feed items use JCS (item.ts). The standard
- * TUF 1.0 client workflow is implemented in-repo because the browser has no
- * TUF client (tuf-js is Node-only).
+ * convention, spec/core.md §1); feed items use the same canonicalization
+ * (item.ts). The standard TUF 1.0 client workflow is implemented in-repo
+ * because the browser has no TUF client (tuf-js is Node-only).
  */
 
 import { olpcCanonical } from './olpc';
@@ -111,7 +111,7 @@ export interface TargetsSigned {
     company_name?: string;
     logo?: string;
     logo_sha256?: string;
-    editor_mode?: Record<string, EditorModeEntry>;
+    channels?: Record<string, { display_name?: string; description?: string }>;
     private_feed_patterns?: PrivateFeedPattern[];
   };
 }
@@ -119,12 +119,6 @@ export interface TargetsSigned {
 export interface TargetsDoc {
   signatures: TufSignature[];
   signed: TargetsSigned;
-}
-
-export interface EditorModeEntry {
-  keys: Record<string, TufKey>;
-  keyids: string[];
-  threshold: number;
 }
 
 export interface PrivateFeedPattern {
@@ -453,9 +447,11 @@ export async function loadAndVerifyMetadata(
     rootRotated = true;
   }
 
-  // repo base: master-signed root.json custom.repo_base (single URL)
-  const base = root.signed.custom?.repo_base;
+  // repo base: master-signed root.json custom.repo_base (single URL,
+  // trailing slash optional per spec/repository.md §1)
+  let base = root.signed.custom?.repo_base;
   if (!base) throw new ProtocolError('root.json: custom.repo_base missing');
+  if (!base.endsWith('/')) base += '/';
   // the client MUST understand the mode flag so a lite repo never breaks a
   // full-mode client (spec/clients.md §3): lite verification is a Phase 2
   // path — refuse gracefully (cached content kept, not suspension).
@@ -611,21 +607,23 @@ export interface AuthorizedKey {
   pub: Uint8Array;
 }
 
-export interface ChannelAuth {
-  /** the bare channel name (from the role name `channels.<name>`) */
-  channel: string;
-  role: DelegatedRole;
-  keys: AuthorizedKey[];
-}
-
-export interface EditorAuth {
+/** A key set with its threshold (channel role or authors role). */
+export interface KeySet {
   keys: AuthorizedKey[];
   threshold: number;
 }
 
+/** A public channel role and its authorization. */
+export interface ChannelAuth extends KeySet {
+  /** the bare channel name (from the role name `channels.<name>`) */
+  channel: string;
+  role: DelegatedRole;
+}
+
 export interface Authorization {
   channels: Map<string, ChannelAuth>;
-  editor: Map<string, EditorAuth>;
+  /** authors roles, keyed by bare channel name (spec/feeds.md §2) */
+  authors: Map<string, KeySet>;
   privatePatterns: PrivateFeedPattern[];
 }
 
@@ -635,13 +633,29 @@ const CHANNEL_RE = /^[a-z0-9-_]+$/;
  * Is this delegation a public channel role? Per spec/repository.md §2 the
  * role name MUST be `channels.<channel>` and the app MUST ignore roles not
  * beginning with `channels.` and roles whose paths fall outside their own
- * `channels/<channel>/*` namespace.
+ * `channels/<channel>/*` namespace. `channels.<channel>.authors` is NOT a
+ * channel — it is an authors role.
  */
 export function channelFromRole(role: DelegatedRole): string | null {
   if (!role.name.startsWith('channels.')) return null;
   const channel = role.name.slice('channels.'.length);
+  if (channel.endsWith('.authors')) return null;
   if (!CHANNEL_RE.test(channel)) return null;
   // paths must stay inside the role's own channels/<name>/* namespace
+  const ns = `channels/${channel}/*`;
+  const paths = role.paths ?? [];
+  if (paths.length === 0) return null;
+  if (!paths.every((p) => pathPatternMatches(ns, p))) return null;
+  return channel;
+}
+
+/** The bare channel of an authors role (`channels.<channel>.authors`), or null. */
+export function authorsChannelFromRole(role: DelegatedRole): string | null {
+  if (!role.name.startsWith('channels.')) return null;
+  const rest = role.name.slice('channels.'.length);
+  if (!rest.endsWith('.authors')) return null;
+  const channel = rest.slice(0, -'.authors'.length);
+  if (!CHANNEL_RE.test(channel)) return null;
   const ns = `channels/${channel}/*`;
   const paths = role.paths ?? [];
   if (paths.length === 0) return null;
@@ -662,30 +676,40 @@ function resolveKeys(keys: Record<string, TufKey>, keyids: string[], where: stri
   return out;
 }
 
+/**
+ * Read the authorization model from verified targets.json
+ * (spec/repository.md §2, spec/feeds.md §2–§3): public channel roles,
+ * the optional authors role per channel, and private-feed patterns.
+ */
 export function extractAuthorization(targets: TargetsDoc): Authorization {
-  const auth: Authorization = { channels: new Map(), editor: new Map(), privatePatterns: [] };
+  const auth: Authorization = { channels: new Map(), authors: new Map(), privatePatterns: [] };
   const dlg = targets.signed.delegations;
   if (dlg) {
     checkKeyids(dlg.keys, 'targets.json delegations');
     for (const role of dlg.roles) {
       const channel = channelFromRole(role);
-      if (!channel) continue; // not a channel — ignored, namespace stays open
-      const keys = resolveKeys(dlg.keys, role.keyids, `delegation ${role.name}`);
-      auth.channels.set(channel, { channel, role, keys });
-    }
-  }
-  for (const [channel, entry] of Object.entries(targets.signed.custom?.editor_mode ?? {})) {
-    if (!entry) continue;
-    checkKeyids(entry.keys, `editor_mode.${channel}`);
-    const keys = resolveKeys(entry.keys, entry.keyids, `editor_mode.${channel}`);
-    // key separation (spec/feeds.md §2): editor keyids MUST NOT be the channel role keyid
-    const roleKey = auth.channels.get(channel)?.role.keyids ?? [];
-    for (const kid of entry.keyids) {
-      if (roleKey.includes(kid)) {
-        throw new ProtocolError(`editor_mode.${channel}: key ${kid} is also the channel role key`);
+      if (channel) {
+        auth.channels.set(channel, {
+          channel,
+          role,
+          keys: resolveKeys(dlg.keys, role.keyids, `delegation ${role.name}`),
+          threshold: Math.max(1, role.threshold || 1),
+        });
+        continue;
       }
+      const authorsChannel = authorsChannelFromRole(role);
+      if (!authorsChannel) continue; // not a channel or authors role — ignored
+      const keys = resolveKeys(dlg.keys, role.keyids, `delegation ${role.name}`);
+      // key separation (spec/feeds.md §2): authors keyids MUST NOT intersect
+      // the channel role keyids.
+      const chRole = auth.channels.get(authorsChannel)?.role.keyids ?? [];
+      for (const kid of role.keyids) {
+        if (chRole.includes(kid)) {
+          throw new ProtocolError(`authors role ${role.name}: key ${kid} is also the channel role key`);
+        }
+      }
+      auth.authors.set(authorsChannel, { keys, threshold: Math.max(1, role.threshold || 1) });
     }
-    auth.editor.set(channel, { keys, threshold: Math.max(1, entry.threshold || 1) });
   }
   for (const entry of targets.signed.custom?.private_feed_patterns ?? []) {
     if (!entry) continue;

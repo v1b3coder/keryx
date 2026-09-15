@@ -95,7 +95,7 @@ export async function buildPairingOffer(
   const logo = typeof custom?.logo === 'string' ? custom.logo : undefined;
 
   const offerChannels = payload.channels.map((name) => {
-    const display = channelDisplay(roles.get(`channels.${name}`) ?? null, name);
+    const display = channelDisplay(meta.targets, name);
     return {
       name,
       displayName: display.displayName,
@@ -106,7 +106,7 @@ export async function buildPairingOffer(
   // every channel the publisher offers, even if not suggested in the QR
   for (const name of auth.channels.keys()) {
     if (payload.channels.includes(name)) continue;
-    const display = channelDisplay(roles.get(`channels.${name}`) ?? null, name);
+    const display = channelDisplay(meta.targets, name);
     offerChannels.push({ name, displayName: display.displayName, description: display.description, suggested: false });
   }
 

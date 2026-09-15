@@ -1,17 +1,19 @@
 /**
  * Feed item verification (spec/feeds.md §1.2) and update semantics.
  *
- * An item is canonicalized with JCS (RFC 8785) with its `_sig.signatures`
- * field removed, then signed with Ed25519 (base64url, no padding). In
- * editor mode the editor signatures are load-bearing (threshold); in
- * default mode signatures are attribution-only (unknown keys ignored,
- * known key with a failing signature → item rejected — no third state).
+ * An item is canonicalized with OLPC (securesystemslib canonical JSON) with
+ * its `sig` field removed — the same canonicalization as TUF metadata — then
+ * signed with Ed25519 (base64url, no padding). In an authored channel the
+ * authors-role signatures are load-bearing (threshold); in simple mode the
+ * channel role keys are. Unknown keyids are ignored (attribution only); a known
+ * keyid whose signature fails rejects the item — there is no third state.
  */
 
-import canonicalize from 'canonicalize';
+import { olpcCanonical } from './olpc';
 import { base64urlToBytes, sha256Hex } from './bytes';
 import { ed25519Verify } from './ed';
-import { EditorAuth, ProtocolError, AuthorizedKey } from './tuf';
+import { linkedUrlAllowed } from './urlpolicy';
+import { ProtocolError, AuthorizedKey } from './tuf';
 
 export interface ItemSigEntry {
   keyid: string;
@@ -19,66 +21,52 @@ export interface ItemSigEntry {
   [extra: string]: unknown;
 }
 
-export interface ItemSig {
-  channel?: string;
-  withdrawn?: boolean;
-  resources?: Record<string, string>;
-  signatures?: ItemSigEntry[];
+export interface Attachment {
+  name?: string;
+  url: string;
+  mime_type?: string;
+  size_in_bytes?: number;
+  sha256?: string;
   [extra: string]: unknown;
 }
 
-/** A JSON Feed item with the `_sig` extension (unknown fields preserved). */
+/** A public channel item (spec/feeds.md §1.1); unknown fields preserved. */
 export interface FeedItem {
   id?: string;
   title?: string;
   content_html?: string;
-  content_text?: string;
-  summary?: string;
   image?: string;
-  url?: string;
+  image_sha256?: string;
   date_published?: string;
   date_modified?: string;
   tags?: string[];
   language?: string;
-  authors?: { name?: string; url?: string }[];
-  attachments?: { url?: string; mime_type?: string; size_in_bytes?: number; title?: string }[];
-  _sig?: ItemSig;
+  attachments?: Attachment[];
+  sig?: ItemSigEntry[];
   [extra: string]: unknown;
 }
 
-export interface FeedDoc {
-  version?: string;
-  title?: string;
-  feed_url?: string;
-  description?: string;
-  icon?: string;
-  favicon?: string;
-  language?: string;
-  expired?: boolean;
-  items: FeedItem[];
-  _sig?: { about?: string; [extra: string]: unknown };
-  [extra: string]: unknown;
+/** One authorizing key set (channel role or authors role). */
+export interface KeySet {
+  keys: AuthorizedKey[];
+  threshold: number;
 }
 
 /**
- * JCS (RFC 8785) canonical bytes of the item with `_sig.signatures`
- * removed — exactly what the publisher signed.
+ * OLPC canonical bytes of the item with its `sig` field removed — exactly
+ * what the publisher signed (spec/feeds.md §1.2).
  */
 export function canonicalItemBytes(item: FeedItem): Uint8Array {
   const clone = JSON.parse(JSON.stringify(item)) as FeedItem;
-  if (clone._sig) delete clone._sig.signatures;
-  const canonical = canonicalize(clone);
-  if (canonical === undefined) throw new ProtocolError('item: not JCS-serializable');
+  delete clone.sig;
+  const canonical = olpcCanonical(clone);
+  if (canonical === undefined) throw new ProtocolError('item: not OLPC-serializable');
   return new TextEncoder().encode(canonical);
 }
 
-/** Content identity for update detection: JCS of the signed item (signature-only changes are not updates). */
+/** Content identity for update detection: OLPC of the signed item (signature-only changes are not updates). */
 export function signedContentKey(item: FeedItem): string {
   return sha256Hex(canonicalItemBytes(item));
-}
-
-export function isWithdrawn(item: FeedItem): boolean {
-  return item._sig?.withdrawn === true;
 }
 
 function tryVerify(entry: ItemSigEntry, keys: AuthorizedKey[], canonical: Uint8Array): boolean {
@@ -92,67 +80,95 @@ function tryVerify(entry: ItemSigEntry, keys: AuthorizedKey[], canonical: Uint8A
 }
 
 /**
- * Verify one item's signatures. `editor` is the editor-mode entry for the
- * channel (undefined = default mode). `channelKeys` are the channel role
- * keys (known keys — a failing signature by one of them rejects the item in
- * both modes).
+ * Verify one item's signatures (spec/feeds.md §1.2). `authors` is the
+ * authors-role key set (authored channels, the default); `channel` is the
+ * channel role key set (simple mode). Entries by unknown keys are ignored;
+ * a known keyid whose signature fails rejects the item in both modes.
  */
 export function verifyItemSignatures(
   item: FeedItem,
-  editor: EditorAuth | undefined,
-  channelKeys: AuthorizedKey[],
+  authors: KeySet | undefined,
+  channel: KeySet,
 ): void {
-  const sigs = item._sig?.signatures ?? [];
+  const sigs = item.sig ?? [];
   const canonical = canonicalItemBytes(item);
 
-  if (editor) {
-    // editor mode (spec/feeds.md §2): at least `threshold` valid signatures
-    // by keys in the entry's keyids; additional entries (channel-key
-    // signatures) are not load-bearing.
+  if (authors && authors.keys.length > 0) {
+    // authored channel: at least `threshold` valid author signatures;
+    // additional entries (channel-key signatures) are not load-bearing.
     let valid = 0;
     for (const entry of sigs) {
-      if (tryVerify(entry, editor.keys, canonical)) valid++;
+      if (tryVerify(entry, authors.keys, canonical)) valid++;
+      else if (authors.keys.some((k) => k.keyid === entry.keyid)) {
+        throw new ProtocolError(`item: signature by author key ${entry.keyid} invalid`);
+      }
     }
-    if (valid < editor.threshold) {
-      throw new ProtocolError(`item: ${valid}/${editor.threshold} valid editor signatures`);
+    if (valid < Math.max(1, authors.threshold)) {
+      throw new ProtocolError(`item: ${valid}/${Math.max(1, authors.threshold)} valid author signatures`);
     }
     return;
   }
 
-  // default mode (spec/feeds.md §1.2): signatures optional, attribution
-  // only. Entries by unknown keys are ignored; a known keyid whose
-  // signature does not verify → item rejected (no third state).
+  // simple mode: at least `threshold` entries verify against the channel
+  // role keys; entries by unknown keys are ignored, a known keyid whose
+  // signature fails rejects the item.
+  let valid = 0;
   for (const entry of sigs) {
-    if (!channelKeys.some((k) => k.keyid === entry.keyid)) continue;
-    if (!tryVerify(entry, channelKeys, canonical)) {
+    if (!channel.keys.some((k) => k.keyid === entry.keyid)) continue;
+    if (!tryVerify(entry, channel.keys, canonical)) {
       throw new ProtocolError(`item: signature by channel key ${entry.keyid} invalid`);
     }
+    valid++;
+  }
+  if (valid < Math.max(1, channel.threshold)) {
+    throw new ProtocolError(`item: ${valid}/${Math.max(1, channel.threshold)} valid channel signatures`);
   }
 }
 
-/** Channel cross-check (spec/feeds.md §1.2): `_sig.channel` MUST equal the bare channel name of the feed it came from. */
-export function verifyChannelCrossCheck(item: FeedItem, channel: string): void {
-  if (item._sig?.channel !== undefined && item._sig.channel !== channel) {
-    throw new ProtocolError(`item: _sig.channel "${item._sig.channel}" != feed channel "${channel}"`);
-  }
+/** The id is the TUF target path segment (spec/feeds.md §1.1). */
+export function itemIdFromPath(path: string): string {
+  const base = path.split('/').pop() ?? '';
+  return base.endsWith('.json') ? base.slice(0, -'.json'.length) : base;
 }
 
 /**
- * Verify `_sig.resources` (optional, normative when present): each listed
- * URL maps to the SHA-256 of the resource bytes. Call before rendering,
- * opening or saving the resource. Mismatch → resource unavailable (item
- * itself stays valid).
+ * Validate the item's `image` rule (spec/feeds.md §1.1): an inline data URL
+ * is self-contained; a linked URL REQUIRES `image_sha256`. A linked image
+ * without a hash is a schema violation → the item is rejected.
  */
-export function verifyResourceHash(item: FeedItem, url: string, bytes: Uint8Array): boolean {
-  const want = item._sig?.resources?.[url];
-  if (!want) return true; // unlisted = ordinary web resource (mutable by design)
-  return sha256Hex(bytes) === want.toLowerCase();
+export function verifyImage(item: FeedItem): void {
+  const image = item.image;
+  if (!image) return;
+  if (image.startsWith('data:')) {
+    if (!image.includes(';base64,')) throw new ProtocolError('item: image data URL must be base64');
+    return;
+  }
+  if (!linkedUrlAllowed(image)) {
+    throw new ProtocolError('item: image must be a data URL or absolute HTTPS URL');
+  }
+  if (!item.image_sha256) {
+    throw new ProtocolError('item: linked image requires image_sha256');
+  }
 }
 
 /**
- * Merge new feed items into the cached store per spec/feeds.md §1.2
- * semantics: (channel, id) dedup; content difference = update (position and
- * read-state kept by the caller); withdrawn items are hidden entirely.
+ * Verify an attachment's SHA-256 when present (spec/feeds.md §1.1). A mismatch
+ * makes the resource unavailable — the item itself stays valid.
+ */
+export function verifyAttachmentHash(attachment: Attachment, bytes: Uint8Array): boolean {
+  if (!attachment.sha256) return true;
+  return sha256Hex(bytes) === attachment.sha256.toLowerCase();
+}
+
+/** The attachment's expected hash, when present. */
+export function attachmentSha(attachment: Attachment): string | undefined {
+  return attachment.sha256?.toLowerCase();
+}
+
+/**
+ * Merge new items into the cached store per spec/feeds.md §1.3: (channel, id)
+ * dedup; content difference = update (position and read-state kept by the
+ * caller); absence from the index = unpublished (handled by the caller).
  */
 export function mergeItems(channel: string, feedItems: FeedItem[], existing: Map<string, FeedItem>): {
   added: FeedItem[];
@@ -164,7 +180,6 @@ export function mergeItems(channel: string, feedItems: FeedItem[], existing: Map
   const unchanged: FeedItem[] = [];
   const next = new Map(existing);
   for (const item of feedItems) {
-    if (isWithdrawn(item)) continue; // hidden entirely — not shown, not unread
     if (!item.id) continue;
     const key = `${channel}\u0000${item.id}`;
     const prev = next.get(key);
