@@ -1338,6 +1338,23 @@ func (p *Publisher) Validate(ctx context.Context) (Result, error) {
 	}, nil
 }
 
+// ValidateStrict also rejects expired metadata (design/tooling.md §5).
+func (p *Publisher) ValidateStrict(ctx context.Context) (Result, error) {
+	st, err := p.loadVerified(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := st.Expired(p.now()); err != nil {
+		return Result{}, err
+	}
+	return Result{
+		Company:  st.CompanyName(),
+		Channels: st.ChannelNames(),
+		Version:  st.Targets.Signed.Version,
+		Message:  "ok (strict)",
+	}, nil
+}
+
 // signFreshness re-signs snapshot + timestamp with the ops key and bumps
 // their versions.
 func (p *Publisher) signFreshness(st *tufrepo.State, now time.Time) error {

@@ -175,11 +175,18 @@ func (a *app) rotateRootCmd() *cobra.Command {
 }
 
 func (a *app) validateCmd() *cobra.Command {
-	return &cobra.Command{
+	var strict bool
+	cmd := &cobra.Command{
 		Use:   "validate",
 		Short: "Verify the full repository chain",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			res, err := a.publisher().Validate(a.ctx())
+			var res publisher.Result
+			var err error
+			if strict {
+				res, err = a.publisher().ValidateStrict(a.ctx())
+			} else {
+				res, err = a.publisher().Validate(a.ctx())
+			}
 			if err != nil {
 				return err
 			}
@@ -187,4 +194,6 @@ func (a *app) validateCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&strict, "strict", false, "also reject expired metadata")
+	return cmd
 }

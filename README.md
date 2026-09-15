@@ -59,9 +59,13 @@ security reviewers → `design/threats.md`; everyone else → `design/why.md`.
 
 ## Code in this repository
 
-- `demo-tool/` — reference publisher tooling (Go, go-tuf v2 + OLPC + Ed25519)
+- `sdk/` — reference **publisher SDK + `pub` CLI** (Go, go-tuf v2 +
+  OLPC + Ed25519): the full publisher lifecycle (keys, channels, authors,
+  private feeds, ceremonies, join/QR, deploy); see `sdk/README.md`
 - `app/` — reference demo **web client** (Vite + React + TS): PWA +
   Capacitor Android/iOS; see `app/README.md`
+- `demo-tool/` — demo-site generator (Go) built on the same protocol:
+  content + site chrome around an SDK-shaped repo
 - `demo/` — a generated demonstration publisher artifact (full TUF repo +
   per-channel signed item files + private capability feed), fully local
   (`http://localhost:8000`), based on real public Trezor blog content; not

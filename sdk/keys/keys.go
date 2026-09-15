@@ -394,6 +394,9 @@ func Import(_ context.Context, store Store, data []byte) ([]Info, error) {
 	}
 	var out []Info
 	for _, kf := range bundle.Keys {
+		if kf.SeedHex == "" {
+			return nil, fmt.Errorf("key %s: bundle carries no seed (public-only bundles cannot be imported)", kf.Name)
+		}
 		seed, err := hex.DecodeString(kf.SeedHex)
 		if err != nil {
 			return nil, fmt.Errorf("key %s: %w", kf.Name, err)

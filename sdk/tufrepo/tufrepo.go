@@ -637,6 +637,40 @@ func (s *State) Verify() error {
 	return nil
 }
 
+// Expired returns an error when any metadata has expired (strict
+// validation, design/tooling.md §5 command surface).
+func (s *State) Expired(now time.Time) error {
+	check := func(name string, exp time.Time) error {
+		if exp.Before(now) {
+			return fmt.Errorf("%s expired %s", name, exp.UTC().Format(time.RFC3339))
+		}
+		return nil
+	}
+	if err := check("root.json", s.Root.Signed.Expires); err != nil {
+		return err
+	}
+	if err := check("targets.json", s.Targets.Signed.Expires); err != nil {
+		return err
+	}
+	if err := check("snapshot.json", s.Snapshot.Signed.Expires); err != nil {
+		return err
+	}
+	if err := check("timestamp.json", s.Timestamp.Signed.Expires); err != nil {
+		return err
+	}
+	for name, m := range s.Channels {
+		if err := check("channels."+name+".json", m.Signed.Expires); err != nil {
+			return err
+		}
+	}
+	for name, m := range s.Authors {
+		if err := check("channels."+name+".authors.json", m.Signed.Expires); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *State) verifyChannelItems(channel string, chMeta *metadata.Metadata[metadata.TargetsType]) error {
 	channelKeys, channelThreshold, err := keySet(s.Targets.Signed.Delegations, "channels."+channel)
 	if err != nil {

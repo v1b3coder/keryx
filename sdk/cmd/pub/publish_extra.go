@@ -255,10 +255,15 @@ func readItems(path string) ([]map[string]any, error) {
 		return nil, err
 	}
 	var items []map[string]any
-	if err := json.Unmarshal(data, &items); err != nil {
+	if err := json.Unmarshal(data, &items); err == nil {
+		return items, nil
+	}
+	// also accept a single item object
+	item, err := feed.Decode(data)
+	if err != nil {
 		return nil, err
 	}
-	return items, nil
+	return []map[string]any{item}, nil
 }
 
 func readDoc(path string) (map[string]any, error) {
