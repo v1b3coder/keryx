@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/theupdateframework/go-tuf/v2/metadata"
+	"github.com/theupdateframework/go-tuf/v2/metadata/trustedmetadata"
 	"github.com/v1b3coder/keryx/sdk/feed"
 	"github.com/v1b3coder/keryx/sdk/keys"
 	"github.com/v1b3coder/keryx/sdk/repo"
@@ -65,8 +66,8 @@ func NewState(now time.Time, repoBase, companyName string) (*State, error) {
 	targets := metadata.Targets(now.Add(e.Targets))
 	targets.Signed.Delegations = &metadata.Delegations{Keys: map[string]*metadata.Key{}, Roles: []metadata.DelegatedRole{}}
 	targets.Signed.UnrecognizedFields = map[string]any{"custom": map[string]any{
-		"company_name": companyName,
-		"channels":     map[string]any{},
+		"company_name":          companyName,
+		"channels":              map[string]any{},
 		"private_feed_patterns": []any{},
 	}}
 	snapshot := metadata.Snapshot(now.Add(e.Snapshot))
@@ -745,33 +746,33 @@ func (s *State) verifyChannelItems(channel string, chMeta *metadata.Metadata[met
 // root's keys (per its threshold) and self-signed by its own keys. A root that
 // fails this would make compliant clients suspend (spec/repository.md §1/§5), so the
 // publisher must never write one.
+//
+// The per-step verification is go-tuf's own trustedmetadata.UpdateRoot (the same
+// primitive its client Updater uses), so no root-update crypto is hand-rolled here.
 func (s *State) verifyRootChain() error {
 	maxV := s.Root.Signed.Version
-	var prev *metadata.Metadata[metadata.RootType]
-	for v := int64(1); v <= maxV; v++ {
+	first, ok := s.Roots[1]
+	if !ok {
+		return fmt.Errorf("root chain: 1.root.json missing")
+	}
+	trusted, err := trustedmetadata.New(first)
+	if err != nil {
+		return fmt.Errorf("root chain: 1.root.json: %w", err)
+	}
+	if trusted.Root.Signed.Version != 1 {
+		return fmt.Errorf("root chain: 1.root.json declares version %d", trusted.Root.Signed.Version)
+	}
+	for v := int64(2); v <= maxV; v++ {
 		data, ok := s.Roots[v]
 		if !ok {
 			return fmt.Errorf("root chain: %d.root.json missing", v)
 		}
-		cur, err := metadata.Root().FromBytes(data)
-		if err != nil {
-			return fmt.Errorf("root chain: %d.root.json: %w", v, err)
+		if _, err := trusted.UpdateRoot(data); err != nil {
+			return fmt.Errorf("root chain: v%d: %w", v, err)
 		}
-		if cur.Signed.Version != v {
-			return fmt.Errorf("root chain: %d.root.json declares version %d", v, cur.Signed.Version)
-		}
-		if prev != nil {
-			if err := prev.VerifyDelegate(metadata.ROOT, cur); err != nil {
-				return fmt.Errorf("root chain: v%d not signed by v%d root keys: %w", v, v-1, err)
-			}
-		}
-		if err := cur.VerifyDelegate(metadata.ROOT, cur); err != nil {
-			return fmt.Errorf("root chain: v%d not self-signed: %w", v, err)
-		}
-		prev = cur
 	}
-	if prev == nil || prev.Signed.Version != maxV {
-		return fmt.Errorf("root chain: current root version not in the anchor chain")
+	if trusted.Root.Signed.Version != maxV {
+		return fmt.Errorf("root chain: current root v%d not reached (chain stops at v%d)", maxV, trusted.Root.Signed.Version)
 	}
 	return nil
 }
