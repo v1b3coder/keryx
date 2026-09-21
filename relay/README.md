@@ -110,19 +110,31 @@ demo repository (`make keryx-demo`) to keep the relay from failing it closed.
 
 ## Local browser end-to-end
 
-`cmd/relay-e2e` is a TEST-ONLY harness that serves a resealed copy of the demo
+`cmd/relay-harness` is a TEST-ONLY harness for the browser end-to-end run: it
+serves a resealed copy of the demo
 repository over local HTTPS, starts the relay in-process with the test flags, and
 exposes `/test/info` (join URL, topic, scope, VAPID public key) and
 `/test/publish` (signs a wake-up with the demo channel key and publishes it):
 
 ```sh
-relay-e2e -demo ../../keryx-demo -relay-listen 127.0.0.1:18099 -https-listen 127.0.0.1:8443
+cd relay && go run ./cmd/relay-harness -demo ../keryx-demo -relay-listen 127.0.0.1:18099 -https-listen 127.0.0.1:8443
 ```
+
+`-keys` defaults to `../keryx-demo-keys` (or `KERYX_KEYSTORE`), the demo's
+release keystore.
 
 With a browser built against the relay URL and VAPID key, the app pairs the demo
 company, registers its real WebPush subscription, and receives the wake-up through
 the browser's push service — the service worker verifies it and shows the notice.
 The relay's own `internal/e2e` test covers the same path without a browser.
+
+Verified end to end with Firefox (Mozilla's push service; Chrome is not required):
+build the PWA with the VAPID public key from the harness's `/test/info`, pair the
+harness join URL, enable wake-ups, then `POST /test/publish` — the relay reports
+`webpush: {"sent":1}` and the service worker persists the accepted `seq`. The
+harness mints a fresh VAPID keypair on every start, so rebuild the PWA after
+restarting it, and note that a headless Firefox profile needs
+`dom.push.enabled=true` and `dom.push.serverURL=wss://push.services.mozilla.com/`.
 
 ## API
 
