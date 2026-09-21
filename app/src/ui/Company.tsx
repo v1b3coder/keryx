@@ -14,6 +14,7 @@ import { formatDate, matchesFilter } from '../lib/format';
 import { loadImage } from '../lib/media';
 import { CompanyLogo } from './CompanyLogo';
 import { SanitizedHtml, LinkConfirm } from './SanitizedHtml';
+import { NotificationBanner } from './NotificationBanner';
 import { useApp } from '../state';
 import { attachmentSha, bytesMatchSha } from '../lib/item';
 import type { FeedItem } from '../lib/item';
@@ -62,7 +63,7 @@ export function CompanyView({
   /** add another company (single-source shortcut: no contacts list yet) */
   onAdd: () => void;
 }) {
-  const { actions, companies, syncing } = useApp();
+  const { actions, companies, syncing, notification } = useApp();
   const [showSettings, setShowSettings] = useState(false);
   const [pendingLink, setPendingLink] = useState<{ url: string; item: FeedItem } | null>(null);
 
@@ -175,6 +176,15 @@ export function CompanyView({
             </button>
           )}
         </div>
+      </div>
+
+      <div className="screen-pad" style={{ paddingTop: 8 }}>
+        <NotificationBanner
+          state={notification}
+          onEnable={() => void actions.enableNotifications()}
+          onCheck={() => void actions.checkNotifications()}
+          onRetry={() => void actions.runNotificationSelfTest()}
+        />
       </div>
 
       {company.logoChangePending && (

@@ -437,7 +437,21 @@ function NotificationsScreen({
   onEnable: () => Promise<SelfTestResult>;
   onDone: () => void;
 }) {
-  const [phase, setPhase] = useState<'idle' | 'busy' | 'pending' | 'failed'>('idle');
+  const [phase, setPhase] = useState<'idle' | 'busy' | 'pending' | 'failed' | 'green'>('idle');
+  const { notification } = useApp();
+
+  // the app-wide state upgrades when the late nonce lands: show green briefly,
+  // then continue to the company view
+  useEffect(() => {
+    if (phase !== 'pending') return;
+    if (notification.kind === 'ok' && notification.testedAt) {
+      setPhase('green');
+      const t = setTimeout(onDone, 2000);
+      return () => clearTimeout(t);
+    }
+    if (notification.kind === 'failed') setPhase('failed');
+  }, [phase, notification, onDone]);
+
   return (
     <div className="screen screen-pad" style={{ paddingTop: 48 }}>
       <h1 className="t-title" style={{ margin: 0 }}>
@@ -451,6 +465,10 @@ function NotificationsScreen({
         <div className="empty" style={{ padding: 0, alignItems: 'flex-start' }}>
           <div className="spinner" />
           <p className="t-small t-muted">Setting up wake-ups…</p>
+        </div>
+      ) : phase === 'green' ? (
+        <div className="alert" style={{ marginBottom: 16 }}>
+          <p>Notifications are working.</p>
         </div>
       ) : phase === 'pending' ? (
         <div className="alert" style={{ marginBottom: 16 }}>

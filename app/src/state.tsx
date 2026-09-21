@@ -85,6 +85,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
 
+  // while a self-test is in flight, re-read the app-wide state so a late
+  // nonce upgrades it to green without user action
+  useEffect(() => {
+    if (notification.kind !== 'pending') return;
+    const t = setInterval(() => void notificationState().then(setNotification), 3000);
+    return () => clearInterval(t);
+  }, [notification.kind]);
+
   /** Replace the in-memory items of one origin with the post-sync state. */
   const applyOutcome = (origin: string, existing: Map<string, StoredItem>) => {
     itemsRef.current = applyOutcomeItems(itemsRef.current, origin, existing);
