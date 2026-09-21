@@ -21,6 +21,9 @@ import (
 // ErrQueueFull reports a saturated dispatch queue (backpressure, §5.1/§5.4).
 var ErrQueueFull = errors.New("dispatch queue saturated")
 
+// ErrEndpointLegDisabled reports that no endpoint leg is configured.
+var ErrEndpointLegDisabled = errors.New("endpoint leg disabled")
+
 // WebPushResult is the endpoint leg accounting for one dispatch (§5.1).
 type WebPushResult struct {
 	Attempted int
@@ -347,6 +350,16 @@ func (d *Dispatcher) fcmStatus() string {
 		return store.FCMDisabled
 	}
 	return store.FCMSuppressed
+}
+
+// SendToEndpoint delivers one payload to a single registration's endpoint
+// (the §5.3.1 self-test). It is outside the dispatch queue and the replay
+// cache: a test is never a wake-up.
+func (d *Dispatcher) SendToEndpoint(ctx context.Context, r store.Registration, payload []byte) error {
+	if d.webpush == nil {
+		return ErrEndpointLegDisabled
+	}
+	return d.webpush.Send(ctx, r.Endpoint, r.P256DH, r.Auth, payload)
 }
 
 // Idle reports whether no dispatch is queued, running, or waiting to be

@@ -11,11 +11,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/v1b3coder/keryx/relay/internal/companytuf"
 	"github.com/v1b3coder/keryx/relay/internal/netpolicy"
+	"github.com/v1b3coder/keryx/relay/internal/push"
+	"github.com/v1b3coder/keryx/relay/internal/pushtest"
 	"github.com/v1b3coder/keryx/relay/internal/relay"
 	"github.com/v1b3coder/keryx/relay/internal/store"
 	"github.com/v1b3coder/keryx/relay/internal/topic"
@@ -408,5 +411,121 @@ func TestDebugModeIsolation(t *testing.T) {
 	}
 	if cc := probe.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Fatalf("cache-control = %q", cc)
+	}
+}
+
+// decryptRFC8291 decrypts the single-record aes128gcm body with the UA key.
+func decryptRFC8291(t *testing.T, ua *ecdh.PrivateKey, auth, body []byte) []byte {
+	t.Helper()
+	plain, err := pushtest.DecryptRFC8291(ua, auth, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plain
+}
+
+func TestRegistrationSelfTest(t *testing.T) {
+	st, err := store.Open(":memory:", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	// a fake push service: it records the RFC 8291 body and returns 201
+	var mu sync.Mutex
+	var body []byte
+	pushSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		body = b
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer pushSrv.Close()
+
+	policy := netpolicy.New()
+	policy.AllowPrivate = true
+	policy.AllowHTTP = true
+	vapid, _ := ecdh.P256().GenerateKey(rand.Reader)
+	wp, _, err := push.NewWebPush(base64.RawURLEncoding.EncodeToString(vapid.Bytes()),
+		"mailto:ops@example.com", time.Hour, policy.HTTPClient(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := relay.New(st, nil, wp, relay.Options{Logger: discardLogger()})
+	srv := New(st, d, companytuf.New(st, nil, companytuf.Options{Logger: discardLogger()}), Options{
+		Policy:              policy,
+		ApprovedPushOrigins: []string{pushSrv.URL},
+		Logger:              discardLogger(),
+	})
+	h := srv.Handler()
+
+	ua, _ := ecdh.P256().GenerateKey(rand.Reader)
+	auth := make([]byte, 16)
+	rand.Read(auth)
+	regBody, _ := json.Marshal(map[string]any{
+		"endpoint": pushSrv.URL + "/push",
+		"keys": map[string]string{
+			"p256dh": base64.RawURLEncoding.EncodeToString(ua.PublicKey().Bytes()),
+			"auth":   base64.RawURLEncoding.EncodeToString(auth),
+		},
+		"topics": []string{validTopic()},
+	})
+	rec := do(t, h, http.MethodPost, "/v1/registrations", string(regBody), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create = %d: %s", rec.Code, rec.Body)
+	}
+	var created struct {
+		ID    string `json:"id"`
+		Token string `json:"management_token"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &created)
+
+	rec = do(t, h, http.MethodPost, "/v1/registrations/"+created.ID+"/test", "", nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no token = %d", rec.Code)
+	}
+	authHeader := map[string]string{"Authorization": "Bearer " + created.Token}
+	rec = do(t, h, http.MethodPost, "/v1/registrations/"+created.ID+"/test", "", authHeader)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("test = %d: %s", rec.Code, rec.Body)
+	}
+	var result struct {
+		Nonce     string `json:"nonce"`
+		ExpiresAt string `json:"expires_at"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Nonce) != 43 || result.ExpiresAt == "" {
+		t.Fatalf("result = %s", rec.Body)
+	}
+	mu.Lock()
+	got := body
+	mu.Unlock()
+	if len(got) < 86 {
+		t.Fatalf("push service received %d bytes", len(got))
+	}
+	// the payload is the §4.3 JSON, not a wake-up: decrypt it as in the e2e test
+	plain := decryptRFC8291(t, ua, auth, got)
+	var testPayload struct {
+		V     int    `json:"v"`
+		Test  bool   `json:"test"`
+		Nonce string `json:"nonce"`
+	}
+	if err := json.Unmarshal(plain, &testPayload); err != nil {
+		t.Fatal(err)
+	}
+	if testPayload.V != 1 || !testPayload.Test || testPayload.Nonce != result.Nonce {
+		t.Fatalf("payload = %s", plain)
+	}
+
+	rec = do(t, h, http.MethodPost, "/v1/registrations/missing/test", "", authHeader)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing = %d", rec.Code)
+	}
+	rec = do(t, h, http.MethodPost, "/v1/registrations/"+created.ID+"/test", "", map[string]string{"Authorization": "Bearer wrong"})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong token = %d", rec.Code)
 	}
 }

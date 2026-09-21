@@ -71,6 +71,11 @@ type Config struct {
 	ProbeBurst        int
 	GlobalProbePerMin int
 	GlobalProbeBurst  int
+	TestIPPerMin      int
+	TestIPBurst       int
+	TestPerMin        int
+	TestBurst         int
+	TestTTL           time.Duration
 
 	RetentionDays  int
 	RegistryGCDays int
@@ -157,6 +162,11 @@ func loadConfig(fs *flag.FlagSet) *Config {
 		ProbeBurst:               envInt("RELAY_PROBE_BURST", 240),
 		GlobalProbePerMin:        envInt("RELAY_PROBE_GLOBAL_PER_MIN", 600),
 		GlobalProbeBurst:         envInt("RELAY_PROBE_GLOBAL_BURST", 1200),
+		TestIPPerMin:             envInt("RELAY_TEST_IP_PER_MIN", 10),
+		TestIPBurst:              envInt("RELAY_TEST_IP_BURST", 20),
+		TestPerMin:               envInt("RELAY_TEST_PER_MIN", 3),
+		TestBurst:                envInt("RELAY_TEST_BURST", 5),
+		TestTTL:                  time.Duration(envInt("RELAY_TEST_TTL_SECONDS", 300)) * time.Second,
 		RetentionDays:            envInt("RELAY_EVENT_RETENTION_DAYS", 30),
 		RegistryGCDays:           envInt("RELAY_REGISTRY_GC_DAYS", 30),
 		RefreshInterval:          time.Duration(envInt("RELAY_REFRESH_INTERVAL_SECONDS", 60)) * time.Second,
@@ -204,6 +214,11 @@ func loadConfig(fs *flag.FlagSet) *Config {
 	fs.IntVar(&cfg.ProbeBurst, "probe-burst", cfg.ProbeBurst, "per-IP status probe burst")
 	fs.IntVar(&cfg.GlobalProbePerMin, "probe-global-per-min", cfg.GlobalProbePerMin, "global status probe budget")
 	fs.IntVar(&cfg.GlobalProbeBurst, "probe-global-burst", cfg.GlobalProbeBurst, "global status probe burst")
+	fs.IntVar(&cfg.TestIPPerMin, "test-ip-per-min", cfg.TestIPPerMin, "self-test budget per IP")
+	fs.IntVar(&cfg.TestIPBurst, "test-ip-burst", cfg.TestIPBurst, "self-test burst per IP")
+	fs.IntVar(&cfg.TestPerMin, "test-per-min", cfg.TestPerMin, "self-test budget per registration")
+	fs.IntVar(&cfg.TestBurst, "test-burst", cfg.TestBurst, "self-test burst per registration")
+	fs.DurationVar(&cfg.TestTTL, "test-ttl", cfg.TestTTL, "self-test capability lifetime (default 5m)")
 	fs.IntVar(&cfg.RetentionDays, "event-retention-days", cfg.RetentionDays, "event_log retention (days)")
 	fs.IntVar(&cfg.RegistryGCDays, "registry-gc-days", cfg.RegistryGCDays, "registry GC TTL (days)")
 	fs.DurationVar(&cfg.RefreshInterval, "refresh-interval", cfg.RefreshInterval, "per-company sync interval (min 60s)")
@@ -381,6 +396,11 @@ func serve(cfg Config, logger *slog.Logger) error {
 		ProbeBurst:           cfg.ProbeBurst,
 		GlobalProbePerMin:    cfg.GlobalProbePerMin,
 		GlobalProbeBurst:     cfg.GlobalProbeBurst,
+		TestIPPerMin:         cfg.TestIPPerMin,
+		TestIPBurst:          cfg.TestIPBurst,
+		TestPerMin:           cfg.TestPerMin,
+		TestBurst:            cfg.TestBurst,
+		TestTTL:              cfg.TestTTL,
 		SeqFutureTolerance:   cfg.SeqFutureTol,
 		ApprovedPushOrigins:  cfg.ApprovedPushOrigins,
 		PushOriginsAny:       cfg.PushOriginsMode == "any",

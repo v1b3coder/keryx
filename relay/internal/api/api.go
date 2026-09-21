@@ -26,6 +26,7 @@ import (
 	"github.com/v1b3coder/keryx/relay/internal/company"
 	"github.com/v1b3coder/keryx/relay/internal/companytuf"
 	"github.com/v1b3coder/keryx/relay/internal/netpolicy"
+	"github.com/v1b3coder/keryx/relay/internal/push"
 	"github.com/v1b3coder/keryx/relay/internal/ratelimit"
 	"github.com/v1b3coder/keryx/relay/internal/relay"
 	"github.com/v1b3coder/keryx/relay/internal/scope"
@@ -40,16 +41,21 @@ type Options struct {
 	DebugAPIKey string
 	BodyMax     int64
 
-	PublishPerMin     int // per-company publish budget, default 60
-	PublishBurst      int // default 120
-	IPPerMin          int // unauthenticated publish per IP, default 120
-	IPBurst           int // default 240
-	RegPerMin         int // registration per IP, default 30
-	RegBurst          int // default 60
-	ProbePerMin       int // status probe per IP, default 120
-	ProbeBurst        int // default 240
-	GlobalProbePerMin int // default 600
-	GlobalProbeBurst  int // default 1200
+	PublishPerMin     int           // per-company publish budget, default 60
+	PublishBurst      int           // default 120
+	IPPerMin          int           // unauthenticated publish per IP, default 120
+	IPBurst           int           // default 240
+	RegPerMin         int           // registration per IP, default 30
+	RegBurst          int           // default 60
+	ProbePerMin       int           // status probe per IP, default 120
+	ProbeBurst        int           // default 240
+	GlobalProbePerMin int           // default 600
+	GlobalProbeBurst  int           // default 1200
+	TestIPPerMin      int           // self-test per IP, default 10
+	TestIPBurst       int           // default 20
+	TestPerMin        int           // self-test per registration, default 3
+	TestBurst         int           // default 5
+	TestTTL           time.Duration // self-test capability lifetime, default 5m
 
 	SeqFutureTolerance   time.Duration // default 5m
 	ApprovedPushOrigins  []string      // additional approved push-service origins; "scheme://*.host" wildcards allowed
@@ -73,6 +79,9 @@ type Server struct {
 	regLimiter  *ratelimit.Limiter
 	probeIP     *ratelimit.Limiter
 	probeGlobal *ratelimit.Limiter
+	testIP      *ratelimit.Limiter
+	testMu      sync.Mutex
+	testReg     map[string]*ratelimit.Limiter
 
 	pubMu       sync.Mutex
 	pubLimiters map[string]*ratelimit.Limiter
@@ -119,6 +128,21 @@ func New(st *store.Store, d *relay.Dispatcher, companies *companytuf.Manager, op
 	if opts.GlobalProbeBurst <= 0 {
 		opts.GlobalProbeBurst = 1200
 	}
+	if opts.TestIPPerMin <= 0 {
+		opts.TestIPPerMin = 10
+	}
+	if opts.TestIPBurst <= 0 {
+		opts.TestIPBurst = 20
+	}
+	if opts.TestPerMin <= 0 {
+		opts.TestPerMin = 3
+	}
+	if opts.TestBurst <= 0 {
+		opts.TestBurst = 5
+	}
+	if opts.TestTTL <= 0 {
+		opts.TestTTL = 5 * time.Minute
+	}
 	if opts.SeqFutureTolerance <= 0 {
 		opts.SeqFutureTolerance = 5 * time.Minute
 	}
@@ -139,6 +163,8 @@ func New(st *store.Store, d *relay.Dispatcher, companies *companytuf.Manager, op
 		regLimiter:     ratelimit.New(opts.RegPerMin, opts.RegBurst),
 		probeIP:        ratelimit.New(opts.ProbePerMin, opts.ProbeBurst),
 		probeGlobal:    ratelimit.New(opts.GlobalProbePerMin, opts.GlobalProbeBurst),
+		testIP:         ratelimit.New(opts.TestIPPerMin, opts.TestIPBurst),
+		testReg:        map[string]*ratelimit.Limiter{},
 		pubLimiters:    map[string]*ratelimit.Limiter{},
 		pushOrigins:    defaultPushOrigins(),
 		pushOriginsAny: opts.PushOriginsAny,
@@ -162,6 +188,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/registrations/{id}", s.handleRegistrationUpdate)
 	mux.HandleFunc("DELETE /v1/registrations/{id}", s.handleRegistrationDelete)
 	mux.HandleFunc("POST /v1/registrations/{id}/heartbeat", s.handleRegistrationHeartbeat)
+	mux.HandleFunc("POST /v1/registrations/{id}/test", s.handleRegistrationTest)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	if s.opts.Debug {
 		mux.HandleFunc("POST /debug/v1/publish", s.handleDebugPublish)
@@ -222,6 +249,13 @@ func (s *Server) Cleanup(idle time.Duration) {
 	s.regLimiter.Cleanup(idle)
 	s.probeIP.Cleanup(idle)
 	s.probeGlobal.Cleanup(idle)
+	s.testIP.Cleanup(idle)
+	s.testMu.Lock()
+	for id, l := range s.testReg {
+		l.Cleanup(idle)
+		_ = id
+	}
+	s.testMu.Unlock()
 	s.pubMu.Lock()
 	defer s.pubMu.Unlock()
 	for id, l := range s.pubLimiters {
@@ -594,6 +628,67 @@ func (s *Server) handleRegistrationHeartbeat(w http.ResponseWriter, r *http.Requ
 	default:
 		s.internalError(w, err)
 	}
+}
+
+// handleRegistrationTest delivers the §4.3 self-test payload through the
+// ordinary endpoint path (§5.3.1). It never touches replay state, the registry
+// or sequence state: a test is never a wake-up.
+func (s *Server) handleRegistrationTest(w http.ResponseWriter, r *http.Request) {
+	token, ok := bearerToken(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing management token")
+		return
+	}
+	if !s.testIP.Allow(s.remoteIP(r)) {
+		writeError(w, http.StatusTooManyRequests, "self-test rate limit exceeded")
+		return
+	}
+	id := r.PathValue("id")
+	if !s.testLimiter(id).Allow(id) {
+		writeError(w, http.StatusTooManyRequests, "self-test rate limit exceeded")
+		return
+	}
+	reg, err := s.store.RegistrationForManagement(id, token)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "registration not found")
+		return
+	case errors.Is(err, store.ErrUnauthorized):
+		writeError(w, http.StatusUnauthorized, "invalid management token")
+		return
+	case err != nil:
+		s.internalError(w, err)
+		return
+	}
+	nonce, payload := wakeup.NewTestPayload()
+	if err := s.dispatcher.SendToEndpoint(r.Context(), reg, payload); err != nil {
+		switch {
+		case errors.Is(err, relay.ErrEndpointLegDisabled):
+			writeError(w, http.StatusServiceUnavailable, "endpoint leg disabled")
+		case errors.Is(err, push.ErrGone):
+			writeError(w, http.StatusGone, "endpoint reported dead")
+		default:
+			s.logger.Warn("self-test delivery failed", "err", err) // never the endpoint
+			writeError(w, http.StatusServiceUnavailable, "provider unavailable")
+		}
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"nonce":      nonce,
+		"expires_at": time.Now().UTC().Add(s.opts.TestTTL).Format(time.RFC3339),
+	})
+}
+
+// testLimiter returns the per-registration self-test bucket.
+func (s *Server) testLimiter(id string) *ratelimit.Limiter {
+	s.testMu.Lock()
+	defer s.testMu.Unlock()
+	l, ok := s.testReg[id]
+	if !ok {
+		l = ratelimit.New(s.opts.TestPerMin, s.opts.TestBurst)
+		s.testReg[id] = l
+	}
+	return l
 }
 
 // --- validation ---

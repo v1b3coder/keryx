@@ -5,13 +5,9 @@ package e2e
 
 import (
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/ed25519"
-	"crypto/hkdf"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -28,13 +24,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigstore/sigstore/pkg/signature"
 	"github.com/theupdateframework/go-tuf/v2/metadata"
 
 	"github.com/v1b3coder/keryx/relay/internal/api"
 	"github.com/v1b3coder/keryx/relay/internal/companytuf"
+	"github.com/v1b3coder/keryx/relay/internal/demoreseal"
 	"github.com/v1b3coder/keryx/relay/internal/netpolicy"
 	"github.com/v1b3coder/keryx/relay/internal/push"
+	"github.com/v1b3coder/keryx/relay/internal/pushtest"
 	"github.com/v1b3coder/keryx/relay/internal/relay"
 	"github.com/v1b3coder/keryx/relay/internal/scope"
 	"github.com/v1b3coder/keryx/relay/internal/store"
@@ -61,59 +58,14 @@ func keystoreDir() string {
 }
 
 // resealRoot copies the demo repository, points custom.repo_base at the local
-// HTTPS server and re-signs the root with the demo's master key.
+// HTTPS server and re-signs every released root version with the demo's master keys.
 func resealRoot(t *testing.T, src, dst, keysDir, repoBase string) {
 	t.Helper()
 	if err := os.CopyFS(dst, os.DirFS(src)); err != nil {
 		t.Fatal(err)
 	}
-	keyFile := filepath.Join(keysDir, "master.json")
-	raw, err := os.ReadFile(keyFile)
-	if err != nil {
+	if err := demoreseal.Root(dst, keysDir, repoBase); err != nil {
 		t.Fatal(err)
-	}
-	var record struct {
-		SeedHex string `json:"seed_hex"`
-	}
-	if err := json.Unmarshal(raw, &record); err != nil {
-		t.Fatal(err)
-	}
-	seed, err := hex.DecodeString(record.SeedHex)
-	if err != nil || len(seed) != ed25519.SeedSize {
-		t.Fatalf("master seed: %v", err)
-	}
-	priv := ed25519.NewKeyFromSeed(seed)
-
-	for _, name := range []string{"root.json", "1.root.json"} {
-		path := filepath.Join(dst, ".well-known", "keryx", name)
-		rootBytes, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var root metadata.Metadata[metadata.RootType]
-		if _, err := root.FromBytes(rootBytes); err != nil {
-			t.Fatal(err)
-		}
-		custom, _ := root.Signed.UnrecognizedFields["custom"].(map[string]any)
-		if custom == nil {
-			t.Fatalf("%s: custom missing", name)
-		}
-		custom["repo_base"] = repoBase
-		root.ClearSignatures()
-		signer, err := signature.LoadSigner(priv, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := root.Sign(signer); err != nil {
-			t.Fatal(err)
-		}
-		out, err := root.ToBytes(true)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, out, 0o644); err != nil {
-			t.Fatal(err)
-		}
 	}
 }
 
@@ -176,66 +128,11 @@ func (f *fakePushService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // decryptRFC8291 decrypts the single-record aes128gcm body with the UA key.
 func decryptRFC8291(t *testing.T, ua *ecdh.PrivateKey, auth, body []byte) []byte {
 	t.Helper()
-	if len(body) < 86 {
-		t.Fatalf("body too short: %d", len(body))
-	}
-	salt := body[:16]
-	if rs := body[16:20]; rs[0] != 0 || rs[1] != 0 || rs[2] != 0x10 || rs[3] != 0 {
-		t.Fatalf("bad rs: %x", rs)
-	}
-	idlen := body[20]
-	if idlen != 65 {
-		t.Fatalf("bad keyid length: %d", idlen)
-	}
-	asPub := body[21 : 21+65]
-	ct := body[21+65:]
-
-	asPoint, err := ecdh.P256().NewPublicKey(asPub)
+	plain, err := pushtest.DecryptRFC8291(ua, auth, body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	shared, err := ua.ECDH(asPoint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prkKey, err := hkdf.Extract(sha256.New, shared, auth)
-	if err != nil {
-		t.Fatal(err)
-	}
-	info := append([]byte("WebPush: info\x00"), ua.PublicKey().Bytes()...)
-	info = append(info, asPub...)
-	ikm, err := hkdf.Expand(sha256.New, prkKey, string(info), 32)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prk, err := hkdf.Extract(sha256.New, ikm, salt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cek, err := hkdf.Expand(sha256.New, prk, "Content-Encoding: aes128gcm\x00", 16)
-	if err != nil {
-		t.Fatal(err)
-	}
-	nonce, err := hkdf.Expand(sha256.New, prk, "Content-Encoding: nonce\x00", 12)
-	if err != nil {
-		t.Fatal(err)
-	}
-	block, err := aes.NewCipher(cek)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plain, err := gcm.Open(nil, nonce, ct, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(plain) == 0 || plain[len(plain)-1] != 0x02 {
-		t.Fatalf("missing padding delimiter")
-	}
-	return plain[:len(plain)-1]
+	return plain
 }
 
 func discardLogger() *slog.Logger {

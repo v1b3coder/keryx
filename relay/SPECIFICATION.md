@@ -748,8 +748,9 @@ that started it. Both test endpoints are rate-limited (§5.4); an unknown or exp
   matching nonce (§4.3). The relay cannot observe device receipt and MUST NOT
   claim it.
 - Errors: `404` unknown or expired registration or `test_id`, `401` invalid
-  management token, `400` rejected destination, `503` provider unavailable,
-  `429` rate limit.
+  management token, `400` rejected destination, `410` endpoint reported dead
+  (404/410 from the push service), `503` provider unavailable, `429` rate
+  limit.
 
 ### 5.4 Limits
 
