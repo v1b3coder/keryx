@@ -18,7 +18,7 @@ dockerfile = "Containerfile"
   # the next request. Set to 0 to keep the relay always on.
   RELAY_IDLE_EXIT_SECONDS = "600"
 
-[restart]
+[[restart]]
   # Exit 0 must stop the machine, not restart it.
   policy = "on-failure"
 
