@@ -1,4 +1,4 @@
-// Command relay-e2e is a TEST-ONLY harness for the browser end-to-end run: it
+// Command relay-harness is a TEST-ONLY harness for the browser end-to-end run: it
 // serves a resealed copy of the demo repository over local HTTPS, starts the relay
 // in-process, and exposes /test/info and /test/publish so a real browser (the PWA)
 // can complete the relay → push → notification path. Never deploy it.
@@ -76,8 +76,12 @@ type harness struct {
 
 func main() {
 	var cfg config
+	keysDefault := os.Getenv("KERYX_KEYSTORE")
+	if keysDefault == "" {
+		keysDefault = "../../keryx-demo-keys"
+	}
 	flag.StringVar(&cfg.demoDir, "demo", "../../keryx-demo", "demo repository source")
-	flag.StringVar(&cfg.keysDir, "keys", os.Getenv("KERYX_KEYSTORE"), "key store directory (outside the demo repo)")
+	flag.StringVar(&cfg.keysDir, "keys", keysDefault, "key store directory (outside the demo repo; default ../keryx-demo-keys)")
 	flag.StringVar(&cfg.relayListen, "relay-listen", "127.0.0.1:18099", "relay listen address")
 	flag.StringVar(&cfg.httpsListen, "https-listen", "127.0.0.1:8443", "demo HTTPS listen address")
 	flag.StringVar(&cfg.vapidPrivate, "vapid-private", "", "VAPID private key (base64url)")
@@ -88,7 +92,7 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if err := run(cfg, logger); err != nil {
-		logger.Error("relay-e2e", "err", err)
+		logger.Error("relay-harness", "err", err)
 		os.Exit(1)
 	}
 }
@@ -107,7 +111,7 @@ func run(cfg config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	caFile := filepath.Join(os.TempDir(), "relay-e2e-ca.pem")
+	caFile := filepath.Join(os.TempDir(), "relay-harness-ca.pem")
 	if err := os.WriteFile(caFile, caPEM, 0o644); err != nil {
 		return err
 	}
@@ -115,7 +119,7 @@ func run(cfg config, logger *slog.Logger) error {
 	repoBase := h.httpsURL + "/keryx/"
 
 	// 2. Reseal a copy of the demo repository to point at this server.
-	h.serveDir, err = os.MkdirTemp("", "relay-e2e-demo")
+	h.serveDir, err = os.MkdirTemp("", "relay-harness-demo")
 	if err != nil {
 		return err
 	}
@@ -150,7 +154,7 @@ func run(cfg config, logger *slog.Logger) error {
 	}
 	h.vapidPub = vapidPub
 
-	h.store, err = store.Open(filepath.Join(os.TempDir(), "relay-e2e-main.db"), filepath.Join(os.TempDir(), "relay-e2e-reg.db"))
+	h.store, err = store.Open(filepath.Join(os.TempDir(), "relay-harness-main.db"), filepath.Join(os.TempDir(), "relay-harness-reg.db"))
 	if err != nil {
 		return err
 	}
@@ -320,7 +324,7 @@ func selfSignedCert() (caPEM []byte, leaf tls.Certificate, pool *x509.CertPool, 
 	}
 	caTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "relay-e2e-ca"},
+		Subject:               pkix.Name{CommonName: "relay-harness-ca"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
