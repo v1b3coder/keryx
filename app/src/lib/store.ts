@@ -6,6 +6,7 @@
 import { openDB, type IDBPDatabase } from 'idb';
 import type { RootDoc, TargetsDoc, SeenVersions } from './tuf';
 import type { FeedItem } from './item';
+import type { RelayRegistration } from './relay';
 
 export interface ChannelState {
   /** bare channel name (the item target path segment) */
@@ -59,8 +60,6 @@ export interface CompanyRecord {
   /** transient sync problems (feed fetch failures etc.) — shown to the user, never suspension */
   lastSyncErrors?: string[];
   prefs: { languages: string[]; tags: string[]; loadRemoteMedia: boolean };
-  /** relay wake-up registration + derived-topic bindings (relay/SPECIFICATION.md §5.3) */
-  relay?: import('./relay').RelayRegistration;
 }
 
 export interface StoredItem {
@@ -97,7 +96,7 @@ export const defaultPrefs = (): Prefs => ({
 });
 
 const DB_NAME = 'keryx';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 let dbPromise: Promise<IDBPDatabase> | null = null;
 
@@ -109,7 +108,7 @@ export function openAppDb(): Promise<IDBPDatabase> {
         // client, or pre-rewrite shapes) are incompatible — drop and rebuild
         // rather than attempt an unreliable migration.
         if (oldVersion > 0) {
-          for (const name of ['contacts', 'items', 'media', 'companies', 'relay']) {
+          for (const name of ['contacts', 'items', 'media', 'companies', 'relay', 'registrations']) {
             if (db.objectStoreNames.contains(name)) db.deleteObjectStore(name);
           }
         }
@@ -121,6 +120,9 @@ export function openAppDb(): Promise<IDBPDatabase> {
         // relay wake-up state: per-topic replay high-water marks and the
         // per-company recovery cooldown (relay/SPECIFICATION.md §4.2)
         db.createObjectStore('relay', { keyPath: 'key' });
+        // the app-wide relay registration: one record per relay base URL,
+        // holding the union of every followed company's topics
+        db.createObjectStore('registrations', { keyPath: 'baseUrl' });
       },
     });
   }
@@ -161,6 +163,28 @@ async function deleteByIndex(store: any, indexName: string, value: string): Prom
     await cursor.delete();
     cursor = await cursor.continue();
   }
+}
+
+// --- app-wide relay registration (relay/SPECIFICATION.md §5.3) ---
+
+export async function getRegistration(baseUrl: string): Promise<RelayRegistration | undefined> {
+  const db = await openAppDb();
+  return (await db.get('registrations', baseUrl)) as RelayRegistration | undefined;
+}
+
+export async function getRegistrations(): Promise<RelayRegistration[]> {
+  const db = await openAppDb();
+  return (await db.getAll('registrations')) as RelayRegistration[];
+}
+
+export async function putRegistration(reg: RelayRegistration): Promise<void> {
+  const db = await openAppDb();
+  await db.put('registrations', reg);
+}
+
+export async function deleteRegistrationRecord(baseUrl: string): Promise<void> {
+  const db = await openAppDb();
+  await db.delete('registrations', baseUrl);
 }
 
 // --- items ---
@@ -291,6 +315,43 @@ export async function reserveRecovery(origin: string, now: number, cooldownMs: n
   await tx.store.put({ key, at: now + cooldownMs });
   await tx.done;
   return true;
+}
+
+/** The last wake-up this install accepted for a company (epoch ms). */
+export async function markPushReceived(origin: string, at: number): Promise<void> {
+  const db = await openAppDb();
+  await db.put('relay', { key: `push\u0000${origin}`, at });
+}
+
+export async function lastPushAt(origin: string): Promise<number> {
+  const db = await openAppDb();
+  const rec = (await db.get('relay', `push\u0000${origin}`)) as RelayStateRecord | undefined;
+  return rec?.at ?? 0;
+}
+
+/** The pending self-test the service worker matches by nonce (§5.3.1). */
+export interface PendingTest {
+  baseUrl: string;
+  nonce: string;
+  expiresAt: number;
+  receivedAt?: number;
+}
+
+export async function putPendingTest(t: PendingTest): Promise<void> {
+  const db = await openAppDb();
+  await db.put('relay', { key: `test\u0000${t.baseUrl}`, ...t });
+}
+
+export async function pendingTest(baseUrl: string): Promise<PendingTest | undefined> {
+  const db = await openAppDb();
+  const rec = (await db.get('relay', `test\u0000${baseUrl}`)) as (PendingTest & { key: string }) | undefined;
+  if (!rec) return undefined;
+  return { baseUrl: rec.baseUrl, nonce: rec.nonce, expiresAt: rec.expiresAt, receivedAt: rec.receivedAt };
+}
+
+export async function clearPendingTest(baseUrl: string): Promise<void> {
+  const db = await openAppDb();
+  await db.delete('relay', `test\u0000${baseUrl}`);
 }
 
 export function makeCompany(

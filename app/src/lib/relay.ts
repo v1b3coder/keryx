@@ -387,6 +387,23 @@ export async function relayHeartbeat(
   if (!res.ok) throw new Error(`relay heartbeat: HTTP ${res.status}`);
 }
 
+/** POST /v1/registrations/{id}/test — one endpoint self-test (§5.3.1). */
+export async function testRegistration(
+  baseUrl: string,
+  id: string,
+  managementToken: string,
+): Promise<{ nonce: string; expiresAt: string }> {
+  const res = await relayFetch(baseUrl, `/v1/registrations/${id}/test`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${managementToken}` },
+  });
+  if (res.status === 410) throw new Error('relay self-test: endpoint dead');
+  if (!res.ok) throw new Error(`relay self-test: HTTP ${res.status}`);
+  const body = (await res.json()) as { nonce?: string; expires_at?: string };
+  if (!body.nonce || !body.expires_at) throw new Error('relay self-test: malformed response');
+  return { nonce: body.nonce, expiresAt: body.expires_at };
+}
+
 /** DELETE /v1/registrations/{id} — remove the registration (uninstall). */
 export async function deleteRegistration(
   baseUrl: string,

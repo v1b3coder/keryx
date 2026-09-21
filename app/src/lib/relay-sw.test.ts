@@ -11,9 +11,21 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { handlePush, RECOVERY_COOLDOWN_MS, ensureRelayRegistration } from './relay-sw';
-import { putCompany, relaySeq, getCompany, getAllCompanies, deleteCompany, type CompanyRecord } from './store';
+import {
+  putCompany,
+  relaySeq,
+  getCompany,
+  getAllCompanies,
+  deleteCompany,
+  putRegistration,
+  getRegistration,
+  deleteRegistrationRecord,
+  putPendingTest,
+  pendingTest,
+  clearPendingTest,
+  type CompanyRecord,
+} from './store';
 import { hexToBytes } from './bytes';
-import { deriveTopic, publicScopeId, sourceHash } from './relay';
 import type { TargetsDoc } from './tuf';
 import type { Wakeup } from './relay';
 
@@ -29,7 +41,16 @@ const fixture = JSON.parse(readFileSync(join(here, '__fixtures__', 'relay-e2e.js
   threshold: number;
 };
 
-function company(origin: string, topic: string): CompanyRecord {
+/**
+ * A company whose derived topic matches the fixture's: the origin's host must be
+ * the fixture company_id, while the random path keeps the per-company relay
+ * state (seq, recovery) isolated between tests.
+ */
+function newOrigin(): string {
+  return `http://${fixture.companyId}/${Math.random()}`;
+}
+
+function company(origin: string): CompanyRecord {
   return {
     origin,
     joinUrl: '',
@@ -70,26 +91,59 @@ function company(origin: string, topic: string): CompanyRecord {
     joinedAt: 0,
     lastSyncAt: null,
     prefs: { languages: [], tags: [], loadRemoteMedia: true },
-    relay: {
-      baseUrl: 'https://relay.example',
-      id: 'reg-1',
-      managementToken: 'token',
-      topics: { [topic]: { channel: 'security', scopeId: fixture.scopeId } },
-    },
   };
 }
+
+/** Stub the browser push manager with a working subscription. */
+function stubPushManager() {
+  let applicationServerKey: unknown = null;
+  vi.stubGlobal('navigator', {
+    serviceWorker: {
+      ready: Promise.resolve({
+        pushManager: {
+          subscribe: (opts: { applicationServerKey: unknown }) => {
+            applicationServerKey = opts.applicationServerKey;
+            return Promise.resolve({
+              toJSON: () => ({
+                endpoint: 'https://push.example/abc',
+                keys: { p256dh: 'p', auth: 'a' },
+              }),
+            });
+          },
+          getSubscription: () => Promise.resolve(null),
+        },
+      }),
+    },
+  });
+  return () => applicationServerKey;
+}
+
+describe('app-wide registration store', () => {
+  it('keeps one registration per relay base URL', async () => {
+    await putRegistration({
+      baseUrl: 'https://relay.example',
+      id: 'reg-1',
+      managementToken: 'tok-1',
+      topics: {},
+    });
+    const got = await getRegistration('https://relay.example');
+    expect(got?.id).toBe('reg-1');
+    await deleteRegistrationRecord('https://relay.example');
+    expect(await getRegistration('https://relay.example')).toBeUndefined();
+  });
+});
 
 describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
   beforeEach(async () => {
     // transport failures keep the cache and retry — never a crash
     vi.stubGlobal('fetch', () => Promise.reject(new Error('offline')));
-    // isolate tests: the topic map is keyed per company origin
+    // isolate tests: every company is removed between tests
     for (const c of await getAllCompanies()) await deleteCompany(c.origin);
   });
 
   it('drops malformed, unknown-topic and invalid-signature wake-ups', async () => {
-    const origin = 'bad-' + Math.random();
-    await putCompany(company(origin, fixture.topic));
+    const origin = newOrigin();
+    await putCompany(company(origin));
     expect((await handlePush('not json')).accepted).toBe(false);
     expect((await handlePush(JSON.stringify({ ...fixture.wakeup, t: 'x'.repeat(43) }))).accepted).toBe(false);
     const badSig = { ...fixture.wakeup, sig: [{ ...fixture.wakeup.sig[0], sig: 'A'.repeat(86) }] };
@@ -98,8 +152,8 @@ describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
   });
 
   it('accepts a verified wake-up, persists seq and rejects the replay', async () => {
-    const origin = 'ok-' + Math.random();
-    await putCompany(company(origin, fixture.topic));
+    const origin = newOrigin();
+    await putCompany(company(origin));
     const outcome = await handlePush(JSON.stringify(fixture.wakeup));
     expect(outcome.accepted).toBe(true);
     expect(outcome.title).toBe(origin);
@@ -108,8 +162,8 @@ describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
   });
 
   it('reserves at most one recovery refresh per company cooldown', async () => {
-    const origin = 'recover-' + Math.random();
-    await putCompany(company(origin, fixture.topic));
+    const origin = newOrigin();
+    await putCompany(company(origin));
     // two concurrent forged wake-ups: the first consumes the allowance and the
     // second is suppressed before networking
     const bad = { ...fixture.wakeup, seq: fixture.seq + 1, sig: [{ ...fixture.wakeup.sig[0], sig: 'A'.repeat(86) }] };
@@ -134,23 +188,50 @@ describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
       calls.push(String(url));
       return Promise.resolve(new Response(null, { status: 204 }));
     });
-    const origin = 'heartbeat-' + Math.random();
-    const c = company(origin, fixture.topic);
-    c.relay = { baseUrl: 'https://relay.example', id: 'reg-hb', managementToken: 'tok-hb', topics: { [fixture.topic]: { channel: 'security', scopeId: fixture.scopeId } } };
-    await putCompany(c);
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    const origin = newOrigin();
+    await putCompany(company(origin));
+    await putRegistration({
+      baseUrl: 'https://relay.example',
+      id: 'reg-hb',
+      managementToken: 'tok-hb',
+      topics: { [fixture.topic]: { channel: 'security', scopeId: fixture.scopeId } },
+    });
     const outcome = await handlePush(JSON.stringify(fixture.wakeup));
     expect(outcome.accepted).toBe(true);
     await new Promise((r) => setTimeout(r, 0)); // let the best-effort heartbeat run
     expect(calls.some((u) => u.includes('/v1/registrations/reg-hb/heartbeat'))).toBe(true);
+    await deleteRegistrationRecord('https://relay.example');
+    vi.unstubAllEnvs();
   });
 
   it('ignores a topic that is not currently followed', async () => {
-    const origin = 'unfollowed-' + Math.random();
-    const c = company(origin, fixture.topic);
+    const origin = newOrigin();
+    const c = company(origin);
     c.channels = [{ name: 'security', displayName: 'Security', followed: false }];
-    c.relay!.topics = {};
     await putCompany(c);
     expect((await handlePush(JSON.stringify(fixture.wakeup))).accepted).toBe(false);
+  });
+
+  it('records a test payload only when the pending nonce matches', async () => {
+    const nonce = 'A'.repeat(43);
+    const other = 'B'.repeat(43);
+    await putRegistration({
+      baseUrl: 'https://relay.example',
+      id: 'reg-test',
+      managementToken: 'tok-test',
+      topics: {},
+    });
+    await putPendingTest({ baseUrl: 'https://relay.example', nonce, expiresAt: Date.now() + 60_000 });
+    expect(await handlePush(JSON.stringify({ v: 1, test: true, nonce }))).toEqual({ accepted: true, test: true });
+    const pending = await pendingTest('https://relay.example');
+    expect(pending?.receivedAt).toBeGreaterThan(0);
+
+    await putPendingTest({ baseUrl: 'https://relay.example', nonce: other, expiresAt: Date.now() + 60_000 });
+    expect(await handlePush(JSON.stringify({ v: 1, test: true, nonce: 'wrong' }))).toEqual({ accepted: false });
+    expect(await handlePush(JSON.stringify({ v: 1, test: true }))).toEqual({ accepted: false });
+    await clearPendingTest('https://relay.example');
+    await deleteRegistrationRecord('https://relay.example');
   });
 });
 
@@ -165,41 +246,46 @@ describe('relay registration client (relay/SPECIFICATION.md §5.3)', () => {
   it('subscribes with the relay VAPID key and POSTs the registration', async () => {
     vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
     vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    await deleteRegistrationRecord('https://relay.example');
     let captured: { url: string; body: string } | null = null;
     vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
       captured = { url, body: String(init.body) };
       return Promise.resolve(new Response(JSON.stringify({ id: 'reg-1', management_token: 'tok-1' }), { status: 200 }));
     });
-    let applicationServerKey: unknown = null;
-    vi.stubGlobal('navigator', {
-      serviceWorker: {
-        ready: Promise.resolve({
-          pushManager: {
-            subscribe: (opts: { applicationServerKey: unknown }) => {
-              applicationServerKey = opts.applicationServerKey;
-              return Promise.resolve({
-                toJSON: () => ({
-                  endpoint: 'https://push.example/abc',
-                  keys: { p256dh: 'p', auth: 'a' },
-                }),
-              });
-            },
-          },
-        }),
-      },
-    });
+    const key = stubPushManager();
 
-    const origin = 'register-' + Math.random();
-    const c = company(origin, fixture.topic);
-    delete c.relay; // an installation that has not registered yet
-    const updated = await ensureRelayRegistration(c);
-    expect(applicationServerKey).toBeInstanceOf(Uint8Array);
+    const origin = newOrigin();
+    const c = company(origin);
+    const updated = await ensureRelayRegistration([c]);
+    expect(key()).toBeInstanceOf(Uint8Array);
     expect(captured!.url).toBe('https://relay.example/v1/registrations');
     const body = JSON.parse(captured!.body) as { endpoint: string; topics: string[] };
     expect(body.endpoint).toBe('https://push.example/abc');
-    expect(body.topics).toEqual([
-      deriveTopic(origin, publicScopeId('security'), sourceHash(origin, 'security')),
-    ]);
-    expect(updated.relay).toMatchObject({ id: 'reg-1', managementToken: 'tok-1' });
+    expect(body.topics).toEqual([fixture.topic]);
+    expect(updated).toMatchObject({ id: 'reg-1', managementToken: 'tok-1' });
+    expect((await getRegistration('https://relay.example'))?.id).toBe('reg-1');
+    await deleteRegistrationRecord('https://relay.example');
+    vi.unstubAllEnvs();
+  });
+
+  it('registers the union of every company topic on one relay', async () => {
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    await deleteRegistrationRecord('https://relay.example');
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      requests.push(`${init.method} ${url}`);
+      return Promise.resolve(new Response(JSON.stringify({ id: 'reg-1', management_token: 'tok-1' }), { status: 200 }));
+    });
+    stubPushManager();
+
+    const a = company('https://a.example');
+    const b = company('https://b.example');
+    await ensureRelayRegistration([a, b]);
+    const reg = await getRegistration('https://relay.example');
+    expect(Object.keys(reg?.topics ?? {})).toHaveLength(2);
+    expect(requests.some((r) => r === 'POST https://relay.example/v1/registrations')).toBe(true);
+    await deleteRegistrationRecord('https://relay.example');
+    vi.unstubAllEnvs();
   });
 });

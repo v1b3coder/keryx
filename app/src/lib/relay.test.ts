@@ -19,6 +19,7 @@ import {
   topicAuthorization,
   relayBaseUrl,
   vapidPublicKey,
+  testRegistration,
   DEFAULT_RELAY_URL,
   DEFAULT_VAPID_PUBLIC,
   type Wakeup,
@@ -177,6 +178,24 @@ describe('topic bindings (§10)', () => {
       sourceHash('company.example', 'AbCdEf0123456789_-xyZ'),
     );
     expect(bindings[privateTopic].channel).toBe('tracking');
+  });
+});
+
+describe('self-test client (§5.3.1)', () => {
+  it('posts the self-test and returns the nonce', async () => {
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    let captured: { url: string; init: RequestInit } | null = null;
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      captured = { url, init };
+      return Promise.resolve(new Response(JSON.stringify({ nonce: 'n-1', expires_at: '2026-01-01T00:00:00Z' }), { status: 202 }));
+    });
+    const got = await testRegistration('https://relay.example', 'reg-1', 'tok-1');
+    expect(got.nonce).toBe('n-1');
+    expect(captured!.url).toBe('https://relay.example/v1/registrations/reg-1/test');
+    expect((captured!.init.headers as Record<string, string>).Authorization).toBe('Bearer tok-1');
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   });
 });
 
