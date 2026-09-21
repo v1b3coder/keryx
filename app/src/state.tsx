@@ -36,8 +36,8 @@ export interface AppActions {
   saveCompany: (company: CompanyRecord, items?: StoredItem[]) => Promise<void>;
   /** re-pair after a company_name change: update the identity snapshot and clear the warning */
   rePairCompany: (origin: string, company: CompanyRecord, newItems?: StoredItem[]) => Promise<void>;
-  /** ask for permission, register, self-test; false when it failed */
-  enableNotifications: () => Promise<boolean>;
+  /** ask for permission, register, self-test; the first-company outcome */
+  enableNotifications: () => Promise<SelfTestResult>;
   /** re-read permission/subscription/registration state */
   checkNotifications: () => Promise<void>;
   /** re-run the self-test without prompting */
@@ -76,6 +76,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setLoaded(true);
     })();
     void notificationState().then(setNotification);
+    // the banner re-checks when the app returns to the foreground, so an
+    // in-flight test that landed in the background upgrades to green
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void notificationState().then(setNotification);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
 
   /** Replace the in-memory items of one origin with the post-sync state. */
@@ -99,6 +106,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
           const list = await getAllCompanies();
           setCompanies(list);
+          // the app-wide state may have changed (a test landed, a leg died)
+          setNotification(await notificationState());
         } finally {
           setSyncing(false);
         }
@@ -119,6 +128,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           void heartbeatRelay(outcome.company.origin);
           const list = await getAllCompanies();
           setCompanies(list);
+          // the app-wide state may have changed (a test landed, a leg died)
+          setNotification(await notificationState());
         } finally {
           setSyncing(false);
         }
@@ -135,21 +146,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setCompanies(await getAllCompanies());
       },
       async enableNotifications() {
-        if (permissionState() === 'unsupported') return false;
+        if (permissionState() === 'unsupported') return { endpoint: 'failed', leg: 'registration' };
         if ((await Notification.requestPermission()) !== 'granted') {
           setNotification(await notificationState());
-          return false;
+          return { endpoint: 'failed', leg: 'registration' };
         }
         const result = await runSelfTest(await getAllCompanies());
-        setNotification(result.endpoint === 'delivered' ? await notificationState() : { kind: 'failed', leg: result.leg });
-        return result.endpoint === 'delivered';
+        setNotification(result.endpoint === 'failed' ? { kind: 'failed', leg: result.leg } : await notificationState());
+        return result;
       },
       async checkNotifications() {
         setNotification(await notificationState());
       },
       async runNotificationSelfTest() {
         const result = await runSelfTest(await getAllCompanies());
-        setNotification(result.endpoint === 'delivered' ? await notificationState() : { kind: 'failed', leg: result.leg });
+        setNotification(result.endpoint === 'failed' ? { kind: 'failed', leg: result.leg } : await notificationState());
         return result;
       },
       async setPrefs(origin, prefs) {

@@ -1,6 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { notificationState } from './notify';
+import {
+  putCompany,
+  putRegistration,
+  putPendingTest,
+  pendingTest,
+  clearPendingTest,
+  deleteRegistrationRecord,
+  deleteCompany,
+  type CompanyRecord,
+} from './store';
+import { topicBindings } from './relay-sw';
+import type { TargetsDoc } from './tuf';
 
 function stubPermission(permission: NotificationPermission) {
   vi.stubGlobal('Notification', { permission, requestPermission: () => Promise.resolve(permission) });
@@ -28,6 +40,55 @@ describe('notification state machine', () => {
     vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
     vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     expect((await notificationState()).kind).toBe('no-subscription');
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('notification state machine: in-flight self-test', () => {
+  const origin = 'http://127.0.0.1/x';
+  function company(): CompanyRecord {
+    return {
+      origin,
+      joinUrl: '',
+      identity: {},
+      pinnedRoot: { signed: { version: 1, expires: '2099-01-01T00:00:00Z' }, signatures: [] } as never,
+      pinnedRootVersion: 1,
+      targets: {
+        signed: { _type: 'targets', version: 1, expires: '2099-01-01T00:00:00Z', targets: {}, delegations: { keys: {}, roles: [] } },
+        signatures: [],
+      } as unknown as TargetsDoc,
+      targetsVersion: 1,
+      seen: { targets: 1, roles: {} },
+      channels: [{ name: 'security', displayName: 'Security', followed: true }],
+      privateFeeds: [],
+      status: 'active',
+      joinedAt: 0,
+      lastSyncAt: null,
+      prefs: { languages: [], tags: [], loadRemoteMedia: true },
+    };
+  }
+
+  it('reports pending while the test nonce is still awaited, then ok when it arrives', async () => {
+    stubPermission('granted');
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    const c = company();
+    await putCompany(c);
+    const topics = topicBindings(c);
+    await putRegistration({ baseUrl: 'https://relay.example', id: 'reg-1', managementToken: 'tok', topics });
+    await putPendingTest({ baseUrl: 'https://relay.example', nonce: 'A'.repeat(43), expiresAt: Date.now() + 60_000 });
+    expect((await notificationState()).kind).toBe('pending');
+
+    const pending = await pendingTest('https://relay.example');
+    await putPendingTest({ ...pending!, receivedAt: Date.now() });
+    const ok = await notificationState();
+    expect(ok.kind).toBe('ok');
+    expect(ok.testedAt).toBeGreaterThan(0);
+
+    await clearPendingTest('https://relay.example');
+    await deleteRegistrationRecord('https://relay.example');
+    await deleteCompany(origin);
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });

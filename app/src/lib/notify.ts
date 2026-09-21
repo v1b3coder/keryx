@@ -26,6 +26,7 @@ export type NotificationStateKind =
   | 'denied'
   | 'no-subscription'
   | 'unregistered'
+  | 'pending'
   | 'failed'
   | 'ok';
 
@@ -63,6 +64,9 @@ export async function notificationState(): Promise<NotificationState> {
   }
   const pending = await pendingTest(base);
   if (pending?.receivedAt) return { kind: 'ok', testedAt: pending.receivedAt };
+  // a test that was accepted but not yet observed is in flight, never a
+  // failure: the nonce stays pending until its capability expires
+  if (pending && Date.now() <= pending.expiresAt) return { kind: 'pending' };
   const last = await lastPushAtForTopics(registration);
   return last ? { kind: 'ok', testedAt: last } : { kind: 'ok' };
 }
@@ -81,7 +85,8 @@ async function lastPushAtForTopics(registration: RelayRegistration): Promise<num
 }
 
 export interface SelfTestResult {
-  endpoint: 'delivered' | 'failed';
+  /** 'pending' means the relay accepted the test; delivery is not confirmed yet */
+  endpoint: 'delivered' | 'pending' | 'failed';
   /** the last successful self-test (epoch ms) */
   testedAt?: number;
   /** the failing leg when endpoint === 'failed' */
@@ -91,7 +96,9 @@ export interface SelfTestResult {
 /**
  * Run the relay self-test (§5.3.1): ensure the registration, ask the relay
  * for a test, then wait up to ~10 s for the service worker to record the
- * matching nonce. Never a wake-up.
+ * matching nonce. Never a wake-up. A slow push service is not a failure: on
+ * timeout the pending nonce is kept (until its capability expires), so a late
+ * delivery still counts and upgrades the state to ok.
  */
 export async function runSelfTest(companies: CompanyRecord[]): Promise<SelfTestResult> {
   const base = relayBaseUrl();
@@ -110,8 +117,9 @@ export async function runSelfTest(companies: CompanyRecord[]): Promise<SelfTestR
       }
       await sleep(500);
     }
-    await clearPendingTest(base);
-    return { endpoint: 'failed', leg: 'endpoint' };
+    // keep the pending nonce: the service worker still accepts it until
+    // expiresAt, so a slow first delivery is not reported as a failure
+    return { endpoint: 'pending', leg: 'endpoint' };
   } catch {
     await clearPendingTest(base);
     return { endpoint: 'failed', leg: 'endpoint' };

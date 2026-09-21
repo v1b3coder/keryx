@@ -14,7 +14,7 @@ import { syncCompany } from '../lib/sync';
 import { getAllCompanies, getItems, deleteItems, type CompanyRecord } from '../lib/store';
 import { relayBaseUrl } from '../lib/relay';
 import { ensureRelayRegistration, topicBindings } from '../lib/relay-sw';
-import { permissionState } from '../lib/notify';
+import { permissionState, type SelfTestResult } from '../lib/notify';
 import { CompanyLogo } from './CompanyLogo';
 import { useApp } from '../state';
 
@@ -427,17 +427,17 @@ function ConsentScreen({
 /**
  * The first-company "Turn on notifications" screen (design/notifications.md):
  * the only prompt surface, with no skip. The tap is the user gesture the
- * browser requires; the app then registers and self-tests.
+ * browser requires; the app then registers and self-tests. A slow first push
+ * is neutral, never red: the pending nonce keeps listening until it lands.
  */
 function NotificationsScreen({
   onEnable,
   onDone,
 }: {
-  onEnable: () => Promise<boolean>;
+  onEnable: () => Promise<SelfTestResult>;
   onDone: () => void;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [phase, setPhase] = useState<'idle' | 'busy' | 'pending' | 'failed'>('idle');
   return (
     <div className="screen screen-pad" style={{ paddingTop: 48 }}>
       <h1 className="t-title" style={{ margin: 0 }}>
@@ -447,12 +447,19 @@ function NotificationsScreen({
         Timely updates — security incidents and order status — reach this device
         only with notifications on.
       </p>
-      {busy ? (
+      {phase === 'busy' ? (
         <div className="empty" style={{ padding: 0, alignItems: 'flex-start' }}>
           <div className="spinner" />
           <p className="t-small t-muted">Setting up wake-ups…</p>
         </div>
-      ) : failed ? (
+      ) : phase === 'pending' ? (
+        <div className="alert" style={{ marginBottom: 16 }}>
+          <p>
+            Wake-ups are on. The first test is still on its way — it can take a
+            minute; you can keep using the app.
+          </p>
+        </div>
+      ) : phase === 'failed' ? (
         <div className="alert alert-danger" style={{ marginBottom: 16 }}>
           <p>
             Notifications are off. Allow them in your browser or system settings,
@@ -462,17 +469,21 @@ function NotificationsScreen({
       ) : null}
       <button
         className="btn btn-primary"
-        disabled={busy}
+        disabled={phase === 'busy'}
         onClick={async () => {
-          setBusy(true);
-          const ok = await onEnable();
-          setBusy(false);
-          if (ok) onDone();
-          else setFailed(true);
+          setPhase('busy');
+          const result = await onEnable();
+          if (result.endpoint === 'delivered') onDone();
+          else setPhase(result.endpoint === 'pending' ? 'pending' : 'failed');
         }}
       >
         Turn on
       </button>
+      {phase === 'pending' && (
+        <button className="btn btn-secondary" style={{ marginTop: 10 }} onClick={onDone}>
+          Continue
+        </button>
+      )}
     </div>
   );
 }

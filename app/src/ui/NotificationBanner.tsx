@@ -35,6 +35,13 @@ export function NotificationBanner({
       </div>
     );
   }
+  if (state.kind === 'pending') {
+    return (
+      <div className="banner banner-neutral">
+        Wake-ups are on — the first test is still on its way.
+      </div>
+    );
+  }
   if (state.kind === 'ok') {
     if (dismissed) {
       return (
