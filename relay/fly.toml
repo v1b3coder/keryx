@@ -14,9 +14,9 @@ dockerfile = "Containerfile"
   # The Fly proxy overwrites Fly-Client-IP; trust it only because the app is
   # reachable exclusively through that proxy.
   RELAY_TRUSTED_PROXY_IP_HEADER = "Fly-Client-IP"
-  # Exit 0 after 30 idle minutes; the Fly proxy starts the machine again on
+  # Exit 0 after 10 idle minutes; the Fly proxy starts the machine again on
   # the next request. Set to 0 to keep the relay always on.
-  RELAY_IDLE_EXIT_SECONDS = "1800"
+  RELAY_IDLE_EXIT_SECONDS = "600"
 
 [restart]
   # Exit 0 must stop the machine, not restart it.
