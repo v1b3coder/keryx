@@ -20,7 +20,8 @@ import (
 )
 
 // Expiries are the metadata lifetimes. The reference defaults follow
-// spec/repository.md §5 (root ≥ 1 year, timestamp 24–72 h).
+// spec/repository.md §5 (root 10 years — a last-resort backstop refreshed
+// only by a master ceremony; timestamp 24–72 h).
 type Expiries struct {
 	Root      time.Duration
 	Targets   time.Duration
@@ -33,7 +34,7 @@ type Expiries struct {
 // DefaultExpiries returns the reference lifetimes.
 func DefaultExpiries() Expiries {
 	return Expiries{
-		Root:      2 * 365 * 24 * time.Hour,
+		Root:      10 * 365 * 24 * time.Hour,
 		Targets:   365 * 24 * time.Hour,
 		Snapshot:  30 * 24 * time.Hour,
 		Timestamp: 48 * time.Hour,

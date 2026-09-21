@@ -451,7 +451,10 @@ Standard TUF, no custom machinery:
   all metadata also carries `expires` as backstop. **Expiry ≠ suspension:**
   expired-but-unrefreshed metadata → keep serving cached content and retry;
   only a chain break suspends ([core.md §4](core.md)). RECOMMENDED: root
-  expiry ≥ 1 year.
+  expiry ≥ 1 year; the reference default is **10 years** — root is re-signed
+  only by an offline master ceremony, so its expiry is a last-resort backstop
+  (bounded anchor lifetime, retirement deadline), not an operational cadence;
+  freshness is `timestamp.json`'s job.
 - **`publish` never touches authorization metadata** — it adds/removes/changes
   item targets in the channel role metadata, re-signs the channel's role
   metadata

@@ -427,7 +427,10 @@ All rotation/revocation is standard TUF (metadata version+1, threshold
 overlaps, versioned files) with the addition of two conventions: pre-announced
 `next_key` records (recommended), and the rule that expired-but-unrefreshed
 metadata is **not** suspension — only a chain break suspends (deterministic,
-no "maybe"). Three keys minimum: offline master (root + targets), online ops
+no "maybe"). Root metadata carries a 10-year expiry: a master ceremony is
+rare by design, so root expiry is a backstop (bounded anchor lifetime,
+retirement deadline), not an operational cadence — `timestamp.json` is the
+heartbeat. Three keys minimum: offline master (root + targets), online ops
 key (snapshot + timestamp), one key per channel. The master key filling both
 `root` and `targets` is an accepted simplification — a targets-key compromise
 is therefore a root-key compromise, which is tolerable because both roles are

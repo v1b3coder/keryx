@@ -1367,18 +1367,21 @@ func (p *Publisher) RotateRoot(ctx context.Context, announceNext bool) (Result, 
 	if err != nil {
 		return Result{}, err
 	}
+	now := p.now()
 	old, err := p.masterKey(ctx, st)
 	if err != nil {
 		return Result{}, err
 	}
 	// always mint a fresh key: reusing the current master would sign the new
 	// root twice with the same key
-	newMaster, err := p.Generate(ctx, keys.RoleMaster, "master-"+shortID(p.now())+"-"+randSuffix())
+	newMaster, err := p.Generate(ctx, keys.RoleMaster, "master-"+shortID(now)+"-"+randSuffix())
 	if err != nil {
 		return Result{}, err
 	}
-	// rebuild root v+1: new master key for root+targets, current ops key
-	next := metadata.Root(st.Root.Signed.Expires)
+	// rebuild root v+1: new master key for root+targets, current ops key,
+	// and a refreshed expiry — a rotation renews the anchor window, it must not
+	// inherit the old root's remaining lifetime
+	next := metadata.Root(now.Add(p.exp().Root))
 	next.Signed.Version = st.Root.Signed.Version + 1
 	next.Signed.ConsistentSnapshot = false
 	next.Signed.UnrecognizedFields = map[string]any{
@@ -1419,7 +1422,7 @@ func (p *Publisher) RotateRoot(ctx context.Context, announceNext bool) (Result, 
 		return Result{}, err
 	}
 	// the targets hash changed — refresh snapshot/timestamp (ops key)
-	if err := p.signFreshness(st, p.now()); err != nil {
+	if err := p.signFreshness(st, now); err != nil {
 		return Result{}, err
 	}
 	if err := st.Verify(); err != nil {

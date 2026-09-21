@@ -86,6 +86,22 @@ func TestInitValidate(t *testing.T) {
 	}
 }
 
+func TestDefaultRootExpiry(t *testing.T) {
+	e := newEnv(t)
+	st, err := tufrepo.Load(e.ctx(), e.pub.Base, e.pub.Anchor)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	root := tufrepo.DefaultExpiries().Root
+	if root < 5*365*24*time.Hour {
+		t.Fatalf("root default %s is too short (want a years-long backstop)", root)
+	}
+	want := e.pub.Now().Add(root)
+	if !st.Root.Signed.Expires.Equal(want) {
+		t.Fatalf("root expires %s, want %s", st.Root.Signed.Expires, want)
+	}
+}
+
 func TestChannelAddAuthoredByDefault(t *testing.T) {
 	e := newEnv(t)
 	if _, err := e.pub.ChannelAdd(e.ctx(), publisher.ChannelSpec{
@@ -356,6 +372,30 @@ func TestRotateRootChain(t *testing.T) {
 	}
 	if _, err := e.pub.Validate(e.ctx()); err != nil {
 		t.Fatalf("validate after root rotation: %v", err)
+	}
+}
+
+func TestRotateRootRefreshesExpiry(t *testing.T) {
+	e := newEnv(t)
+	now := e.pub.Now()
+	short := 30 * 24 * time.Hour
+	e.pub.Exp = tufrepo.DefaultExpiries()
+	e.pub.Exp.Root = short
+	if _, err := e.pub.RotateRoot(e.ctx(), false); err != nil {
+		t.Fatalf("rotate root: %v", err)
+	}
+	st, err := tufrepo.Load(e.ctx(), e.pub.Base, e.pub.Anchor)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if st.Root.Signed.Version != 2 {
+		t.Fatalf("root version = %d, want 2", st.Root.Signed.Version)
+	}
+	// a rotation renews the window from the configured expiry; it must not
+	// inherit the previous root's remaining lifetime
+	want := now.Add(short)
+	if !st.Root.Signed.Expires.Equal(want) {
+		t.Fatalf("rotated root expires %s, want refreshed %s", st.Root.Signed.Expires, want)
 	}
 }
 

@@ -78,6 +78,13 @@ Accepted; mitigated but not eliminated.
   from content keys. The master key + online key is a second such pair (the
   master can re-delegate). This is why "two locks" must be read as *two
   independent keys*, not as origin + master.
+- **The online ops key plus origin/repo-base control** → a replay/freeze:
+  the attacker signs a fresh `timestamp.json` against replayed
+  `snapshot`/`targets`, so the timestamp's hours do not bound the window;
+  the pinned root's expiry (10 years by default) is the only bound —
+  accepted: without a channel key no content can be forged, and the
+  structural fix is the Phase-2 TOFU-free anchor plus a threshold on the
+  online key.
 - **At pairing time, origin control alone suffices** (TOFU: the attacker
   controls the origin and serves their own `/.well-known/keryx/root.json`;
   the user confirms the attacker's origin) — mitigated by the QR being

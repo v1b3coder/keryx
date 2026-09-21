@@ -413,8 +413,9 @@ pub deploy local --target /var/www/keryx | pub deploy s3 --bucket … --prefix �
   metadata with the current author keys). Rotations use the overlap protocol
   ([spec/repository.md §5](../spec/repository.md)); the tool prints the
   re-sign reminder (`item sign` with the new key during the overlap).
-- `rotate-root` = root.json v+1 signed by previous root keys per threshold;
-  writes `root.json` **and** `N.root.json` to the anchor dir only
+- `rotate-root` = root.json v+1 signed by previous root keys per threshold,
+  with a refreshed expiry (reference default: 10 years); writes `root.json`
+  **and** `N.root.json` to the anchor dir only
   ([spec/repository.md §1](../spec/repository.md)); never touches the repo
   base.
 - `pull` fetches the repo (and optionally the anchor) from the deployed
