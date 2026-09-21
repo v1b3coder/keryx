@@ -1417,7 +1417,9 @@ func (p *Publisher) RotateRoot(ctx context.Context, announceNext bool) (Result, 
 	}
 	st.Roots[next.Signed.Version] = nextBytes
 	// targets.json was signed by the previous master key; the new root
-	// authorizes only the new key, so re-sign it during the ceremony
+	// authorizes only the new key, so re-sign it during the ceremony — clear
+	// first so the retired master's signature does not stay in the artifact
+	st.Targets.ClearSignatures()
 	if err := tufrepo.SignAndTag(st.Targets, newMaster); err != nil {
 		return Result{}, err
 	}

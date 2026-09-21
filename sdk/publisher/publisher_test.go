@@ -373,6 +373,17 @@ func TestRotateRootChain(t *testing.T) {
 	if _, err := e.pub.Validate(e.ctx()); err != nil {
 		t.Fatalf("validate after root rotation: %v", err)
 	}
+	// the retired master's signature must not stay on targets.json
+	st, err := tufrepo.Load(e.ctx(), e.pub.Base, e.pub.Anchor)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(st.Targets.Signatures) != 1 {
+		t.Fatalf("targets signatures = %d, want 1 (the new master only)", len(st.Targets.Signatures))
+	}
+	if want := st.Root.Signed.Roles["targets"].KeyIDs; len(want) != 1 || st.Targets.Signatures[0].KeyID != want[0] {
+		t.Fatalf("targets signed by %s, want %s", st.Targets.Signatures[0].KeyID, want)
+	}
 }
 
 func TestRotateRootRefreshesExpiry(t *testing.T) {
