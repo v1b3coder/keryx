@@ -9,6 +9,12 @@ import { handlePush } from './lib/relay-sw';
 
 declare const self: ServiceWorkerGlobalScope;
 
+// A new build must take over immediately: without this the old worker keeps
+// serving its precached bundle on installed (mobile) PWAs until every client is
+// closed. The page reloads once when the controller changes (src/main.tsx).
+self.skipWaiting();
+self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
+
 precacheAndRoute(self.__WB_MANIFEST);
 
 self.addEventListener('push', (event) => {

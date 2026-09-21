@@ -23,11 +23,37 @@ if (Capacitor.isNativePlatform()) {
 
 // PWA service worker (registered by vite-plugin-pwa via virtual:pwa-register
 // only in the browser build; the app works without it too).
+//
+// A manual registration needs the update handling the generated one would do:
+// revalidate sw.js, activate a new worker immediately (skipWaiting in src/sw.ts),
+// and reload the page once so it runs the new precache instead of the old one.
+// Without this an installed PWA can serve a stale bundle for days.
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(() => {
-      // offline caching is a bonus — the app works without it
-    });
+    void (async () => {
+      try {
+        const registration = await navigator.serviceWorker.register(
+          `${import.meta.env.BASE_URL}sw.js`,
+          { updateViaCache: 'none' },
+        );
+        // reload once when a new worker takes control, but never on the first
+        // install (there was no controller to replace)
+        const hadController = !!navigator.serviceWorker.controller;
+        let reloading = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (!hadController || reloading) return;
+          reloading = true;
+          window.location.reload();
+        });
+        // an installed PWA can stay open for days without a navigation, so
+        // check for a new build whenever it returns to the foreground
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') void registration.update();
+        });
+      } catch {
+        // offline caching is a bonus — the app works without it
+      }
+    })();
   });
 }
 
