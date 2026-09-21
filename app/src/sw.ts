@@ -22,6 +22,7 @@ self.addEventListener('push', (event) => {
         return; // a wake-up is best-effort; failures are not user-visible
       }
       if (!outcome.accepted) return;
+      if (outcome.test) return; // silent record: the app shows the result
       await self.registration.showNotification(outcome.title ?? 'Keryx', {
         body: outcome.body,
         tag: `keryx-${outcome.origin ?? 'update'}`,
