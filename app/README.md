@@ -165,9 +165,12 @@ worker come from vite-plugin-pwa
   topic's exact scope from the company's verified targets, persists the accepted
   `seq` (replay), allows at most one metadata refresh per company per
   persisted cooldown, reconciles content and shows a locally authored generic
-  notice — never unverified content. Configure `VITE_RELAY_URL` and
-  `VITE_VAPID_PUBLIC` at build time to enable it; without them the app runs
-  exactly as before (polling is the backstop).
+  notice — never unverified content. The registration is **app-wide**: one
+  permission, one push subscription, one relay record holding the union of every
+  followed company's topics (see
+  [`../design/notifications.md`](../design/notifications.md)). Configure
+  `VITE_RELAY_URL` and `VITE_VAPID_PUBLIC` at build time to enable it;
+  without them the app runs exactly as before (polling is the backstop).
 
 **Out of scope** (per spec Phase 1/2): FCM/native wake-ups (the relay's topic
 leg is implemented; the native shell does not yet embed a UnifiedPush connector),
@@ -187,6 +190,36 @@ The app then derives the same topic as the relay, registers the installation's
 WebPush subscription, and the service worker verifies each wake-up against the
 topic's exact scope before reconciling content. Local builds that should reach the
 staging relay need `http://localhost:4173` in the relay's `RELAY_CORS_ORIGINS`.
+
+### Notification states and the self-test
+
+The relay is centralized, so the notification UI is **app-wide**, not
+company-wide: one permission, one push subscription, one relay record holding the
+union of every followed company's topics. The company settings sheet shows no
+notification toggle; there is one app-wide status card plus a red top bar on the
+company list, with the post-pair "Turn on" on the consent screen.
+
+| State | Detection | UI |
+|---|---|---|
+| Unsupported | no `Notification`/`PushManager`/SW, or `!isSecureContext` | neutral note; polling continues |
+| Not asked | `permission === 'default'` | red bar + "Turn on" (prompt needs the tap) |
+| Blocked | `permission === 'denied'` | red bar + "Check again" + help URL |
+| Granted, no subscription | `getSubscription() === null` | red bar + "Turn on" |
+| Registered, relay says gone | heartbeat `404`/`401` | red bar + "Re-subscribe" |
+| Registered, test failed | self-test per-leg result | red bar + the failing leg |
+
+After a denial no browser shows the prompt again, so "Check again" re-reads
+the permission and subscription state instead of re-prompting; the wording is
+generic ("allow notifications in your browser or system settings") plus one help
+URL. The state is re-checked on `visibilitychange` and after every sync, so the
+bar clears itself once the user unblocks notifications.
+
+"Check notifications" runs the relay's self-test (§5.3.1): one test delivery per
+leg, reported as browser wake-up delivered/not delivered and native wake-up
+sent/not sent. It replaces a "no wake-up for N days" heuristic, which would
+false-positive on companies that publish rarely.
+
+See [`../design/notifications.md`](../design/notifications.md) for the rationale.
 
 Browser `PushManager.subscribe` requires a real browser with a push service and
 the notification permission (headless Chrome for Testing denies it), so that one
