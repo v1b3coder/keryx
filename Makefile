@@ -26,7 +26,10 @@ APP_DIR        ?= app
 # at ../keryx-demo (published as https://keryx-demo.github.io) and its keystore at
 # ../keryx-demo-keys. Only the maintainer holds the release keys; without them
 # `make demo` mints a fresh, independent demo — a new trust anchor that must not
-# be pushed over the published site (spec/repository.md §5).
+# be pushed over the published site (spec/repository.md §5). The demo-tool mints
+# new channel keys on every run, so the release keystore and the published site
+# MUST always be regenerated together (override DEMO_REPO only with a matching
+# DEMO_KEYS_DIR).
 DEMO_REPO       ?= ../keryx-demo
 DEMO_KEYS_DIR   ?= ../keryx-demo-keys
 DEMO_BASE       ?= https://keryx-demo.github.io
