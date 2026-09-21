@@ -52,8 +52,17 @@ Every flag has a `RELAY_*` environment variable (`RELAY_LISTEN`,
 `RELAY_REGISTRY_GC_DAYS`, `RELAY_REFRESH_INTERVAL_SECONDS`,
 `RELAY_REFRESH_CADENCE_SECONDS`, `RELAY_REFRESH_CONCURRENCY`,
 `RELAY_DISCOVERY_PER_MIN`, `RELAY_DISCOVERY_BURST`, `RELAY_PUSH_ORIGINS`,
+`RELAY_PUSH_ORIGINS_MODE`,
 `RELAY_DEBUG_TRANSPORT`, `RELAY_DEBUG_API_KEY`). Omit a leg's config to
 disable it (the relay still runs and reports `0`/`disabled` for it).
+
+Approved push-service origins (`RELAY_PUSH_ORIGINS`) are exact origins or
+`*.` host wildcards (`https://*.push.apple.com`); the seed list covers the
+major browser push services and `ntfy.sh`, and self-hosted ntfy servers are
+added explicitly. `RELAY_PUSH_ORIGINS_MODE=any` accepts any public HTTPS
+endpoint instead — an explicit opt-out for relays that serve arbitrary
+self-hosted UnifiedPush distributors; the outbound policy (HTTPS, public
+destination) still applies.
 
 Test-only flags exist for local end-to-end runs and **must not** be used in
 production: `-allow-private-destinations`, `-allow-http-destinations`,

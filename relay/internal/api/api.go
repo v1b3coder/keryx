@@ -51,7 +51,8 @@ type Options struct {
 	GlobalProbeBurst  int // default 1200
 
 	SeqFutureTolerance  time.Duration // default 5m
-	ApprovedPushOrigins []string      // additional approved push-service origins
+	ApprovedPushOrigins []string      // additional approved push-service origins; "scheme://*.host" wildcards allowed
+	PushOriginsAny      bool          // accept any public HTTPS endpoint (opt-in §5.6 mode)
 	CORSOrigins         []string      // allowed PWA origins (cross-origin API)
 	Policy              *netpolicy.Policy
 	Logger              *slog.Logger
@@ -74,8 +75,9 @@ type Server struct {
 	pubMu       sync.Mutex
 	pubLimiters map[string]*ratelimit.Limiter
 
-	pushOrigins map[string]bool
-	corsOrigins map[string]bool
+	pushOrigins    map[string]bool
+	pushOriginsAny bool
+	corsOrigins    map[string]bool
 }
 
 // New builds the API server.
@@ -123,19 +125,20 @@ func New(st *store.Store, d *relay.Dispatcher, companies *companytuf.Manager, op
 		opts.Logger = slog.Default()
 	}
 	s := &Server{
-		store:       st,
-		dispatcher:  d,
-		companies:   companies,
-		logger:      opts.Logger,
-		opts:        opts,
-		policy:      opts.Policy,
-		ipLimiter:   ratelimit.New(opts.IPPerMin, opts.IPBurst),
-		regLimiter:  ratelimit.New(opts.RegPerMin, opts.RegBurst),
-		probeIP:     ratelimit.New(opts.ProbePerMin, opts.ProbeBurst),
-		probeGlobal: ratelimit.New(opts.GlobalProbePerMin, opts.GlobalProbeBurst),
-		pubLimiters: map[string]*ratelimit.Limiter{},
-		pushOrigins: defaultPushOrigins(),
-		corsOrigins: map[string]bool{},
+		store:          st,
+		dispatcher:     d,
+		companies:      companies,
+		logger:         opts.Logger,
+		opts:           opts,
+		policy:         opts.Policy,
+		ipLimiter:      ratelimit.New(opts.IPPerMin, opts.IPBurst),
+		regLimiter:     ratelimit.New(opts.RegPerMin, opts.RegBurst),
+		probeIP:        ratelimit.New(opts.ProbePerMin, opts.ProbeBurst),
+		probeGlobal:    ratelimit.New(opts.GlobalProbePerMin, opts.GlobalProbeBurst),
+		pubLimiters:    map[string]*ratelimit.Limiter{},
+		pushOrigins:    defaultPushOrigins(),
+		pushOriginsAny: opts.PushOriginsAny,
+		corsOrigins:    map[string]bool{},
 	}
 	for _, origin := range opts.ApprovedPushOrigins {
 		s.pushOrigins[origin] = true
@@ -582,7 +585,7 @@ func (s *Server) validateEndpoint(endpoint, p256dh, auth string) error {
 	if _, err := s.policy.CheckURL(endpoint); err != nil {
 		return fmt.Errorf("endpoint: %w", err)
 	}
-	if !s.pushOrigins[u.Scheme+"://"+u.Host] {
+	if !s.pushOriginApproved(u.Scheme + "://" + u.Host) {
 		return errors.New("endpoint: origin is not an approved push-service origin")
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(p256dh)
@@ -750,14 +753,49 @@ func defaultPushOrigins() map[string]bool {
 	}
 	for _, origin := range []string{
 		"https://fcm.googleapis.com",
+		"https://jmt17.google.com",
 		"https://updates.push.services.mozilla.com",
-		"https://push.apple.com",
-		"https://notify.windows.com",
 		"https://push.services.mozilla.com",
+		"https://*.push.apple.com",
+		"https://*.notify.windows.com",
 	} {
 		out[origin] = true
 	}
 	return out
+}
+
+// pushOriginApproved reports whether an endpoint origin is covered by the
+// approved push-service origins (§5.6). Entries are exact origins or
+// "scheme://*.host" wildcards; PushOriginsAny bypasses the list entirely
+// (the outbound-request policy still applies).
+func (s *Server) pushOriginApproved(origin string) bool {
+	if s.pushOriginsAny {
+		return true
+	}
+	for entry := range s.pushOrigins {
+		if originMatches(entry, origin) {
+			return true
+		}
+	}
+	return false
+}
+
+// originMatches matches an approved-origin entry against an endpoint origin.
+// "scheme://*.suffix" matches "scheme://suffix" and any "scheme://<sub>.suffix".
+func originMatches(entry, origin string) bool {
+	if entry == origin {
+		return true
+	}
+	entryScheme, entryHost, ok := strings.Cut(entry, "://")
+	if !ok || !strings.HasPrefix(entryHost, "*.") {
+		return false
+	}
+	originScheme, originHost, ok := strings.Cut(origin, "://")
+	if !ok || originScheme != entryScheme {
+		return false
+	}
+	suffix := entryHost[len("*."):]
+	return originHost == suffix || strings.HasSuffix(originHost, "."+suffix)
 }
 
 // logRequests logs method, path, status and duration (topics and hashes only —

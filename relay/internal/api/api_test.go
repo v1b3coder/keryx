@@ -44,6 +44,11 @@ func discardLogger() *slog.Logger {
 
 func newTestServer(t *testing.T, debug bool) (*Server, *store.Store) {
 	t.Helper()
+	return newTestServerWith(t, debug, []string{"http://127.0.0.1:9999"}, false)
+}
+
+func newTestServerWith(t *testing.T, debug bool, origins []string, anyOrigin bool) (*Server, *store.Store) {
+	t.Helper()
 	st, err := store.Open(":memory:", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +63,8 @@ func newTestServer(t *testing.T, debug bool) (*Server, *store.Store) {
 		Debug:               debug,
 		DebugAPIKey:         "debug-secret",
 		Policy:              policy,
-		ApprovedPushOrigins: []string{"http://127.0.0.1:9999"},
+		ApprovedPushOrigins: origins,
+		PushOriginsAny:      anyOrigin,
 		Logger:              discardLogger(),
 	})
 	return srv, st
@@ -155,6 +161,58 @@ func TestRegistrationValidation(t *testing.T) {
 		})
 	}
 	_ = topic
+}
+
+func TestPushOriginMatching(t *testing.T) {
+	tests := []struct {
+		entry, origin string
+		want          bool
+	}{
+		{"https://ntfy.sh", "https://ntfy.sh", true},
+		{"https://ntfy.sh", "https://evil.example", false},
+		{"https://*.push.apple.com", "https://web.push.apple.com", true},
+		{"https://*.push.apple.com", "https://push.apple.com", true},
+		{"https://*.push.apple.com", "https://evilpush.apple.com", false},
+		{"https://*.push.apple.com", "https://push.apple.com.evil.example", false},
+		{"https://*.push.apple.com", "http://web.push.apple.com", false},
+		{"https://*.notify.windows.com", "https://wns2-par02p.notify.windows.com", true},
+	}
+	for _, tc := range tests {
+		if got := originMatches(tc.entry, tc.origin); got != tc.want {
+			t.Errorf("originMatches(%q, %q) = %v, want %v", tc.entry, tc.origin, got, tc.want)
+		}
+	}
+
+	// The seed list must approve the real browser push services.
+	srv, _ := newTestServer(t, false)
+	for _, origin := range []string{
+		"https://web.push.apple.com",
+		"https://wns2-par02p.notify.windows.com",
+		"https://jmt17.google.com",
+		"https://fcm.googleapis.com",
+		"https://updates.push.services.mozilla.com",
+		"https://ntfy.sh",
+	} {
+		if !srv.pushOriginApproved(origin) {
+			t.Errorf("seed list does not approve %s", origin)
+		}
+	}
+}
+
+func TestAnyPushOriginMode(t *testing.T) {
+	srv, _ := newTestServerWith(t, false, nil, true)
+	h := srv.Handler()
+	body := `{"endpoint":"http://127.0.0.1:9999/x","keys":{"p256dh":"` + testP256DH(t) + `","auth":"` + testAuth + `"},"topics":[]}`
+	rec := do(t, h, http.MethodPost, "/v1/registrations", body, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("any mode = %d: %s", rec.Code, rec.Body)
+	}
+	// The outbound policy still applies: non-HTTPS endpoints stay rejected.
+	body = `{"endpoint":"ftp://127.0.0.1:9999/x","keys":{"p256dh":"` + testP256DH(t) + `","auth":"` + testAuth + `"},"topics":[]}`
+	rec = do(t, h, http.MethodPost, "/v1/registrations", body, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("any mode non-https = %d: %s", rec.Code, rec.Body)
+	}
 }
 
 func TestPublishValidation(t *testing.T) {

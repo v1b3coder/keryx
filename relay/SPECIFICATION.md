@@ -764,7 +764,12 @@ same checks at every hop. Endpoint URLs must additionally match the
 operator's configured approved push-service origins — browser push
 services plus the default public ntfy instance and any operator-listed
 self-hosted ntfy servers, since UnifiedPush endpoints live on the user's
-chosen ntfy server. Signed `repo_base`
+chosen ntfy server. Entries are exact origins or `*.` host wildcards
+(e.g. `https://*.push.apple.com`), where a wildcard matches the suffix
+host and its subdomains. The operator may instead explicitly configure
+`any`, which accepts any public HTTPS endpoint while keeping every other
+check in this section; it is an opt-out for relays that serve arbitrary
+self-hosted UnifiedPush distributors, not a default. Signed `repo_base`
 metadata authenticates its source, not the safety of its network destination.
 
 ### 5.7 Transport-debug mode (development/testing only)
@@ -1030,7 +1035,7 @@ CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
   registry GC TTL (default 30 days — `last_seen` advances only on client
   activity, so a short TTL sweeps live users on quiet channels), replay-cache
   capacity, replay-seq future tolerance (default 5 min), approved push-service
-  origins, and the explicit debug-mode
+  origins (strict list or explicit `any` mode), and the explicit debug-mode
   flag/API-key configuration (§5.7). The per-company minimum synchronization
   interval is 60 seconds (§5.2).
 - **Company synchronization:** no publisher provisioning or key issuance.

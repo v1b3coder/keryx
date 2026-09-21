@@ -84,6 +84,7 @@ type Config struct {
 	DebugAPIKey string
 
 	ApprovedPushOrigins      []string
+	PushOriginsMode          string
 	CORSOrigins              []string
 	AllowPrivateDestinations bool
 	AllowHTTPDestinations    bool
@@ -163,6 +164,7 @@ func loadConfig(fs *flag.FlagSet) *Config {
 		Debug:                    envBool("RELAY_DEBUG_TRANSPORT", false),
 		DebugAPIKey:              env("RELAY_DEBUG_API_KEY", ""),
 		ApprovedPushOrigins:      envList("RELAY_PUSH_ORIGINS"),
+		PushOriginsMode:          env("RELAY_PUSH_ORIGINS_MODE", "strict"),
 		CORSOrigins:              envList("RELAY_CORS_ORIGINS"),
 		AllowPrivateDestinations: envBool("RELAY_ALLOW_PRIVATE_DESTINATIONS", false),
 		AllowHTTPDestinations:    envBool("RELAY_ALLOW_HTTP_DESTINATIONS", false),
@@ -210,6 +212,8 @@ func loadConfig(fs *flag.FlagSet) *Config {
 	fs.BoolVar(&cfg.AllowHTTPDestinations, "allow-http-destinations", cfg.AllowHTTPDestinations, "TEST ONLY: allow http outbound destinations")
 	fs.StringVar(&cfg.TestCAFile, "test-ca-file", cfg.TestCAFile, "TEST ONLY: extra CA bundle for outbound HTTPS")
 	fs.Var((*listFlag)(&cfg.CORSOrigins), "cors-origin", "allowed PWA origin for cross-origin API calls (repeatable)")
+	fs.Var((*listFlag)(&cfg.ApprovedPushOrigins), "push-origins", "additional approved push-service origins (repeatable; \"scheme://*.host\" wildcards allowed)")
+	fs.StringVar(&cfg.PushOriginsMode, "push-origins-mode", cfg.PushOriginsMode, "approved push-service origins: strict (allowlist) or any (any public HTTPS endpoint)")
 	fs.Var((*listFlag)(&cfg.TestWellKnown), "test-well-known", "TEST ONLY: company=base well-known override (repeatable)")
 	return cfg
 }
@@ -260,6 +264,9 @@ func fatalUsage(usage string) {
 func serve(cfg Config, logger *slog.Logger) error {
 	if cfg.Debug && cfg.DebugAPIKey == "" {
 		return errors.New("debug-transport requires debug-api-key")
+	}
+	if cfg.PushOriginsMode != "strict" && cfg.PushOriginsMode != "any" {
+		return fmt.Errorf("push-origins-mode: want strict or any, got %q", cfg.PushOriginsMode)
 	}
 	st, err := store.Open(cfg.DBPath, cfg.RegistryPath)
 	if err != nil {
@@ -370,6 +377,7 @@ func serve(cfg Config, logger *slog.Logger) error {
 		GlobalProbeBurst:    cfg.GlobalProbeBurst,
 		SeqFutureTolerance:  cfg.SeqFutureTol,
 		ApprovedPushOrigins: cfg.ApprovedPushOrigins,
+		PushOriginsAny:      cfg.PushOriginsMode == "any",
 		CORSOrigins:         cfg.CORSOrigins,
 		Policy:              policy,
 		Logger:              logger,
@@ -385,6 +393,9 @@ func serve(cfg Config, logger *slog.Logger) error {
 	}
 	if cfg.AllowPrivateDestinations || cfg.AllowHTTPDestinations || cfg.TestCAFile != "" || len(cfg.TestWellKnown) > 0 {
 		logger.Warn("test-only outbound destination overrides enabled; do not use in production")
+	}
+	if cfg.PushOriginsMode == "any" {
+		logger.Warn("push-origin allowlist disabled (-push-origins-mode=any); any public HTTPS endpoint is accepted")
 	}
 
 	httpSrv := &http.Server{Addr: cfg.Listen, Handler: srv.Handler()}
