@@ -16,7 +16,7 @@ deleting one company would delete the other's registration.
 | `PushManager` subscription | app-wide | one browser endpoint per relay VAPID key |
 | Relay registration | app-wide | one record holding the **union of topics** of every followed company |
 | Followed topics | per company | derived from each company's channels (relay spec §3) |
-| Post-pair prompt | per company | the consent moment right after pairing |
+| First-company prompt | first company only | the dedicated turn-on screen after channel selection (no skip) |
 | "Topics pending" marker | per company, transient | shown only until the union catches up |
 
 The registration is keyed by relay base URL even though there is exactly one
@@ -30,17 +30,36 @@ follow/unfollow, company removal, wake-up heartbeat — recomputes the union and
 | State | Detection | Presentation |
 |---|---|---|
 | Unsupported | no `Notification`/`PushManager`/SW, or `!isSecureContext` | neutral note: wake-ups unavailable, polling continues |
-| Not asked | `Notification.permission === 'default'` | red top bar + "Turn on" — a tap is the user gesture the prompt needs |
+| Not asked | `Notification.permission === 'default'` | first-company screen, else red top bar + "Turn on" — the tap is the user gesture the prompt needs |
 | Blocked | `Notification.permission === 'denied'` | red top bar + "Check again" + one help URL |
 | Granted, no subscription | `getSubscription() === null` | red top bar + "Turn on" |
 | Registered, relay says gone | heartbeat `404`/`401`, update `409` | red top bar + "Re-subscribe" |
 | Registered, test failed | self-test per-leg result | red top bar + the failing leg |
 | Healthy | permission granted, subscription present, registration current, test ok | subtle "Wake-ups on" row |
 
-Placement: a red top bar on the company list, the post-pair "Turn on" on the
-consent screen, and a transient per-company marker while that company's topics are
-not yet in the union. The bar re-checks on `visibilitychange` and after every
-sync, so it clears itself the moment the user unblocks notifications.
+Placement: the **first-company "Turn on notifications" screen** (no skip),
+then the red top bar on the company list, plus a transient per-company marker
+while that company's topics are not yet in the union. The bar re-checks on
+`visibilitychange` and after every sync, so it clears itself the moment the user
+unblocks notifications.
+
+## First company: the turn-on screen
+
+After pairing and channel selection, the first company shows a dedicated "Turn on
+notifications" screen before the company view. It is the only prompt surface: the
+tap is the user gesture the browser requires, and timely updates are the point of
+the app, so there is no skip.
+
+- CTA tapped → the system/browser prompt appears.
+  - granted → progress state, register, self-test (below), green, company view.
+  - denied or dismissed → company view with the red top bar and "Check again"
+    (the prompt will not reappear; the bar explains how to unblock).
+- The prompt is shown only while `permission === 'default'`. A second company
+  (or a reinstall) with permission already granted and the registration current
+  skips the screen entirely and runs the self-test silently: no second prompt is
+  possible and the app-wide state is already on.
+
+## Prompt policy
 
 The prompt may only be shown while `permission === 'default'`. After a denial no
 browser shows it again, so "Check again" re-reads the state instead of
@@ -76,3 +95,21 @@ consumes no recovery allowance or publish budget. The topic leg's handshake need
 the native shell (FCM topic subscribe) — future work alongside the native shell;
 the endpoint leg's test works today for both the PWA and the UnifiedPush
 connector.
+
+### Outcome rendering (no red flicker)
+
+The state machine has an explicit `testing` state that is never red, so the happy
+path never flashes a red bar:
+
+| Phase | UI |
+|---|---|
+| Registering + testing | neutral progress ("Setting up wake-ups…") |
+| Endpoint leg delivered | progress continues while the topic leg is pending |
+| Both legs settled ok | **green** "Notifications are working" — auto-dismiss ~6 s, then the app-wide card shows "Wake-ups on · tested <time>" |
+| Endpoint leg failed, or registration failed | red bar with the failing leg + "Try again" |
+| Topic leg not confirmed within ~20 s | neutral "sent — not confirmed yet"; upgrades to green if the handler reports the nonce later |
+
+Red appears only on a definitive failure — never during the in-flight window and
+never for a slow push service. A late topic confirmation upgrades the neutral state
+to green; it never flashes red first. "Check again" re-runs the same sequence:
+re-read permission, re-register if needed, self-test, green/red.

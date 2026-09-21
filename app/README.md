@@ -197,12 +197,19 @@ The relay is centralized, so the notification UI is **app-wide**, not
 company-wide: one permission, one push subscription, one relay record holding the
 union of every followed company's topics. The company settings sheet shows no
 notification toggle; there is one app-wide status card plus a red top bar on the
-company list, with the post-pair "Turn on" on the consent screen.
+company list.
+
+After pairing and channel selection, the first company shows a dedicated **"Turn on
+notifications"** screen (no skip — the tap is the user gesture the browser needs).
+Granted → register, self-test, transient green, company view. Denied or dismissed →
+the company view with the red bar and "Check again". A second company with
+permission already granted and the registration current skips the screen and runs the
+self-test silently.
 
 | State | Detection | UI |
 |---|---|---|
 | Unsupported | no `Notification`/`PushManager`/SW, or `!isSecureContext` | neutral note; polling continues |
-| Not asked | `permission === 'default'` | red bar + "Turn on" (prompt needs the tap) |
+| Not asked | `permission === 'default'` | first-company screen, else red bar + "Turn on" (prompt needs the tap) |
 | Blocked | `permission === 'denied'` | red bar + "Check again" + help URL |
 | Granted, no subscription | `getSubscription() === null` | red bar + "Turn on" |
 | Registered, relay says gone | heartbeat `404`/`401` | red bar + "Re-subscribe" |
@@ -217,10 +224,12 @@ bar clears itself once the user unblocks notifications.
 "Check notifications" runs the relay's self-test (§5.3.1): one test delivery per
 leg, reported per leg — browser wake-up delivered/not delivered (the PWA's service
 worker or the UnifiedPush connector) and native wake-up sent/not sent (the FCM
-handler; device receipt is unobservable). Every platform uses one of the two legs,
-and the receiver's rule is the same everywhere: accept only the pending nonce. It
-replaces a "no wake-up for N days" heuristic, which would false-positive on
-companies that publish rarely.
+handler; device receipt is unobservable). The in-flight state is never red: a green
+"Notifications are working" appears on success and auto-dismisses, then the card
+shows "Wake-ups on · tested <time>"; a slow topic leg shows neutral "sent — not
+confirmed yet" and upgrades to green if it arrives later. Red appears only on a
+definitive failure, with the failing leg and "Try again". It replaces a "no wake-up
+for N days" heuristic, which would false-positive on companies that publish rarely.
 
 See [`../design/notifications.md`](../design/notifications.md) for the rationale.
 
