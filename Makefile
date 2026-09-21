@@ -28,10 +28,14 @@ DEMO_PORT      ?= 8000
 DEMO_DIR       ?= demo
 DEMO_SDK_DIR   ?= .demo-sdk
 # Key stores live outside the generated sites (design/tooling.md §3.2).
+# DEMO_KEYS_DIR belongs to the disposable in-repo demo (`make demo`): losing it
+# costs nothing. The published site's keys are the live trust anchor and live
+# outside every repository in ../keryx-demo-keys (keryx-demo/README.md).
 DEMO_KEYS_DIR     ?= $(CURDIR)/.demo-keys
 DEMO_SDK_KEYS_DIR ?= $(CURDIR)/.demo-sdk-keys
-KERYX_DEMO_REPO ?= ../keryx-demo
-KERYX_DEMO_BASE ?= https://keryx-demo.github.io
+KERYX_DEMO_REPO     ?= ../keryx-demo
+KERYX_DEMO_BASE     ?= https://keryx-demo.github.io
+KERYX_DEMO_KEYS_DIR ?= $(abspath ../keryx-demo-keys)
 
 APP_DEPS_STAMP := $(APP_DIR)/node_modules/.installed
 
@@ -82,7 +86,7 @@ relay-test: ## Run the relay test suite
 	cd $(RELAY_DIR) && $(GO) test ./...
 
 relay-e2e: ## Run the relay end-to-end test against the sibling demo repo
-	cd $(RELAY_DIR) && KERYX_DEMO_DIR=$(abspath $(KERYX_DEMO_REPO)) KERYX_KEYSTORE=$(DEMO_KEYS_DIR) $(GO) test -run TestEndToEndDemoRepository ./internal/e2e/...
+	cd $(RELAY_DIR) && KERYX_DEMO_DIR=$(abspath $(KERYX_DEMO_REPO)) KERYX_KEYSTORE=$(KERYX_DEMO_KEYS_DIR) $(GO) test -run TestEndToEndDemoRepository ./internal/e2e/...
 
 # --- demo publisher artifact --------------------------------------------------
 
@@ -103,7 +107,8 @@ serve-demo: ## Serve the demo site with CORS (default port 8000)
 
 keryx-demo: ## Regenerate the published sibling repo (../keryx-demo)
 	@test -d $(KERYX_DEMO_REPO) || { echo "missing sibling repo $(KERYX_DEMO_REPO)"; exit 1; }
-	cd $(DEMO_TOOL_DIR) && $(GO) run . -mode build -site $(abspath $(KERYX_DEMO_REPO)) -keys $(DEMO_KEYS_DIR) -base $(KERYX_DEMO_BASE)
+	@test -f $(KERYX_DEMO_KEYS_DIR)/master.json || { echo "missing published keystore $(KERYX_DEMO_KEYS_DIR) — never mint a new one here: a fresh keystore starts a new root v1 and re-anchors every client (spec/repository.md §5)"; exit 1; }
+	cd $(DEMO_TOOL_DIR) && $(GO) run . -mode build -site $(abspath $(KERYX_DEMO_REPO)) -keys $(KERYX_DEMO_KEYS_DIR) -base $(KERYX_DEMO_BASE)
 
 demo-tool: ## Build the demo site generator into bin/demo-tool
 	mkdir -p $(BIN)

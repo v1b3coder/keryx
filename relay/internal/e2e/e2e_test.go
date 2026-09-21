@@ -51,12 +51,13 @@ func demoDir() string {
 	return filepath.Join("..", "..", "..", "..", "keryx-demo")
 }
 
-// keystoreDir locates the demo key store (outside the published site).
+// keystoreDir locates the published site's key store, which lives outside every
+// repository (keryx-demo/README.md).
 func keystoreDir() string {
 	if dir := os.Getenv("KERYX_KEYSTORE"); dir != "" {
 		return dir
 	}
-	return filepath.Join("..", "..", "..", ".demo-keys")
+	return filepath.Join("..", "..", "..", "..", "keryx-demo-keys")
 }
 
 // resealRoot copies the demo repository, points custom.repo_base at the local
