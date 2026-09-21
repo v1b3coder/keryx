@@ -23,14 +23,15 @@ PII, no per-user state anywhere.
 ## Run it
 
 ```bash
-make demo                            # demo publisher at http://localhost:8000 (CORS-enabled)
-make serve-demo                       # ... and serve it (separate terminal)
-make app-dev                          # web client (Vite prints the port)
+make demo DEMO_REPO=/tmp/keryx-demo DEMO_KEYS_DIR=/tmp/keryx-demo-keys DEMO_BASE=http://localhost:8000
+make serve-demo DEMO_REPO=/tmp/keryx-demo   # serve it at http://localhost:8000 (CORS-enabled)
+make app-dev                                # web client (Vite prints the port)
 ```
 
 Then open the printed URL, tap **Add a company**, and paste the join URL from
-`demo/join.txt` (or open the demo join link — `demo/join/?p=…` — and scan
-the QR code it renders). The flow: confirm the origin
+`/tmp/keryx-demo/join.txt` (or open the demo join link —
+`/tmp/keryx-demo/join/?p=…` — and scan the QR code it renders). The flow:
+confirm the origin
 `localhost:8000` → choose channels (suggested ones preselected, you tap to
 subscribe) → subscribe → verified inbox.
 

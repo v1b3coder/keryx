@@ -56,13 +56,16 @@ import type { StoredItem } from './store';
 hashes.sha512 = sha512;
 
 const demoDir =
-  process.env.KERYX_DEMO_DIR ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'demo');
+  process.env.KERYX_DEMO_DIR ??
+  join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'keryx-demo');
 // private keys live outside the published demo site (design/tooling.md §3.2)
-const keystoreDir = process.env.KERYX_KEYSTORE ?? join(demoDir, '..', '.demo-keys');
-const origin = 'http://localhost:8000';
+const keystoreDir = process.env.KERYX_KEYSTORE ?? join(demoDir, '..', 'keryx-demo-keys');
+// the demo is generated with any base (localhost or keryx-demo.github.io), so derive
+// the origin from its own join link rather than assuming one
+const origin = new URL(readFileSync(join(demoDir, 'join.txt'), 'utf8').trim()).origin;
 
 function fileFor(url: string): string {
-  return join(demoDir, url.replace(/^http:\/\/localhost:8000\//, ''));
+  return join(demoDir, new URL(url).pathname);
 }
 
 function readBytes(url: string): Uint8Array {
@@ -146,10 +149,11 @@ describe('join payload (spec/core.md §3)', () => {
 
   it('allows http join links in debug builds only (HTTPS-only protocol)', () => {
     const p = textToBase64url(JSON.stringify({ v: 1, channels: ['a'] }));
+    const httpOrigin = 'http://localhost:8000';
     setDebugBuild(false);
-    expect(() => parseJoinUrl(`${origin}/join?p=${p}`)).toThrow(/https/i);
+    expect(() => parseJoinUrl(`${httpOrigin}/join?p=${p}`)).toThrow(/https/i);
     setDebugBuild(true);
-    expect(parseJoinUrl(`${origin}/join?p=${p}`).origin).toBe(origin);
+    expect(parseJoinUrl(`${httpOrigin}/join?p=${p}`).origin).toBe(httpOrigin);
     setDebugBuild(null);
   });
 

@@ -25,7 +25,7 @@ import { hexToBytes } from './bytes';
 import type { CompanyRecord } from './store';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const demoDir = process.env.KERYX_DEMO_DIR ?? join(here, '..', '..', '..', 'demo');
+const demoDir = process.env.KERYX_DEMO_DIR ?? join(here, '..', '..', '..', '..', 'keryx-demo');
 const fixture = JSON.parse(readFileSync(join(here, '__fixtures__', 'relay-e2e.json'), 'utf8')) as {
   companyId: string;
   scopeId: string;
