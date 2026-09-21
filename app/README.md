@@ -175,20 +175,18 @@ lite mode (spec/clients.md §3), backup/restore export/import (Phase 2).
 
 ## Relay wake-ups (optional)
 
-Set `VITE_RELAY_URL` (the relay origin) and `VITE_VAPID_PUBLIC` (the
-relay's VAPID public key, from `relay vapid generate`) at build time to
-enable wake-up notifications. The app then derives the same topic as the relay,
-registers the installation's WebPush subscription, and the service worker
-verifies each wake-up against the topic's exact scope before reconciling
-content. Without both variables the app runs exactly as before (polling is the
-backstop).
+A production build uses the **staging relay by default**
+(`DEFAULT_RELAY_URL`/`DEFAULT_VAPID_PUBLIC` in `src/lib/relay.ts`:
+`https://keryx-relay.fly.dev` plus the public half of its
+`RELAY_VAPID_PRIVATE`), so the published PWA receives wake-ups with no build
+configuration. `VITE_RELAY_URL` and `VITE_VAPID_PUBLIC` override that — the
+local harness build does. Dev and test builds without the variables run without a
+relay (polling is the backstop).
 
-The deployed PWA uses the staging relay (`relay/fly.toml`, see the relay
-README's "Deploy to Fly.io"): `deploy-pages.yml` builds it with
-`VITE_RELAY_URL=https://keryx-relay.fly.dev` and the VAPID public key printed
-by `relay vapid generate` (the private half is the relay's
-`RELAY_VAPID_PRIVATE` secret). Local builds that should reach the staging
-relay need `http://localhost:4173` in the relay's `RELAY_CORS_ORIGINS`.
+The app then derives the same topic as the relay, registers the installation's
+WebPush subscription, and the service worker verifies each wake-up against the
+topic's exact scope before reconciling content. Local builds that should reach the
+staging relay need `http://localhost:4173` in the relay's `RELAY_CORS_ORIGINS`.
 
 Browser `PushManager.subscribe` requires a real browser with a push service and
 the notification permission (headless Chrome for Testing denies it), so that one
@@ -201,7 +199,7 @@ cd app && npm test          # app derivation + handlePush against the fixture
 ```
 
 The full live path (a real browser push subscription and a real notification)
-was also run with `relay/cmd/relay-e2e`: it serves a resealed copy of
+was also run with `relay/cmd/relay-harness`: it serves a resealed copy of
 `../keryx-demo` over local HTTPS, exposes `/test/info` + `/test/publish`, and
 the browser's service worker verified the relay's wake-up and showed the notice.
 Build the app with `VITE_RELAY_URL` and `VITE_VAPID_PUBLIC` to repeat it.

@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   publicScopeId,
   privateScopeId,
@@ -17,6 +17,10 @@ import {
   wakeupSignedBytes,
   verifyWakeup,
   topicAuthorization,
+  relayBaseUrl,
+  vapidPublicKey,
+  DEFAULT_RELAY_URL,
+  DEFAULT_VAPID_PUBLIC,
   type Wakeup,
 } from './relay';
 import { topicBindings, orderTokenFromUrl } from './relay-sw';
@@ -173,5 +177,25 @@ describe('topic bindings (§10)', () => {
       sourceHash('company.example', 'AbCdEf0123456789_-xyZ'),
     );
     expect(bindings[privateTopic].channel).toBe('tracking');
+  });
+});
+
+describe('relay configuration', () => {
+  it('defaults to the staging relay in production builds only', () => {
+    expect(DEFAULT_RELAY_URL).toBe('https://keryx-relay.fly.dev');
+    expect(DEFAULT_VAPID_PUBLIC).toMatch(/^B[A-Za-z0-9_-]{80,}$/);
+    // test/dev builds are not production builds: no relay unless configured
+    expect(relayBaseUrl()).toBeNull();
+    expect(vapidPublicKey()).toBeNull();
+  });
+
+  it('lets the build override the relay and its VAPID key', () => {
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example/');
+    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    expect(relayBaseUrl()).toBe('https://relay.example');
+    expect(vapidPublicKey()).toBe(
+      'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs',
+    );
+    vi.unstubAllEnvs();
   });
 });

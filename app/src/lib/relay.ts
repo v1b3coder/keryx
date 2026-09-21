@@ -296,17 +296,28 @@ export interface PushSubscriptionKeys {
   auth: string;
 }
 
-/** The relay base URL configured for this build, or null when unset. */
+/**
+ * The staging relay (relay/fly.toml, relay/README.md "Deploy to Fly.io"). A
+ * production build that sets neither VITE_RELAY_URL nor VITE_VAPID_PUBLIC uses it,
+ * so the published PWA receives wake-ups by default; dev and test builds without
+ * the variables stay offline (polling is the backstop).
+ */
+export const DEFAULT_RELAY_URL = 'https://keryx-relay.fly.dev';
+export const DEFAULT_VAPID_PUBLIC =
+  'BOJ7j2UTkiGYAKjEs5SiMiKl7UdQAhcKogExGAvbdzX0HE5CX48NS9q9Yo_eOJEhaDfdVUoDf7_dne5ABqd5YYY';
+
+/** The relay base URL: the build's VITE_RELAY_URL or the staging relay. */
 export function relayBaseUrl(): string | null {
   const url = import.meta.env.VITE_RELAY_URL;
-  if (typeof url !== 'string' || !url) return null;
-  return url.replace(/\/+$/, '');
+  if (typeof url === 'string' && url) return url.replace(/\/+$/, '');
+  return import.meta.env.PROD ? DEFAULT_RELAY_URL : null;
 }
 
-/** The VAPID public key configured for this build, or null when unset. */
+/** The VAPID public key: the build's VITE_VAPID_PUBLIC or the staging relay's. */
 export function vapidPublicKey(): string | null {
   const key = import.meta.env.VITE_VAPID_PUBLIC;
-  return typeof key === 'string' && key ? key : null;
+  if (typeof key === 'string' && key) return key;
+  return import.meta.env.PROD ? DEFAULT_VAPID_PUBLIC : null;
 }
 
 async function relayFetch(baseUrl: string, path: string, init: RequestInit): Promise<Response> {

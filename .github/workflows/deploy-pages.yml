@@ -40,9 +40,6 @@ jobs:
         working-directory: app
         env:
           VITE_BASE: /keryx/
-          # Staging relay (relay/fly.toml, relay/README.md "Deploy to Fly.io").
-          VITE_RELAY_URL: https://keryx-relay.fly.dev
-          VITE_VAPID_PUBLIC: BOJ7j2UTkiGYAKjEs5SiMiKl7UdQAhcKogExGAvbdzX0HE5CX48NS9q9Yo_eOJEhaDfdVUoDf7_dne5ABqd5YYY
         run: npm run build
 
       - name: Upload Pages artifact
