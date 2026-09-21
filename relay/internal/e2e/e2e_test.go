@@ -262,6 +262,13 @@ func TestEndToEndDemoRepository(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("registration = %d: %s", rec.Code, rec.Body)
 	}
+	var registration struct {
+		ID    string `json:"id"`
+		Token string `json:"management_token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &registration); err != nil {
+		t.Fatal(err)
+	}
 
 	// 4. Sign and publish a wake-up as the security channel key.
 	seq := time.Now().Unix()
@@ -351,6 +358,45 @@ func TestEndToEndDemoRepository(t *testing.T) {
 	rec = post(t, handler, "/v1/publish", string(pubBody), nil)
 	if rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"suppressed":true`)) {
 		t.Fatalf("replay = %d: %s", rec.Code, rec.Body)
+	}
+
+	// 7. The self-test (§5.3.1) delivers the §4.3 payload to the same
+	// registration: never a wake-up, never a sequence change.
+	fake.mu.Lock()
+	fake.body = nil
+	fake.headers = nil
+	fake.mu.Unlock()
+	rec = post(t, handler, "/v1/registrations/"+registration.ID+"/test", "", map[string]string{
+		"Authorization": "Bearer " + registration.Token,
+	})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("self-test = %d: %s", rec.Code, rec.Body)
+	}
+	var testResult struct {
+		Nonce string `json:"nonce"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &testResult); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-fake.ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the self-test reached no push service")
+	}
+	fake.mu.Lock()
+	testBody := fake.body
+	fake.mu.Unlock()
+	plain = decryptRFC8291(t, uaPriv, auth, testBody)
+	var testPayload struct {
+		V     int    `json:"v"`
+		Test  bool   `json:"test"`
+		Nonce string `json:"nonce"`
+	}
+	if err := json.Unmarshal(plain, &testPayload); err != nil {
+		t.Fatal(err)
+	}
+	if testPayload.V != 1 || !testPayload.Test || testPayload.Nonce != testResult.Nonce {
+		t.Fatalf("self-test payload = %s", plain)
 	}
 }
 
