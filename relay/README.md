@@ -101,9 +101,12 @@ leg, put the service-account JSON on the volume and set
 itself when no non-health request has arrived for that long and the dispatch
 queue is empty; the platform starts it again on the next request (first request
 pays a cold start, ~1–3s, and the in-memory queue/replay cache is lost, which
-the spec accepts). `RELAY_IDLE_EXIT_SECONDS=0` keeps it always on. The demo
-company's TUF `timestamp.json` expires within ~2 days, so regenerate the demo
-repository (`make keryx-demo`) to keep the relay from failing it closed.
+the spec accepts). The relay decides this itself, with no platform-specific API —
+so the same binary and configuration work on any platform that autostarts
+stopped processes — at the price of a stop/start rather than Fly's
+memory-retaining suspend. `RELAY_IDLE_EXIT_SECONDS=0` keeps it always on. The
+demo company's TUF `timestamp.json` expires within ~2 days, so regenerate the
+demo repository (`make keryx-demo`) to keep the relay from failing it closed.
 
 ## Local browser end-to-end
 
