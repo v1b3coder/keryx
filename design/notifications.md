@@ -58,10 +58,21 @@ companies that publish rarely.
 "Check notifications" sends one test delivery per leg (relay spec §5.3.1) and
 reports each separately:
 
-- browser wake-up: delivered / not delivered;
-- native wake-up: sent / not sent (device receipt is unobservable).
+| Leg | Receiver | Result wording |
+|---|---|---|
+| Endpoint, PWA | the service worker | browser wake-up delivered / not delivered |
+| Endpoint, de-Googled Android | the UnifiedPush connector → the app handler | browser wake-up delivered / not delivered |
+| Topic, native Android/iOS | the FCM handler | native wake-up sent / not sent (device receipt is unobservable) |
 
-The app generates a nonce, persists it, and sends it with the request; its own
-handler accepts the test only when it sees that nonce, so a forged test can never
-produce a false "delivered". A test is never a wake-up: it fetches no content,
-advances no sequence, and consumes no recovery allowance or publish budget.
+Every platform uses one of the two legs, so the two tests cover all of them.
+The receiver's rule is the same everywhere: accept a §4.3 payload only while
+its `nonce` matches the pending test, then report that leg's result. The relay
+generates the nonce (and, for the topic leg, the short-lived topic it publishes
+to) and returns them with the test; the client cannot choose the topic, and a
+forged test can never produce a false "delivered".
+
+A test is never a wake-up: it fetches no content, advances no sequence, and
+consumes no recovery allowance or publish budget. The topic leg's handshake needs
+the native shell (FCM topic subscribe) — future work alongside the native shell;
+the endpoint leg's test works today for both the PWA and the UnifiedPush
+connector.

@@ -215,9 +215,12 @@ URL. The state is re-checked on `visibilitychange` and after every sync, so the
 bar clears itself once the user unblocks notifications.
 
 "Check notifications" runs the relay's self-test (§5.3.1): one test delivery per
-leg, reported as browser wake-up delivered/not delivered and native wake-up
-sent/not sent. It replaces a "no wake-up for N days" heuristic, which would
-false-positive on companies that publish rarely.
+leg, reported per leg — browser wake-up delivered/not delivered (the PWA's service
+worker or the UnifiedPush connector) and native wake-up sent/not sent (the FCM
+handler; device receipt is unobservable). Every platform uses one of the two legs,
+and the receiver's rule is the same everywhere: accept only the pending nonce. It
+replaces a "no wake-up for N days" heuristic, which would false-positive on
+companies that publish rarely.
 
 See [`../design/notifications.md`](../design/notifications.md) for the rationale.
 
