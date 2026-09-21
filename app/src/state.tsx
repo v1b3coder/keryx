@@ -18,7 +18,7 @@ import {
 } from './lib/store';
 import { syncCompany, applyOutcomeItems } from './lib/sync';
 import { ensureRelayRegistration, heartbeatRelay } from './lib/relay-sw';
-import { deleteRegistration, relayBaseUrl } from './lib/relay';
+import { notificationState, permissionState, runSelfTest, type NotificationState, type SelfTestResult } from './lib/notify';
 import { initDebugBuild } from './lib/build';
 import { safeFetch } from './lib/urlpolicy';
 
@@ -36,14 +36,19 @@ export interface AppActions {
   saveCompany: (company: CompanyRecord, items?: StoredItem[]) => Promise<void>;
   /** re-pair after a company_name change: update the identity snapshot and clear the warning */
   rePairCompany: (origin: string, company: CompanyRecord, newItems?: StoredItem[]) => Promise<void>;
-  /** ask for notification permission and register the installation with the relay */
-  enableNotifications: (origin: string) => Promise<boolean>;
+  /** ask for permission, register, self-test; false when it failed */
+  enableNotifications: () => Promise<boolean>;
+  /** re-read permission/subscription/registration state */
+  checkNotifications: () => Promise<void>;
+  /** re-run the self-test without prompting */
+  runNotificationSelfTest: () => Promise<SelfTestResult>;
 }
 
 interface AppContextValue {
   companies: CompanyRecord[];
   loaded: boolean;
   syncing: boolean;
+  notification: NotificationState;
   actions: AppActions;
 }
 
@@ -56,6 +61,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [companies, setCompanies] = useState<CompanyRecord[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [notification, setNotification] = useState<NotificationState>({ kind: 'unsupported' });
   const itemsRef = useRef<StoredItem[]>([]);
 
   useEffect(() => {
@@ -69,6 +75,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setCompanies(list);
       setLoaded(true);
     })();
+    void notificationState().then(setNotification);
   }, []);
 
   /** Replace the in-memory items of one origin with the post-sync state. */
@@ -88,7 +95,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             await putCompany(outcome.company);
             if (outcome.toPut.length > 0) await putItems(outcome.toPut);
             if (outcome.toDelete.length > 0) await deleteItems(outcome.toDelete);
-            void heartbeatRelay(outcome.company);
+            void heartbeatRelay(outcome.company.origin);
           }
           const list = await getAllCompanies();
           setCompanies(list);
@@ -109,7 +116,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           await putCompany(outcome.company);
           if (outcome.toPut.length > 0) await putItems(outcome.toPut);
           if (outcome.toDelete.length > 0) await deleteItems(outcome.toDelete);
-          void heartbeatRelay(outcome.company);
+          void heartbeatRelay(outcome.company.origin);
           const list = await getAllCompanies();
           setCompanies(list);
         } finally {
@@ -122,21 +129,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const channels = company.channels.map((c) =>
           c.name === channel ? { ...c, followed, isNew: false } : c,
         );
-        // keep the relay registration's followed-topic set in step (§5.3)
-        const updated = await ensureRelayRegistration({ ...company, channels });
-        await putCompany(updated);
+        await putCompany({ ...company, channels });
+        // keep the relay registration's followed-topic union in step (§5.3)
+        await ensureRelayRegistration(await getAllCompanies());
         setCompanies(await getAllCompanies());
       },
-      async enableNotifications(origin) {
-        if (typeof Notification === 'undefined') return false;
-        if ((await Notification.requestPermission()) !== 'granted') return false;
-        const company = await getCompany(origin);
-        if (!company) return false;
-        const updated = await ensureRelayRegistration(company);
-        if (!updated.relay) return false;
-        await putCompany(updated);
-        setCompanies(await getAllCompanies());
-        return true;
+      async enableNotifications() {
+        if (permissionState() === 'unsupported') return false;
+        if ((await Notification.requestPermission()) !== 'granted') {
+          setNotification(await notificationState());
+          return false;
+        }
+        const result = await runSelfTest(await getAllCompanies());
+        setNotification(result.endpoint === 'delivered' ? await notificationState() : { kind: 'failed', leg: result.leg });
+        return result.endpoint === 'delivered';
+      },
+      async checkNotifications() {
+        setNotification(await notificationState());
+      },
+      async runNotificationSelfTest() {
+        const result = await runSelfTest(await getAllCompanies());
+        setNotification(result.endpoint === 'delivered' ? await notificationState() : { kind: 'failed', leg: result.leg });
+        return result;
       },
       async setPrefs(origin, prefs) {
         const company = await getCompany(origin);
@@ -163,13 +177,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setCompanies(await getAllCompanies());
       },
       async removeCompany(origin) {
-        const company = await getCompany(origin);
-        if (company?.relay && relayBaseUrl() === company.relay.baseUrl) {
-          void deleteRegistration(company.relay.baseUrl, company.relay.id, company.relay.managementToken);
-        }
         await deleteCompany(origin);
         itemsRef.current = itemsRef.current.filter((i) => i.origin !== origin);
         setCompanies(await getAllCompanies());
+        // drop the relay registration when no followed topic remains (§5.3)
+        await ensureRelayRegistration(await getAllCompanies());
       },
       async saveCompany(company, newItems) {
         await putCompany(company);
@@ -204,8 +216,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo(
-    () => ({ companies, loaded, syncing, actions }),
-    [companies, loaded, syncing, actions],
+    () => ({ companies, loaded, syncing, notification, actions }),
+    [companies, loaded, syncing, notification, actions],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

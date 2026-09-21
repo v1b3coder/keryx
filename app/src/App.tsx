@@ -19,7 +19,7 @@ type View =
   | { t: 'add'; from: 'start' | 'contacts'; repairOrigin?: string; deepLink?: string };
 
 export default function App() {
-  const { companies, loaded } = useApp();
+  const { companies, loaded, notification, actions } = useApp();
   const [view, setView] = useState<View>({ t: 'start' });
   const [contactsItems, setContactsItems] = useState<StoredItem[]>([]);
 
@@ -100,6 +100,8 @@ export default function App() {
       <Contacts
         companies={companies}
         items={contactsItems}
+        notification={notification}
+        actions={actions}
         onOpen={(origin) => setView({ t: 'company', origin })}
         onAdd={() => setView({ t: 'add', from: 'contacts' })}
       />

@@ -6,16 +6,23 @@
 
 import { Plus } from '@phosphor-icons/react';
 import type { CompanyRecord, StoredItem } from '../lib/store';
+import type { AppActions } from '../state';
+import type { NotificationState } from '../lib/notify';
 import { CompanyLogo } from './CompanyLogo';
+import { NotificationBanner } from './NotificationBanner';
 
 export function Contacts({
   companies,
   items,
+  notification,
+  actions,
   onOpen,
   onAdd,
 }: {
   companies: CompanyRecord[];
   items: StoredItem[];
+  notification: NotificationState;
+  actions: AppActions;
   onOpen: (origin: string) => void;
   onAdd: () => void;
 }) {
@@ -32,6 +39,12 @@ export function Contacts({
         </div>
       </div>
       <div className="screen-pad" style={{ paddingTop: 8 }}>
+        <NotificationBanner
+          state={notification}
+          onEnable={() => void actions.enableNotifications()}
+          onCheck={() => void actions.checkNotifications()}
+          onRetry={() => void actions.runNotificationSelfTest()}
+        />
         {companies.map((company) => {
           const unread = items.filter((i) => i.origin === company.origin && !i.read).length;
           return (

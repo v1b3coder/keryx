@@ -11,7 +11,10 @@ import { parseJoinUrl, type JoinPayload } from '../lib/payload';
 import { buildPairingOffer, createCompanyFromOffer, type PairingOffer } from '../lib/pair';
 import { scanQr } from '../lib/scan';
 import { syncCompany } from '../lib/sync';
-import { getItems, deleteItems } from '../lib/store';
+import { getAllCompanies, getItems, deleteItems, type CompanyRecord } from '../lib/store';
+import { relayBaseUrl } from '../lib/relay';
+import { ensureRelayRegistration, topicBindings } from '../lib/relay-sw';
+import { permissionState } from '../lib/notify';
 import { CompanyLogo } from './CompanyLogo';
 import { useApp } from '../state';
 
@@ -21,6 +24,7 @@ type Step =
   | { t: 'confirm'; origin: string; joinUrl: string; payload: JoinPayload }
   | { t: 'loading'; origin: string; joinUrl: string; payload: JoinPayload }
   | { t: 'consent'; offer: PairingOffer }
+  | { t: 'notifications'; origin: string }
   | { t: 'error'; message: string };
 
 export function AddCompany({
@@ -40,7 +44,7 @@ export function AddCompany({
   const [pasting, setPasting] = useState(false);
   const [pasteValue, setPasteValue] = useState('');
   const videoRef = useRef<HTMLVideoElement>(null);
-  const { actions } = useApp();
+  const { actions, companies } = useApp();
 
   // PWA deep link (?domain=&p=): go straight to the origin confirmation.
   useEffect(() => {
@@ -118,6 +122,7 @@ export function AddCompany({
       setStep({ t: 'error', message: 'This QR code is for a different company. Use the QR from the company you already follow.' });
       return;
     }
+    const firstCompany = companies.length === 0;
     const company = createCompanyFromOffer(step.offer, followed);
     try {
       // re-pairing keeps the cached items (same origin key); read states preserved
@@ -129,15 +134,28 @@ export function AddCompany({
       } else {
         await actions.saveCompany(outcome.company, outcome.toPut);
       }
-      onDone(company.origin);
     } catch {
       if (repairOrigin) {
         await actions.rePairCompany(company.origin, company);
       } else {
         await actions.saveCompany(company);
       }
-      onDone(company.origin);
     }
+    if (repairOrigin) {
+      onDone(company.origin);
+      return;
+    }
+    // a later company with permission already granted and the registration
+    // current skips the screen and self-tests silently: no prompt is possible
+    if (!firstCompany) {
+      const permission = permissionState();
+      if (permission === 'granted' && (await registrationCurrent(company))) {
+        await actions.runNotificationSelfTest();
+        onDone(company.origin);
+        return;
+      }
+    }
+    setStep({ t: 'notifications', origin: company.origin });
   }
 
   if (step.t === 'scan') {
@@ -278,6 +296,15 @@ export function AddCompany({
     return <ConsentScreen offer={step.offer} onSubscribe={(f) => void subscribe(f)} onBack={() => setStep({ t: 'confirm', origin: step.offer.origin, joinUrl: step.offer.joinUrl, payload: parseJoinUrl(step.offer.joinUrl).payload })} />;
   }
 
+  if (step.t === 'notifications') {
+    return (
+      <NotificationsScreen
+        onEnable={() => actions.enableNotifications()}
+        onDone={() => onDone(step.origin)}
+      />
+    );
+  }
+
   return (
     <div className="screen screen-pad" style={{ paddingTop: 48 }}>
       <div className="alert alert-danger">
@@ -395,4 +422,67 @@ function ConsentScreen({
       </div>
     </div>
   );
+}
+
+/**
+ * The first-company "Turn on notifications" screen (design/notifications.md):
+ * the only prompt surface, with no skip. The tap is the user gesture the
+ * browser requires; the app then registers and self-tests.
+ */
+function NotificationsScreen({
+  onEnable,
+  onDone,
+}: {
+  onEnable: () => Promise<boolean>;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  return (
+    <div className="screen screen-pad" style={{ paddingTop: 48 }}>
+      <h1 className="t-title" style={{ margin: 0 }}>
+        Turn on notifications
+      </h1>
+      <p className="t-body t-muted" style={{ margin: '8px 0 24px' }}>
+        Timely updates — security incidents and order status — reach this device
+        only with notifications on.
+      </p>
+      {busy ? (
+        <div className="empty" style={{ padding: 0, alignItems: 'flex-start' }}>
+          <div className="spinner" />
+          <p className="t-small t-muted">Setting up wake-ups…</p>
+        </div>
+      ) : failed ? (
+        <div className="alert alert-danger" style={{ marginBottom: 16 }}>
+          <p>
+            Notifications are off. Allow them in your browser or system settings,
+            then try again.
+          </p>
+        </div>
+      ) : null}
+      <button
+        className="btn btn-primary"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          const ok = await onEnable();
+          setBusy(false);
+          if (ok) onDone();
+          else setFailed(true);
+        }}
+      >
+        Turn on
+      </button>
+    </div>
+  );
+}
+
+/** Whether this company's topics are already registered on the relay. */
+async function registrationCurrent(company: CompanyRecord): Promise<boolean> {
+  const base = relayBaseUrl();
+  if (!base) return false;
+  const relay = await ensureRelayRegistration(await getAllCompanies());
+  if (!relay) return false;
+  const topics = Object.keys(topicBindings(company));
+  return topics.every((t) => t in relay.topics);
 }
