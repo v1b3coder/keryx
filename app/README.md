@@ -182,6 +182,13 @@ verifies each wake-up against the topic's exact scope before reconciling
 content. Without both variables the app runs exactly as before (polling is the
 backstop).
 
+The deployed PWA uses the staging relay (`relay/fly.toml`, see the relay
+README's "Deploy to Fly.io"): `deploy-pages.yml` builds it with
+`VITE_RELAY_URL=https://keryx-relay.fly.dev` and the VAPID public key printed
+by `relay vapid generate` (the private half is the relay's
+`RELAY_VAPID_PRIVATE` secret). Local builds that should reach the staging
+relay need `http://localhost:4173` in the relay's `RELAY_CORS_ORIGINS`.
+
 Browser `PushManager.subscribe` requires a real browser with a push service and
 the notification permission (headless Chrome for Testing denies it), so that one
 step is verified by the stubbed client test plus the service-worker test against
