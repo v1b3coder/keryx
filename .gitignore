@@ -10,3 +10,7 @@ __pycache__/
 /.demo-sdk-keys/
 /demo-tool/keryx-demo
 /demo-tool/.claude/
+
+# Generated SDK demo artifacts and their key store (keys must never be committed)
+/demo-sdk/
+/demo-sdk.keys/
