@@ -318,3 +318,29 @@ func TestTooManyTopics(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestRegistrationForManagement(t *testing.T) {
+	st := openTest(t)
+	now := time.Now().UTC()
+	topic := strings.Repeat("a", 43)
+	id, token, err := st.CreateRegistration("https://push.example/1", "p256dh", "auth", "pwa", "", []string{topic}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := st.RegistrationForManagement(id, token)
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if reg.Endpoint != "https://push.example/1" || reg.P256DH != "p256dh" || reg.Auth != "auth" {
+		t.Fatalf("registration = %+v", reg)
+	}
+	if !reg.CreatedAt.Equal(now.Truncate(time.Second)) || !reg.LastSeen.Equal(now.Truncate(time.Second)) {
+		t.Fatalf("timestamps = %v / %v", reg.CreatedAt, reg.LastSeen)
+	}
+	if _, err := st.RegistrationForManagement(id, "wrong"); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("wrong token = %v", err)
+	}
+	if _, err := st.RegistrationForManagement("missing", token); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing id = %v", err)
+	}
+}

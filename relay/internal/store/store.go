@@ -655,6 +655,33 @@ func (s *Store) HeartbeatRegistration(id, managementToken string, now time.Time)
 	return tx.Commit()
 }
 
+// RegistrationForManagement returns one registration after checking its
+// management token (relay/SPECIFICATION.md §5.3.1). It is the only read of a
+// single registration; the registry stays unreadable without the token.
+func (s *Store) RegistrationForManagement(id, managementToken string) (Registration, error) {
+	var r Registration
+	var created, seen, stored string
+	err := s.registry.QueryRow(`SELECT id, endpoint, p256dh, auth, source, created_at, last_seen, COALESCE(user_agent, ''), management_token_hash
+		FROM registrations WHERE id = ?`, id).
+		Scan(&r.ID, &r.Endpoint, &r.P256DH, &r.Auth, &r.Source, &created, &seen, &r.UserAgent, &stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Registration{}, ErrNotFound
+	}
+	if err != nil {
+		return Registration{}, err
+	}
+	if stored != hashToken(managementToken) {
+		return Registration{}, ErrUnauthorized
+	}
+	if r.CreatedAt, err = time.Parse(time.RFC3339, created); err != nil {
+		return Registration{}, err
+	}
+	if r.LastSeen, err = time.Parse(time.RFC3339, seen); err != nil {
+		return Registration{}, err
+	}
+	return r, nil
+}
+
 // TopicCount returns the number of registrations following topic.
 func (s *Store) TopicCount(topic string) (int, error) {
 	var n int
