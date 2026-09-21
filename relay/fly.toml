@@ -1,0 +1,46 @@
+# Fly.io staging configuration (relay/README.md "Deploy to Fly.io").
+# The relay is single-instance by design: one machine, one volume, and the
+# in-memory dispatch queue/replay cache live with it.
+app = "keryx-relay"
+primary_region = "fra"
+
+[build]
+dockerfile = "Containerfile"
+
+[env]
+  RELAY_LISTEN = "0.0.0.0:8080"
+  RELAY_DB = "/data/relay.db"
+  RELAY_REGISTRY_DB = "/data/registry.db"
+  # The Fly proxy overwrites Fly-Client-IP; trust it only because the app is
+  # reachable exclusively through that proxy.
+  RELAY_TRUSTED_PROXY_IP_HEADER = "Fly-Client-IP"
+  # Exit 0 after 30 idle minutes; the Fly proxy starts the machine again on
+  # the next request. Set to 0 to keep the relay always on.
+  RELAY_IDLE_EXIT_SECONDS = "1800"
+
+[restart]
+  # Exit 0 must stop the machine, not restart it.
+  policy = "on-failure"
+
+[[mounts]]
+  source = "relay_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # The relay exits itself when idle (RELAY_IDLE_EXIT_SECONDS), so the proxy
+  # must not stop it mid-dispatch; it only starts it again.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 0
+  # The relay's own shutdown timeout is 10s.
+  kill_timeout = "15s"
+
+  [[http_service.checks]]
+    type = "http"
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "5s"
+    method = "get"
+    path = "/healthz"

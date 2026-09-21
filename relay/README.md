@@ -52,7 +52,8 @@ Every flag has a `RELAY_*` environment variable (`RELAY_LISTEN`,
 `RELAY_REGISTRY_GC_DAYS`, `RELAY_REFRESH_INTERVAL_SECONDS`,
 `RELAY_REFRESH_CADENCE_SECONDS`, `RELAY_REFRESH_CONCURRENCY`,
 `RELAY_DISCOVERY_PER_MIN`, `RELAY_DISCOVERY_BURST`, `RELAY_PUSH_ORIGINS`,
-`RELAY_PUSH_ORIGINS_MODE`,
+`RELAY_PUSH_ORIGINS_MODE`, `RELAY_TRUSTED_PROXY_IP_HEADER`,
+`RELAY_IDLE_EXIT_SECONDS`,
 `RELAY_DEBUG_TRANSPORT`, `RELAY_DEBUG_API_KEY`). Omit a leg's config to
 disable it (the relay still runs and reports `0`/`disabled` for it).
 
@@ -67,6 +68,42 @@ destination) still applies.
 Test-only flags exist for local end-to-end runs and **must not** be used in
 production: `-allow-private-destinations`, `-allow-http-destinations`,
 `-test-ca-file`, `-test-well-known company=base` and `-cors-origin origin`.
+
+## Deploy to Fly.io (staging)
+
+`Containerfile` builds the static binary on distroless, and `fly.toml` runs one
+machine with a volume for the two SQLite databases, an HTTP check on `/healthz`,
+and the Fly proxy in front (`force_https`). Because the proxy overwrites
+`Fly-Client-IP`, the relay reads it as the client IP for per-IP rate limits
+(`RELAY_TRUSTED_PROXY_IP_HEADER`); only set this behind the platform proxy.
+
+The relay is single-instance by design — the in-memory dispatch queue and replay
+cache do not survive a restart, and two machines would double-send. Keep one
+machine and one volume:
+
+```sh
+fly auth login
+fly apps create keryx-relay           # or edit `app` in fly.toml
+fly volumes create relay_data --size 1 --region fra -a keryx-relay
+fly secrets set -a keryx-relay \
+  RELAY_VAPID_PRIVATE=<base64url> RELAY_VAPID_SUB=mailto:ops@example.com
+fly deploy -a keryx-relay --remote-only
+fly scale count 1 -a keryx-relay
+```
+
+Set `RELAY_CORS_ORIGINS` (the PWA origin) and `RELAY_PUSH_ORIGINS` or
+`RELAY_PUSH_ORIGINS_MODE` in `fly.toml`'s `[env]` or as secrets. For the FCM
+leg, put the service-account JSON on the volume and set
+`RELAY_FCM_SERVICE_ACCOUNT=/data/fcm-sa.json`; without it the leg reports
+`disabled`.
+
+`min_machines_running = 0` and `RELAY_IDLE_EXIT_SECONDS` let the relay exit
+itself when no non-health request has arrived for that long and the dispatch
+queue is empty; the platform starts it again on the next request (first request
+pays a cold start, ~1–3s, and the in-memory queue/replay cache is lost, which
+the spec accepts). `RELAY_IDLE_EXIT_SECONDS=0` keeps it always on. The demo
+company's TUF `timestamp.json` expires within ~2 days, so regenerate the demo
+repository (`make keryx-demo`) to keep the relay from failing it closed.
 
 ## Local browser end-to-end
 
@@ -109,6 +146,8 @@ Base: `/v1/`.
   together; `Authorization: Bearer <management_token>`.
 - `DELETE /v1/registrations/{id}` — remove the registration.
 - `POST /v1/registrations/{id}/heartbeat` — `204` liveness ack.
+- `GET /healthz` — liveness for platform health checks (`200`); never rate
+  limited and not logged.
 
 With `-debug-transport`, only `POST /debug/v1/publish` and
 `GET /debug/v1/publishes/{request_id}` are mounted (production publish and

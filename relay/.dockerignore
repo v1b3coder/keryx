@@ -1,0 +1,6 @@
+.git
+*.db
+*.db-shm
+*.db-wal
+relay
+relay-e2e

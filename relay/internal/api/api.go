@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/v1b3coder/keryx/relay/internal/company"
@@ -50,12 +51,13 @@ type Options struct {
 	GlobalProbePerMin int // default 600
 	GlobalProbeBurst  int // default 1200
 
-	SeqFutureTolerance  time.Duration // default 5m
-	ApprovedPushOrigins []string      // additional approved push-service origins; "scheme://*.host" wildcards allowed
-	PushOriginsAny      bool          // accept any public HTTPS endpoint (opt-in §5.6 mode)
-	CORSOrigins         []string      // allowed PWA origins (cross-origin API)
-	Policy              *netpolicy.Policy
-	Logger              *slog.Logger
+	SeqFutureTolerance   time.Duration // default 5m
+	ApprovedPushOrigins  []string      // additional approved push-service origins; "scheme://*.host" wildcards allowed
+	PushOriginsAny       bool          // accept any public HTTPS endpoint (opt-in §5.6 mode)
+	TrustedProxyIPHeader string        // client-IP header from a trusted platform proxy (e.g. "Fly-Client-IP")
+	CORSOrigins          []string      // allowed PWA origins (cross-origin API)
+	Policy               *netpolicy.Policy
+	Logger               *slog.Logger
 }
 
 // Server serves the relay HTTP API.
@@ -77,7 +79,9 @@ type Server struct {
 
 	pushOrigins    map[string]bool
 	pushOriginsAny bool
+	clientIPHeader string
 	corsOrigins    map[string]bool
+	lastActivity   atomic.Int64
 }
 
 // New builds the API server.
@@ -138,6 +142,7 @@ func New(st *store.Store, d *relay.Dispatcher, companies *companytuf.Manager, op
 		pubLimiters:    map[string]*ratelimit.Limiter{},
 		pushOrigins:    defaultPushOrigins(),
 		pushOriginsAny: opts.PushOriginsAny,
+		clientIPHeader: opts.TrustedProxyIPHeader,
 		corsOrigins:    map[string]bool{},
 	}
 	for _, origin := range opts.ApprovedPushOrigins {
@@ -146,6 +151,7 @@ func New(st *store.Store, d *relay.Dispatcher, companies *companytuf.Manager, op
 	for _, origin := range opts.CORSOrigins {
 		s.corsOrigins[origin] = true
 	}
+	s.lastActivity.Store(time.Now().UnixNano())
 	return s
 }
 
@@ -156,6 +162,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/registrations/{id}", s.handleRegistrationUpdate)
 	mux.HandleFunc("DELETE /v1/registrations/{id}", s.handleRegistrationDelete)
 	mux.HandleFunc("POST /v1/registrations/{id}/heartbeat", s.handleRegistrationHeartbeat)
+	mux.HandleFunc("GET /healthz", s.handleHealth)
 	if s.opts.Debug {
 		mux.HandleFunc("POST /debug/v1/publish", s.handleDebugPublish)
 		mux.HandleFunc("GET /debug/v1/publishes/{request_id}", s.handleProbe)
@@ -164,7 +171,28 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /v1/publishes/{request_id}", s.handleProbe)
 		mux.HandleFunc("POST /v1/companies/{company_id}/refresh", s.handleCompanyRefresh)
 	}
-	return s.logRequests(s.cors(mux))
+	return s.touchActivity(s.logRequests(s.cors(mux)))
+}
+
+// LastActivity returns the time of the last request that was not a health
+// check, for a platform idle-exit policy.
+func (s *Server) LastActivity() time.Time {
+	return time.Unix(0, s.lastActivity.Load())
+}
+
+// touchActivity records the last non-health request so an idle-exit can tell a
+// quiet relay from a busy one. Health checks must not keep the relay awake.
+func (s *Server) touchActivity(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			s.lastActivity.Store(time.Now().UnixNano())
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // cors answers preflight and adds the configured PWA origins. The relay is a
@@ -227,7 +255,7 @@ func (s *Server) handleDebugPublish(w http.ResponseWriter, r *http.Request) {
 func (s *Server) publish(w http.ResponseWriter, r *http.Request, debug bool) {
 	// Unauthenticated traffic is bounded by IP and globally before any
 	// signature or company-state work (§5.4).
-	if !s.ipLimiter.Allow(remoteIP(r)) {
+	if !s.ipLimiter.Allow(s.remoteIP(r)) {
 		writeError(w, http.StatusTooManyRequests, "publish rate limit exceeded")
 		return
 	}
@@ -346,7 +374,7 @@ func webpushCounts(w relay.WebPushResult) map[string]int {
 
 func (s *Server) handleProbe(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	if !s.probeIP.Allow(remoteIP(r)) || !s.probeGlobal.Allow("global") {
+	if !s.probeIP.Allow(s.remoteIP(r)) || !s.probeGlobal.Allow("global") {
 		writeError(w, http.StatusTooManyRequests, "probe rate limit exceeded")
 		return
 	}
@@ -412,7 +440,7 @@ func (s *Server) handleCompanyRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	// Unknown-domain discovery has a separate, stricter admission budget
 	// (§5.2); known companies keep their trust state when it is exhausted.
-	if !s.companies.Known(companyID) && !s.companies.DiscoveryAllowed(remoteIP(r)) {
+	if !s.companies.Known(companyID) && !s.companies.DiscoveryAllowed(s.remoteIP(r)) {
 		w.Header().Set("Retry-After", "60")
 		writeError(w, http.StatusTooManyRequests, "discovery rate limit exceeded")
 		return
@@ -434,7 +462,7 @@ type registrationRequest struct {
 }
 
 func (s *Server) handleRegistrationCreate(w http.ResponseWriter, r *http.Request) {
-	if !s.regLimiter.Allow(remoteIP(r)) {
+	if !s.regLimiter.Allow(s.remoteIP(r)) {
 		writeError(w, http.StatusTooManyRequests, "registration rate limit exceeded")
 		return
 	}
@@ -476,7 +504,7 @@ func (s *Server) handleRegistrationUpdate(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusUnauthorized, "missing management token")
 		return
 	}
-	if !s.regLimiter.Allow(remoteIP(r)) {
+	if !s.regLimiter.Allow(s.remoteIP(r)) {
 		writeError(w, http.StatusTooManyRequests, "registration rate limit exceeded")
 		return
 	}
@@ -532,7 +560,7 @@ func (s *Server) handleRegistrationDelete(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusUnauthorized, "missing management token")
 		return
 	}
-	if !s.regLimiter.Allow(remoteIP(r)) {
+	if !s.regLimiter.Allow(s.remoteIP(r)) {
 		writeError(w, http.StatusTooManyRequests, "registration rate limit exceeded")
 		return
 	}
@@ -724,7 +752,19 @@ func bearerToken(r *http.Request) (string, bool) {
 	return h[len(prefix):], true
 }
 
-func remoteIP(r *http.Request) string {
+// remoteIP returns the client IP used for per-IP rate limits. Behind a
+// platform proxy that overwrites a client-IP header (e.g. Fly.io's
+// Fly-Client-IP), TrustedProxyIPHeader selects it; otherwise the transport
+// peer is used. The header MUST only be trusted when the app is reachable
+// exclusively through that proxy.
+func (s *Server) remoteIP(r *http.Request) string {
+	if s.clientIPHeader != "" {
+		if v := strings.TrimSpace(r.Header.Get(s.clientIPHeader)); v != "" {
+			if ip := net.ParseIP(v); ip != nil {
+				return ip.String()
+			}
+		}
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -802,6 +842,10 @@ func originMatches(entry, origin string) bool {
 // never payloads or capabilities, §9).
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: 200}
 		next.ServeHTTP(rec, r)

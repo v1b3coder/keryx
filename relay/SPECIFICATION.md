@@ -688,8 +688,11 @@ topics, so the relay stores registration ↔ topic mappings in the
 Per verified company (configurable): default 60 publishes/minute, burst 120,
 shared by its scopes and signing keys; rotation does not create a fresh
 company budget. Bound unauthenticated publish traffic by IP and globally
-before signature work. Invalid requests must not consume another company's
-authenticated publish budget merely by naming its domain.
+before signature work. The client IP is the transport peer unless the operator
+configures a trusted platform proxy's client-IP header (e.g. Fly.io's
+`Fly-Client-IP`), which MUST only be trusted when the relay is reachable
+exclusively through that proxy. Invalid requests must not consume another
+company's authenticated publish budget merely by naming its domain.
 Per subscription: topic count ≤ 200. Global: the relay MUST rate-limit
 subscription registration by IP. Company synchronization shares the
 one-attempt-per-minute scheduler and discovery limits in §5.2. Probe reads
@@ -1038,6 +1041,8 @@ CREATE INDEX idx_registration_topics_topic ON registration_topics(topic);
   origins (strict list or explicit `any` mode), and the explicit debug-mode
   flag/API-key configuration (§5.7). The per-company minimum synchronization
   interval is 60 seconds (§5.2).
+- **Liveness:** `GET /healthz` returns `200` for platform health checks. It
+exposes no state, is never rate-limited, and is not logged.
 - **Company synchronization:** no publisher provisioning or key issuance.
   Tooling calls §5.2 for first-use TOFU and subsequent standard TUF updates.
   Existing company trust state is retained across configuration changes.

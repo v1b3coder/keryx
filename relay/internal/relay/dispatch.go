@@ -349,6 +349,20 @@ func (d *Dispatcher) fcmStatus() string {
 	return store.FCMSuppressed
 }
 
+// Idle reports whether no dispatch is queued, running, or waiting to be
+// drained. It is advisory: a publish can arrive at any time, and the platform
+// autostarts the machine on the next request.
+func (d *Dispatcher) Idle() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, st := range d.topics {
+		if st.running || st.queued || st.pending != nil {
+			return false
+		}
+	}
+	return true
+}
+
 // Sweep removes registry rows whose last_seen is older than ttl and prunes the
 // event_log; both run on a low-frequency cadence (§7).
 func (d *Dispatcher) Sweep(regTTL, retention time.Duration) {

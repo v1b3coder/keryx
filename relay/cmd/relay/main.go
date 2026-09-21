@@ -59,6 +59,7 @@ type Config struct {
 	ReplayCapacity int
 	CapabilityTTL  time.Duration
 	SeqFutureTol   time.Duration
+	IdleExit       time.Duration
 
 	PublishPerMin     int
 	PublishBurst      int
@@ -85,6 +86,7 @@ type Config struct {
 
 	ApprovedPushOrigins      []string
 	PushOriginsMode          string
+	TrustedProxyIPHeader     string
 	CORSOrigins              []string
 	AllowPrivateDestinations bool
 	AllowHTTPDestinations    bool
@@ -144,6 +146,7 @@ func loadConfig(fs *flag.FlagSet) *Config {
 		ReplayCapacity:           envInt("RELAY_REPLAY_CAPACITY", 100000),
 		CapabilityTTL:            time.Duration(envInt("RELAY_CAPABILITY_TTL_SECONDS", 3600)) * time.Second,
 		SeqFutureTol:             time.Duration(envInt("RELAY_SEQ_FUTURE_TOLERANCE_SECONDS", 300)) * time.Second,
+		IdleExit:                 time.Duration(envInt("RELAY_IDLE_EXIT_SECONDS", 0)) * time.Second,
 		PublishPerMin:            envInt("RELAY_PUBLISH_PER_MIN", 60),
 		PublishBurst:             envInt("RELAY_PUBLISH_BURST", 120),
 		IPPerMin:                 envInt("RELAY_PUBLISH_IP_PER_MIN", 120),
@@ -165,6 +168,7 @@ func loadConfig(fs *flag.FlagSet) *Config {
 		DebugAPIKey:              env("RELAY_DEBUG_API_KEY", ""),
 		ApprovedPushOrigins:      envList("RELAY_PUSH_ORIGINS"),
 		PushOriginsMode:          env("RELAY_PUSH_ORIGINS_MODE", "strict"),
+		TrustedProxyIPHeader:     env("RELAY_TRUSTED_PROXY_IP_HEADER", ""),
 		CORSOrigins:              envList("RELAY_CORS_ORIGINS"),
 		AllowPrivateDestinations: envBool("RELAY_ALLOW_PRIVATE_DESTINATIONS", false),
 		AllowHTTPDestinations:    envBool("RELAY_ALLOW_HTTP_DESTINATIONS", false),
@@ -189,6 +193,7 @@ func loadConfig(fs *flag.FlagSet) *Config {
 	fs.IntVar(&cfg.ReplayCapacity, "replay-capacity", cfg.ReplayCapacity, "in-memory replay cache entries")
 	fs.DurationVar(&cfg.CapabilityTTL, "capability-ttl", cfg.CapabilityTTL, "dispatch-status capability TTL (default 1h)")
 	fs.DurationVar(&cfg.SeqFutureTol, "seq-future-tolerance", cfg.SeqFutureTol, "reject seq ahead of the clock by more than this")
+	fs.DurationVar(&cfg.IdleExit, "idle-exit", cfg.IdleExit, "exit 0 after this much idle time (0 = never; the platform must autostart the relay)")
 	fs.IntVar(&cfg.PublishPerMin, "publish-per-min", cfg.PublishPerMin, "per-company publish budget")
 	fs.IntVar(&cfg.PublishBurst, "publish-burst", cfg.PublishBurst, "per-company publish burst")
 	fs.IntVar(&cfg.IPPerMin, "publish-ip-per-min", cfg.IPPerMin, "unauthenticated publish budget per IP")
@@ -214,6 +219,7 @@ func loadConfig(fs *flag.FlagSet) *Config {
 	fs.Var((*listFlag)(&cfg.CORSOrigins), "cors-origin", "allowed PWA origin for cross-origin API calls (repeatable)")
 	fs.Var((*listFlag)(&cfg.ApprovedPushOrigins), "push-origins", "additional approved push-service origins (repeatable; \"scheme://*.host\" wildcards allowed)")
 	fs.StringVar(&cfg.PushOriginsMode, "push-origins-mode", cfg.PushOriginsMode, "approved push-service origins: strict (allowlist) or any (any public HTTPS endpoint)")
+	fs.StringVar(&cfg.TrustedProxyIPHeader, "trusted-proxy-ip-header", cfg.TrustedProxyIPHeader, "client-IP header set by a trusted platform proxy (empty = use the transport peer)")
 	fs.Var((*listFlag)(&cfg.TestWellKnown), "test-well-known", "TEST ONLY: company=base well-known override (repeatable)")
 	return cfg
 }
@@ -362,25 +368,26 @@ func serve(cfg Config, logger *slog.Logger) error {
 		Logger:             logger,
 	})
 	srv := api.New(st, dispatcher, companies, api.Options{
-		Debug:               cfg.Debug,
-		DebugAPIKey:         cfg.DebugAPIKey,
-		BodyMax:             1 << 20,
-		PublishPerMin:       cfg.PublishPerMin,
-		PublishBurst:        cfg.PublishBurst,
-		IPPerMin:            cfg.IPPerMin,
-		IPBurst:             cfg.IPBurst,
-		RegPerMin:           cfg.RegPerMin,
-		RegBurst:            cfg.RegBurst,
-		ProbePerMin:         cfg.ProbePerMin,
-		ProbeBurst:          cfg.ProbeBurst,
-		GlobalProbePerMin:   cfg.GlobalProbePerMin,
-		GlobalProbeBurst:    cfg.GlobalProbeBurst,
-		SeqFutureTolerance:  cfg.SeqFutureTol,
-		ApprovedPushOrigins: cfg.ApprovedPushOrigins,
-		PushOriginsAny:      cfg.PushOriginsMode == "any",
-		CORSOrigins:         cfg.CORSOrigins,
-		Policy:              policy,
-		Logger:              logger,
+		Debug:                cfg.Debug,
+		DebugAPIKey:          cfg.DebugAPIKey,
+		BodyMax:              1 << 20,
+		PublishPerMin:        cfg.PublishPerMin,
+		PublishBurst:         cfg.PublishBurst,
+		IPPerMin:             cfg.IPPerMin,
+		IPBurst:              cfg.IPBurst,
+		RegPerMin:            cfg.RegPerMin,
+		RegBurst:             cfg.RegBurst,
+		ProbePerMin:          cfg.ProbePerMin,
+		ProbeBurst:           cfg.ProbeBurst,
+		GlobalProbePerMin:    cfg.GlobalProbePerMin,
+		GlobalProbeBurst:     cfg.GlobalProbeBurst,
+		SeqFutureTolerance:   cfg.SeqFutureTol,
+		ApprovedPushOrigins:  cfg.ApprovedPushOrigins,
+		PushOriginsAny:       cfg.PushOriginsMode == "any",
+		TrustedProxyIPHeader: cfg.TrustedProxyIPHeader,
+		CORSOrigins:          cfg.CORSOrigins,
+		Policy:               policy,
+		Logger:               logger,
 	})
 	if fcm == nil {
 		logger.Warn("FCM leg disabled (no service account configured)")
@@ -397,9 +404,22 @@ func serve(cfg Config, logger *slog.Logger) error {
 	if cfg.PushOriginsMode == "any" {
 		logger.Warn("push-origin allowlist disabled (-push-origins-mode=any); any public HTTPS endpoint is accepted")
 	}
+	if cfg.TrustedProxyIPHeader != "" {
+		logger.Warn("trusting platform proxy client-IP header; only use behind that proxy", "header", cfg.TrustedProxyIPHeader)
+	}
+	if cfg.IdleExit > 0 {
+		logger.Warn("idle-exit enabled; the relay exits when quiet and the platform must autostart it", "idle", cfg.IdleExit)
+	}
 
 	httpSrv := &http.Server{Addr: cfg.Listen, Handler: srv.Handler()}
 	go maintenance(st, dispatcher, srv, cfg, logger)
+
+	// -idle-exit stops the machine when the relay has been quiet long enough;
+	// the platform starts it again on the next request (Fly autostart).
+	idleCh := make(chan struct{}, 1)
+	if cfg.IdleExit > 0 {
+		go idleExitLoop(srv, dispatcher, cfg.IdleExit, idleCh, logger)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -414,16 +434,53 @@ func serve(cfg Config, logger *slog.Logger) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return httpSrv.Shutdown(shutdownCtx)
+	case <-idleCh:
+		logger.Info("shutting down", "reason", "idle")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return httpSrv.Shutdown(shutdownCtx)
+	}
+}
+
+// idleExitLoop exits the process once no non-health request has arrived for
+// idle and the dispatcher has nothing queued or running. The next request is
+// served after the platform autostarts the machine, and the in-memory queue and
+// replay cache are lost with the process (accepted, §5.1/§5.5).
+func idleExitLoop(srv *api.Server, d *relay.Dispatcher, idle time.Duration, ch chan<- struct{}, logger *slog.Logger) {
+	interval := idle / 4
+	if interval < time.Second {
+		interval = time.Second
+	}
+	if interval > 30*time.Second {
+		interval = 30 * time.Second
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for range t.C {
+		if time.Since(srv.LastActivity()) < idle || !d.Idle() {
+			continue
+		}
+		logger.Info("relay idle; exiting for the platform to stop the machine", "idle", idle)
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+		return
 	}
 }
 
 // maintenance sweeps the registry by last_seen, prunes the event_log and drops
-// idle rate-limit state on a low-frequency cadence (§7).
+// idle rate-limit state on a low-frequency cadence (§7). It also sweeps once on
+// startup, so an idle-exit shorter than the cadence cannot starve it.
 func maintenance(st *store.Store, d *relay.Dispatcher, srv *api.Server, cfg Config, logger *slog.Logger) {
+	regTTL := time.Duration(cfg.RegistryGCDays) * 24 * time.Hour
+	retention := time.Duration(cfg.RetentionDays) * 24 * time.Hour
+	d.Sweep(regTTL, retention)
+	srv.Cleanup(2 * time.Hour)
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 	for range ticker.C {
-		d.Sweep(time.Duration(cfg.RegistryGCDays)*24*time.Hour, time.Duration(cfg.RetentionDays)*24*time.Hour)
+		d.Sweep(regTTL, retention)
 		srv.Cleanup(2 * time.Hour)
 	}
 }

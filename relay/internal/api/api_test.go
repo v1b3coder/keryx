@@ -215,6 +215,61 @@ func TestAnyPushOriginMode(t *testing.T) {
 	}
 }
 
+func TestRemoteIP(t *testing.T) {
+	srv, _ := newTestServer(t, false)
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.RemoteAddr = "203.0.113.9:1234"
+	if got := srv.remoteIP(req); got != "203.0.113.9" {
+		t.Fatalf("peer IP = %q", got)
+	}
+	srv.clientIPHeader = "Fly-Client-IP"
+	req.Header.Set("Fly-Client-IP", "198.51.100.7")
+	if got := srv.remoteIP(req); got != "198.51.100.7" {
+		t.Fatalf("header IP = %q", got)
+	}
+	req.Header.Set("Fly-Client-IP", "not-an-ip")
+	if got := srv.remoteIP(req); got != "203.0.113.9" {
+		t.Fatalf("invalid header IP = %q", got)
+	}
+	req.Header.Set("Fly-Client-IP", "")
+	if got := srv.remoteIP(req); got != "203.0.113.9" {
+		t.Fatalf("empty header IP = %q", got)
+	}
+}
+
+func TestHealthz(t *testing.T) {
+	srv, _ := newTestServer(t, false)
+	rec := do(t, srv.Handler(), http.MethodGet, "/healthz", "", nil)
+	if rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"status":"ok"`)) {
+		t.Fatalf("healthz = %d: %s", rec.Code, rec.Body)
+	}
+	srvDebug, _ := newTestServer(t, true)
+	rec = do(t, srvDebug.Handler(), http.MethodGet, "/healthz", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("debug healthz = %d", rec.Code)
+	}
+}
+
+func TestLastActivity(t *testing.T) {
+	srv, _ := newTestServer(t, false)
+	h := srv.Handler()
+	before := srv.LastActivity()
+	rec := do(t, h, http.MethodGet, "/healthz", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("healthz = %d", rec.Code)
+	}
+	if got := srv.LastActivity(); got.After(before) {
+		t.Fatalf("health check counted as activity: %v -> %v", before, got)
+	}
+	rec = do(t, h, http.MethodPost, "/v1/registrations", `{}`, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("registration = %d", rec.Code)
+	}
+	if got := srv.LastActivity(); !got.After(before) {
+		t.Fatal("request did not count as activity")
+	}
+}
+
 func TestPublishValidation(t *testing.T) {
 	srv, st := newTestServer(t, false)
 	h := srv.Handler()
