@@ -30,11 +30,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sigstore/sigstore/pkg/signature"
 	"github.com/theupdateframework/go-tuf/v2/metadata"
 
 	"github.com/v1b3coder/keryx/relay/internal/api"
 	"github.com/v1b3coder/keryx/relay/internal/companytuf"
+	"github.com/v1b3coder/keryx/relay/internal/demoreseal"
 	"github.com/v1b3coder/keryx/relay/internal/netpolicy"
 	"github.com/v1b3coder/keryx/relay/internal/push"
 	"github.com/v1b3coder/keryx/relay/internal/relay"
@@ -126,7 +126,7 @@ func run(cfg config, logger *slog.Logger) error {
 	if err := copyDir(cfg.demoDir, h.serveDir); err != nil {
 		return err
 	}
-	if err := resealRoot(h.serveDir, cfg.keysDir, repoBase); err != nil {
+	if err := demoreseal.Root(h.serveDir, cfg.keysDir, repoBase); err != nil {
 		return err
 	}
 
@@ -389,53 +389,6 @@ func copyDir(src, dst string) error {
 		}
 		return os.WriteFile(target, data, 0o644)
 	})
-}
-
-func resealRoot(dir, keysDir, repoBase string) error {
-	raw, err := os.ReadFile(filepath.Join(keysDir, "master.json"))
-	if err != nil {
-		return err
-	}
-	var record struct {
-		SeedHex string `json:"seed_hex"`
-	}
-	if err := json.Unmarshal(raw, &record); err != nil {
-		return err
-	}
-	seed, err := hex.DecodeString(record.SeedHex)
-	if err != nil || len(seed) != ed25519.SeedSize {
-		return fmt.Errorf("master seed: %v", err)
-	}
-	priv := ed25519.NewKeyFromSeed(seed)
-	for _, name := range []string{"root.json", "1.root.json"} {
-		path := filepath.Join(dir, ".well-known", "keryx", name)
-		rootBytes, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		var root metadata.Metadata[metadata.RootType]
-		if _, err := root.FromBytes(rootBytes); err != nil {
-			return err
-		}
-		custom, _ := root.Signed.UnrecognizedFields["custom"].(map[string]any)
-		custom["repo_base"] = repoBase
-		root.ClearSignatures()
-		signer, err := signature.LoadSigner(priv, 0)
-		if err != nil {
-			return err
-		}
-		if _, err := root.Sign(signer); err != nil {
-			return err
-		}
-		out, err := root.ToBytes(true)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(path, out, 0o644); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func channelKey(keysDir, channel string) (ed25519.PrivateKey, string, error) {
