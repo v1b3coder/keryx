@@ -15,6 +15,7 @@ import { loadImage } from '../lib/media';
 import { CompanyLogo } from './CompanyLogo';
 import { SanitizedHtml, LinkConfirm } from './SanitizedHtml';
 import { NotificationBanner } from './NotificationBanner';
+import { BuildStamp } from './BuildStamp';
 import { useApp } from '../state';
 import { attachmentSha, bytesMatchSha } from '../lib/item';
 import type { FeedItem } from '../lib/item';
@@ -481,6 +482,7 @@ function SettingsSheet({
         >
           <Trash size={20} /> Remove company
         </button>
+        <BuildStamp />
       </div>
     </div>
   );

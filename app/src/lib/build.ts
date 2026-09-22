@@ -42,3 +42,14 @@ export function initDebugBuild(): void {
       debugBuild = false;
     });
 }
+
+/**
+ * The build's short git commit, injected by CI as VITE_GIT_COMMIT (see
+ * .github/workflows/deploy-pages.yml and build-apk.yml). A local build
+ * without it reports 'dev'. Shown in the app so a running install can be
+ * told apart from a stale one.
+ */
+export function appVersion(): string {
+  const commit = import.meta.env.VITE_GIT_COMMIT;
+  return typeof commit === 'string' && commit ? commit.slice(0, 7) : 'dev';
+}

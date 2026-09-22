@@ -9,6 +9,7 @@ import { AppProvider, useApp } from './state';
 import { AddCompany } from './ui/AddCompany';
 import { Contacts } from './ui/Contacts';
 import { CompanyView } from './ui/Company';
+import { BuildStamp } from './ui/BuildStamp';
 import { getAllItems, getCompany, getItems, type CompanyRecord, type StoredItem } from './lib/store';
 import { joinUrlFromDeepLink } from './lib/payload';
 
@@ -133,6 +134,7 @@ export default function App() {
         <button className="btn btn-primary" onClick={() => setView({ t: 'add', from: 'start' })}>
           Add a company
         </button>
+        <BuildStamp />
       </div>
     </div>
   );
