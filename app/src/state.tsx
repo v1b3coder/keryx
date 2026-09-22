@@ -3,11 +3,12 @@
  * Everything is local — no account, no server-side state.
  */
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   getAllCompanies,
   getAllItems,
   getCompany,
+  pendingTest,
   putCompany,
   putItems,
   deleteItems,
@@ -18,6 +19,7 @@ import {
 } from './lib/store';
 import { syncCompany, applyOutcomeItems } from './lib/sync';
 import { ensureRelayRegistration, heartbeatRelay } from './lib/relay-sw';
+import { relayBaseUrl } from './lib/relay';
 import { notificationState, permissionState, runSelfTest, type NotificationState, type SelfTestResult } from './lib/notify';
 import { initDebugBuild } from './lib/build';
 import { safeFetch } from './lib/urlpolicy';
@@ -49,6 +51,8 @@ interface AppContextValue {
   loaded: boolean;
   syncing: boolean;
   notification: NotificationState;
+  /** a self-test completed in this session: show the green enable-workflow tail */
+  freshTest: boolean;
   actions: AppActions;
 }
 
@@ -62,7 +66,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [loaded, setLoaded] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [notification, setNotification] = useState<NotificationState>({ kind: 'unsupported' });
+  const [freshTestAt, setFreshTestAt] = useState<number | null>(null);
   const itemsRef = useRef<StoredItem[]>([]);
+  // an enable/retry self-test may still be in flight: its late arrival is the
+  // same green tail, while a test from before a reload is never shown
+  const sessionTestPending = useRef(false);
+
+  /** Whether this session's in-flight self-test landed at the service worker. */
+  const testLandedThisSession = useCallback(async (): Promise<boolean> => {
+    if (!sessionTestPending.current) return false;
+    const base = relayBaseUrl();
+    const pending = base ? await pendingTest(base) : undefined;
+    sessionTestPending.current = false;
+    return Boolean(pending?.receivedAt);
+  }, []);
+
+  /** Re-read the app-wide state; a landed self-test turns on the green tail. */
+  const refreshNotificationState = useCallback(async () => {
+    const next = await notificationState();
+    if (next.kind === 'ok' && (await testLandedThisSession())) setFreshTestAt(Date.now());
+    setNotification(next);
+  }, [testLandedThisSession]);
+
+  // the green "Notifications are working" is the enable workflow's tail: it
+  // expires on its own and is never shown after a reload
+  useEffect(() => {
+    if (freshTestAt === null) return;
+    const t = setTimeout(() => setFreshTestAt(null), 6000);
+    return () => clearTimeout(t);
+  }, [freshTestAt]);
 
   useEffect(() => {
     initDebugBuild();
@@ -75,23 +107,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setCompanies(list);
       setLoaded(true);
     })();
-    void notificationState().then(setNotification);
+    void refreshNotificationState();
     // the banner re-checks when the app returns to the foreground, so an
     // in-flight test that landed in the background upgrades to green
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void notificationState().then(setNotification);
+      if (document.visibilityState === 'visible') void refreshNotificationState();
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, []);
+  }, [refreshNotificationState]);
 
   // while a self-test is in flight, re-read the app-wide state so a late
   // nonce upgrades it to green without user action
   useEffect(() => {
     if (notification.kind !== 'pending') return;
-    const t = setInterval(() => void notificationState().then(setNotification), 3000);
+    const t = setInterval(() => void refreshNotificationState(), 3000);
     return () => clearInterval(t);
-  }, [notification.kind]);
+  }, [notification.kind, refreshNotificationState]);
 
   // the service worker tells us when a wake-up synced content: re-read the
   // store so the UI shows the new item without a manual reload
@@ -102,12 +134,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       void (async () => {
         itemsRef.current = await getAllItems();
         setCompanies(await getAllCompanies());
-        setNotification(await notificationState());
+        void refreshNotificationState();
       })();
     };
     navigator.serviceWorker.addEventListener('message', onMessage);
     return () => navigator.serviceWorker.removeEventListener('message', onMessage);
-  }, []);
+  }, [refreshNotificationState]);
 
   /** Replace the in-memory items of one origin with the post-sync state. */
   const applyOutcome = (origin: string, existing: Map<string, StoredItem>) => {
@@ -131,7 +163,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const list = await getAllCompanies();
           setCompanies(list);
           // the app-wide state may have changed (a test landed, a leg died)
-          setNotification(await notificationState());
+          await refreshNotificationState();
         } finally {
           setSyncing(false);
         }
@@ -153,7 +185,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const list = await getAllCompanies();
           setCompanies(list);
           // the app-wide state may have changed (a test landed, a leg died)
-          setNotification(await notificationState());
+          await refreshNotificationState();
         } finally {
           setSyncing(false);
         }
@@ -175,16 +207,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setNotification(await notificationState());
           return { endpoint: 'failed', leg: 'registration' };
         }
+        sessionTestPending.current = true;
         const result = await runSelfTest(await getAllCompanies());
-        setNotification(result.endpoint === 'failed' ? { kind: 'failed', leg: result.leg } : await notificationState());
+        if (result.endpoint === 'failed') {
+          sessionTestPending.current = false;
+          setNotification({ kind: 'failed', leg: result.leg });
+        } else {
+          // delivered now or still in flight: the green tail when it lands
+          await refreshNotificationState();
+        }
         return result;
       },
       async checkNotifications() {
         setNotification(await notificationState());
       },
       async runNotificationSelfTest() {
+        sessionTestPending.current = true;
         const result = await runSelfTest(await getAllCompanies());
-        setNotification(result.endpoint === 'failed' ? { kind: 'failed', leg: result.leg } : await notificationState());
+        if (result.endpoint === 'failed') {
+          sessionTestPending.current = false;
+          setNotification({ kind: 'failed', leg: result.leg });
+        } else {
+          await refreshNotificationState();
+        }
         return result;
       },
       async setPrefs(origin, prefs) {
@@ -247,12 +292,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setCompanies(await getAllCompanies());
       },
     }),
-    [companies],
+    [companies, refreshNotificationState],
   );
 
   const value = useMemo(
-    () => ({ companies, loaded, syncing, notification, actions }),
-    [companies, loaded, syncing, notification, actions],
+    () => ({ companies, loaded, syncing, notification, freshTest: freshTestAt !== null, actions }),
+    [companies, loaded, syncing, notification, freshTestAt, actions],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

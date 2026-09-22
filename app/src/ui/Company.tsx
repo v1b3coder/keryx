@@ -64,7 +64,7 @@ export function CompanyView({
   /** add another company (single-source shortcut: no contacts list yet) */
   onAdd: () => void;
 }) {
-  const { actions, companies, syncing, notification } = useApp();
+  const { actions, companies, syncing, notification, freshTest } = useApp();
   const [showSettings, setShowSettings] = useState(false);
   const [pendingLink, setPendingLink] = useState<{ url: string; item: FeedItem } | null>(null);
 
@@ -182,6 +182,7 @@ export function CompanyView({
       <div className="screen-pad" style={{ paddingTop: 8 }}>
         <NotificationBanner
           state={notification}
+          freshTest={freshTest}
           onEnable={() => void actions.enableNotifications()}
           onCheck={() => void actions.checkNotifications()}
           onRetry={() => void actions.runNotificationSelfTest()}

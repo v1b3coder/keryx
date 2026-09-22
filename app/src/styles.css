@@ -602,12 +602,6 @@ a {
   color: var(--text-2);
 }
 
-.banner-subtle {
-  padding: 4px 16px 0;
-  font-size: 13px;
-  color: var(--text-2);
-}
-
 .empty {
   flex: 1;
   display: flex;

@@ -35,11 +35,14 @@ follow/unfollow, company removal, wake-up heartbeat — recomputes the union and
 | Granted, no subscription | `getSubscription() === null` | red top bar + "Turn on" |
 | Registered, relay says gone | heartbeat `404`/`401`, update `409` | red top bar + "Re-subscribe" |
 | Registered, test failed | self-test per-leg result | red top bar + the failing leg |
-| Healthy | permission granted, subscription present, registration current, test ok | subtle "Wake-ups on" row |
+| Healthy | permission granted, subscription present, registration current | no bar — it is reserved for attention states and the enable flow's tail |
 
 Placement: the **first-company "Turn on notifications" screen** (no skip),
-then the red top bar on the company list, plus a transient per-company marker
-while that company's topics are not yet in the union. The bar re-checks on
+then the top bar on the company list, plus a transient per-company marker while
+that company's topics are not yet in the union. The bar is red when wake-ups need
+attention and neutral while a test is in flight; a healthy install shows no bar. The
+green "Notifications are working" is only the tail of an enable/retry in the same
+session — never a persistent status row, never after a reload. The bar re-checks on
 `visibilitychange` and after every sync, so it clears itself the moment the user
 unblocks notifications.
 
@@ -105,11 +108,12 @@ path never flashes a red bar:
 |---|---|
 | Registering + testing | neutral progress ("Setting up wake-ups…") |
 | Endpoint leg delivered | progress continues while the topic leg is pending |
-| Both legs settled ok | **green** "Notifications are working" — auto-dismiss ~6 s, then the app-wide card shows "Wake-ups on · tested <time>" |
+| Both legs settled ok | **green** "Notifications are working" — auto-dismisses ~6 s into no bar; shown only as the tail of an enable/retry in the same session, never after a reload |
 | Endpoint leg failed, or registration failed | red bar with the failing leg + "Try again" |
 | Topic leg not confirmed within ~20 s | neutral "sent — not confirmed yet"; upgrades to green if the handler reports the nonce later |
 
 Red appears only on a definitive failure — never during the in-flight window and
 never for a slow push service. A late topic confirmation upgrades the neutral state
-to green; it never flashes red first. "Check again" re-runs the same sequence:
-re-read permission, re-register if needed, self-test, green/red.
+to green while the enable flow's session lasts; it never flashes red first. "Check
+again" re-runs the same sequence: re-read permission, re-register if needed,
+self-test, green/red.

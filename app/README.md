@@ -196,8 +196,10 @@ staging relay need `http://localhost:4173` in the relay's `RELAY_CORS_ORIGINS`.
 The relay is centralized, so the notification UI is **app-wide**, not
 company-wide: one permission, one push subscription, one relay record holding the
 union of every followed company's topics. The company settings sheet shows no
-notification toggle; there is one app-wide status card plus a red top bar on the
-company list.
+notification toggle; there is one top bar on the company list, shown only when
+wake-ups need attention or while a test is in flight. A healthy install shows no
+bar: the green "Notifications are working" is only the tail of the enable flow in
+the same session.
 
 After pairing and channel selection, the first company shows a dedicated **"Turn on
 notifications"** screen (no skip — the tap is the user gesture the browser needs).
@@ -225,11 +227,12 @@ bar clears itself once the user unblocks notifications.
 leg, reported per leg — browser wake-up delivered/not delivered (the PWA's service
 worker or the UnifiedPush connector) and native wake-up sent/not sent (the FCM
 handler; device receipt is unobservable). The in-flight state is never red: a green
-"Notifications are working" appears on success and auto-dismisses, then the card
-shows "Wake-ups on · tested <time>"; a slow topic leg shows neutral "sent — not
-confirmed yet" and upgrades to green if it arrives later. Red appears only on a
-definitive failure, with the failing leg and "Try again". It replaces a "no wake-up
-for N days" heuristic, which would false-positive on companies that publish rarely.
+"Notifications are working" appears on success and auto-dismisses into no bar — it is
+the enable flow's tail, shown only in the session that ran it, never after a reload.
+A slow topic leg shows neutral "sent — not confirmed yet" and upgrades to green if
+it arrives later in the same session. Red appears only on a definitive failure, with
+the failing leg and "Try again". It replaces a "no wake-up for N days" heuristic,
+which would false-positive on companies that publish rarely.
 
 See [`../design/notifications.md`](../design/notifications.md) for the rationale.
 

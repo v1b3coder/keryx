@@ -15,6 +15,7 @@ export function Contacts({
   companies,
   items,
   notification,
+  freshTest,
   actions,
   onOpen,
   onAdd,
@@ -22,6 +23,7 @@ export function Contacts({
   companies: CompanyRecord[];
   items: StoredItem[];
   notification: NotificationState;
+  freshTest: boolean;
   actions: AppActions;
   onOpen: (origin: string) => void;
   onAdd: () => void;
@@ -41,6 +43,7 @@ export function Contacts({
       <div className="screen-pad" style={{ paddingTop: 8 }}>
         <NotificationBanner
           state={notification}
+          freshTest={freshTest}
           onEnable={() => void actions.enableNotifications()}
           onCheck={() => void actions.checkNotifications()}
           onRetry={() => void actions.runNotificationSelfTest()}
