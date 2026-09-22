@@ -293,7 +293,7 @@ export function AddCompany({
   }
 
   if (step.t === 'consent') {
-    return <ConsentScreen offer={step.offer} onSubscribe={(f) => void subscribe(f)} onBack={() => setStep({ t: 'confirm', origin: step.offer.origin, joinUrl: step.offer.joinUrl, payload: parseJoinUrl(step.offer.joinUrl).payload })} />;
+    return <ConsentScreen offer={step.offer} onSubscribe={subscribe} onBack={() => setStep({ t: 'confirm', origin: step.offer.origin, joinUrl: step.offer.joinUrl, payload: parseJoinUrl(step.offer.joinUrl).payload })} />;
   }
 
   if (step.t === 'notifications') {
@@ -326,12 +326,14 @@ function ConsentScreen({
   onBack,
 }: {
   offer: PairingOffer;
-  onSubscribe: (followed: string[]) => void;
+  onSubscribe: (followed: string[]) => Promise<void>;
   onBack: () => void;
 }) {
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(offer.channels.filter((c) => c.suggested).map((c) => c.name)),
   );
+  // subscribe() runs the TUF chain, which can take seconds: show it in the button
+  const [busy, setBusy] = useState(false);
 
   function toggle(name: string) {
     setSelected((prev) => {
@@ -411,12 +413,23 @@ function ConsentScreen({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12, paddingBottom: 24 }}>
         <button
           className="btn btn-primary"
-          disabled={selected.size === 0 && offer.privateFeeds.length === 0}
-          onClick={() => onSubscribe([...selected])}
+          style={{ position: 'relative' }}
+          disabled={busy || (selected.size === 0 && offer.privateFeeds.length === 0)}
+          aria-busy={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await onSubscribe([...selected]);
+            } catch {
+              setBusy(false);
+            }
+          }}
         >
-          Subscribe
+          {/* the label stays in place; the spinner is overlaid so nothing shifts */}
+          <span style={{ opacity: busy ? 0 : 1 }}>Subscribe</span>
+          {busy && <span className="spinner spinner-btn" aria-hidden="true" />}
         </button>
-        <button className="btn btn-secondary" onClick={onBack}>
+        <button className="btn btn-secondary" disabled={busy} onClick={onBack}>
           Back
         </button>
       </div>
