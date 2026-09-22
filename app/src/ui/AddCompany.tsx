@@ -497,7 +497,7 @@ function NotificationsScreen({
       {phase === 'busy' ? (
         <div className="empty" style={{ flex: 'none', padding: '0 0 16px' }}>
           <div className="spinner" />
-          <p className="t-small t-muted">Setting up wake-ups…</p>
+          <p className="t-small t-muted">Setting up notifications…</p>
         </div>
       ) : phase === 'green' ? (
         <div className="alert" style={{ marginBottom: 16 }}>
@@ -506,7 +506,7 @@ function NotificationsScreen({
       ) : phase === 'pending' ? (
         <div className="alert" style={{ marginBottom: 16 }}>
           <p>
-            Wake-ups are on. The first test is still on its way — it can take a
+            Notifications are on. The first test is still on its way — it can take a
             minute; you can keep using the app.
           </p>
         </div>

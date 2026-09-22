@@ -31,14 +31,14 @@ export function NotificationBanner({
   if (state.kind === 'unsupported') {
     return (
       <div className="banner banner-neutral">
-        Wake-ups are unavailable in this browser — messages still arrive by polling.
+        Notifications are unavailable in this browser — messages still arrive by polling.
       </div>
     );
   }
   if (state.kind === 'pending') {
     return (
       <div className="banner banner-neutral">
-        Wake-ups are on — the first test is still on its way.
+        Notifications are on — the first test is still on its way.
       </div>
     );
   }
@@ -46,7 +46,7 @@ export function NotificationBanner({
     if (dismissed) {
       return (
         <div className="banner banner-subtle">
-          Wake-ups on{state.testedAt ? ` · tested ${new Date(state.testedAt).toLocaleTimeString()}` : ''}
+          Notifications on{state.testedAt ? ` · tested ${new Date(state.testedAt).toLocaleTimeString()}` : ''}
         </div>
       );
     }
@@ -59,9 +59,9 @@ export function NotificationBanner({
         ? 'Turn on notifications to get timely updates.'
         : state.kind === 'failed'
           ? state.leg === 'registration'
-            ? 'Wake-ups could not be registered. Try again.'
+            ? 'Notifications could not be registered. Try again.'
             : 'The test notification did not arrive. Try again.'
-          : 'Wake-ups need to be re-enabled.';
+          : 'Notifications need to be re-enabled.';
   return (
     <div className="banner banner-danger">
       <span>{message}</span>
