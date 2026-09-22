@@ -51,6 +51,7 @@ func main() {
 		a.companyCmd(),
 		a.itemCmd(),
 		a.publishCmd(),
+		a.notifyCmd(),
 		a.refreshCmd(),
 		a.rotateRootCmd(),
 		a.validateCmd(),
