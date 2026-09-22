@@ -49,9 +49,15 @@ bin/pub validate --repo <repo>/keryx --anchor <repo>/.well-known/keryx
 # 3. push the repo to its static host (GitHub Pages), wait for the deploy
 (cd <repo> && git add -A && git commit && git push origin main)
 
-# 4. wake the devices (the relay derives the topic from company_id/scope_id/h)
-bin/pub notify --channel security --company keryx-demo.github.io \
-  --relay https://keryx-relay.fly.dev --keystore <keystore>
+# 4. wake the devices
+#    pub notify polls the deployed repo until it serves the versions pub publish
+#    just wrote, then publishes the wake-up. No guessed sleep: propagation has
+#    been measured from seconds to nearly two minutes. --no-wait skips the wait;
+#    --wait-timeout bounds it (default 5m).
+cd ~/projekty/keryx && bin/pub notify \
+  --repo ../keryx-demo/keryx --channel security \
+  --company keryx-demo.github.io --relay https://keryx-relay.fly.dev \
+  --keystore ../keryx-demo-keys
 ```
 
 `pub notify` prints `webpush sent=N dead=M`: `sent ≥ 1` means the push service
@@ -59,12 +65,13 @@ accepted the wake-up. The app then fetches the new metadata and item, verifies
 them, and displays the article. The relay acks a device's receipt with
 `POST /v1/registrations/{id}/heartbeat` → 204.
 
-**Wait ~90 s after the demo Pages deploy before `pub notify`.** A static host's
-CDN edge can still serve the previous metadata for a minute or two after a deploy,
-so a sync right after the notify silently reads one publish behind (the timestamp
-URL cannot carry a version pin, and the app now adds a per-fetch nonce — but the
-edge still has to catch up). The same wait applies after `fly deploy` before the
-first publish.
+**Wait for the deploy inside `pub notify`, never by sleeping.** It polls the
+deployed repo until the timestamp, snapshot, targets and channel-role versions are
+at least the local repo's, then wakes devices. A fixed sleep cannot know when a
+static host's CDN edge caught up (measured here: seconds to nearly two minutes),
+and waking devices early makes their first sync read the previous metadata and
+silently show one publish behind. `--no-wait` skips the poll; `--wait-timeout`
+bounds it.
 
 **Notification display cannot be verified in automated Firefox.** Playwright's Firefox
 build rejects every `ServiceWorkerRegistration.showNotification` with
