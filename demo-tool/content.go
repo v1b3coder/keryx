@@ -217,6 +217,16 @@ var publicItems = []demoItem{
 		Published:   "2026-08-06T09:00:00Z",
 		Tags:        []string{"security", "self-custody", "en"},
 	},
+	{
+		ID: "msg-2026-09-22-live-demo", Channel: "security", Language: "en",
+		Title:  "Live end-to-end demo: the whole wake-up cycle works",
+		Slug:   "live-end-to-end-demo-the-whole-wake-up-cycle-works",
+		Source: "https://trezor.io/blog/security/live-end-to-end-demo",
+		ContentHTML: "<p>This item was created, signed and published to the demo site to show the whole cycle: create → sign → publish → relay wake-up → notification → content pull → display.</p><p>If you can read it in the app after the notification, every step worked.</p>",
+		Image:       "howstolen.jpg",
+		Published:   "2026-09-22T00:00:00Z",
+		Tags:        []string{"demo", "security", "en"},
+	},
 }
 
 // privateItem is the demo item for the capability (per-order) tracking feed.

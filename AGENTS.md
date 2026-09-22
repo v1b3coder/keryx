@@ -25,6 +25,53 @@ necessary. The relay and the PWA are staging; breaking them is acceptable.
   deployed relay's `vapid_public` log line must match that constant, or every
   push subscription is dead.
 
+## Publisher CLI: the standard way to publish an item
+
+Use `pub` (the SDK reference CLI) for every publisher step — never the demo
+tool. The keystore and the repo are a pair: `pub validate` must pass before
+publishing, and `pub notify` refuses (403) until the relay synchronized the
+company.
+
+```sh
+# 0. sanity: the keystore matches the repo it signs
+bin/pub validate --repo <repo>/keryx --anchor <repo>/.well-known/keryx
+
+# 1. author the draft by hand (spec/feeds.md §1.1), then sign it with the
+#    channel's authors (authored channel: threshold signatures)
+bin/pub item sign --file draft.json --channel security --keyid <author-a> --keystore <keystore>
+bin/pub item sign --file draft.json --channel security --keyid <author-b> --keystore <keystore>
+
+# 2. publish it: writes the item, the channel role, snapshot and timestamp
+bin/pub publish --channel security --file draft.json \
+  --repo <repo>/keryx --anchor <repo>/.well-known/keryx --keystore <keystore>
+bin/pub validate --repo <repo>/keryx --anchor <repo>/.well-known/keryx
+
+# 3. push the repo to its static host (GitHub Pages), wait for the deploy
+(cd <repo> && git add -A && git commit && git push origin main)
+
+# 4. wake the devices (the relay derives the topic from company_id/scope_id/h)
+bin/pub notify --channel security --company keryx-demo.github.io \
+  --relay https://keryx-relay.fly.dev --keystore <keystore>
+```
+
+`pub notify` prints `webpush sent=N dead=M`: `sent ≥ 1` means the push service
+accepted the wake-up. The app then fetches the new metadata and item, verifies
+them, and displays the article. The relay acks a device's receipt with
+`POST /v1/registrations/{id}/heartbeat` → 204.
+
+**Key hygiene (learned the hard way):**
+
+- The keystore (`../keryx-demo-keys`) is the only copy of the demo's private
+  keys. Never regenerate it against the published repo: `make demo` used to mint
+  fresh channel keys on every run, which silently orphaned the published repo's
+  `channels.security` role. The demo tool now reuses existing keys and mints a
+  missing one only once; keep it that way.
+- `pub validate` catches a keystore/repo mismatch before you publish. If it fails,
+  stop and find the matching key (check `/tmp/keryx-rotate-test-keys` and the demo
+  repo's history) instead of minting new ones.
+- The relay refreshes a known company at most once per minute; after changing
+  metadata, hint with `POST /v1/companies/{id}/refresh` and give it ~60s.
+
 ## Full-circle recipe
 
 ```sh
