@@ -59,6 +59,19 @@ accepted the wake-up. The app then fetches the new metadata and item, verifies
 them, and displays the article. The relay acks a device's receipt with
 `POST /v1/registrations/{id}/heartbeat` → 204.
 
+**Wait ~90 s after the demo Pages deploy before `pub notify`.** A static host's
+CDN edge can still serve the previous metadata for a minute or two after a deploy,
+so a sync right after the notify silently reads one publish behind (the timestamp
+URL cannot carry a version pin, and the app now adds a per-fetch nonce — but the
+edge still has to catch up). The same wait applies after `fly deploy` before the
+first publish.
+
+**Notification display cannot be verified in automated Firefox.** Playwright's Firefox
+build rejects every `ServiceWorkerRegistration.showNotification` with
+`NS_ERROR_FAILURE`, so a headless run proves only delivery (the relay's
+`webpush sent` and the device's heartbeat ack), never the visible notice. Verify
+the notice on a real phone (Chrome/Android) or a headed desktop browser.
+
 **Key hygiene (learned the hard way):**
 
 - The keystore (`../keryx-demo-keys`) is the only copy of the demo's private
