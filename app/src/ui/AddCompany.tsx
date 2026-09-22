@@ -495,7 +495,7 @@ function NotificationsScreen({
         </li>
       </ul>
       {phase === 'busy' ? (
-        <div className="empty" style={{ padding: 0, alignItems: 'flex-start' }}>
+        <div className="empty" style={{ flex: 'none', padding: '0 0 16px' }}>
           <div className="spinner" />
           <p className="t-small t-muted">Setting up wake-ups…</p>
         </div>
