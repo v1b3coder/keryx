@@ -69,7 +69,10 @@ func newPublisher(site, keysDir string) *publisher.Publisher {
 		repo.NewDirRepo(filepath.Join(site, ".well-known", "keryx")),
 		ks,
 	)
-	pub.GenerateKeys = true // the single-step demo machine mints every key
+	// Keys are never regenerated: every key is reused from the store, and a
+	// missing one is minted only once (ensureKey below). Regenerating a
+	// channel key here would overwrite the store and silently orphan the keys
+	// that sign the published repository.
 	return pub
 }
 
@@ -141,9 +144,18 @@ func buildAll(site, keysDir string) error {
 	}
 
 	fmt.Println("== channels ==")
+	ks := pub.Keys.(*keys.DirStore)
+	channelIDs := map[string]string{}
+	for _, ch := range channels {
+		k, err := ensureKey(ctx, ks, keys.RoleChannel, ch.Name)
+		if err != nil {
+			return err
+		}
+		channelIDs[ch.Name] = k.KeyID()
+	}
 	authorIDs := make([]string, 0, len(authorChannels["security"].KeyNames))
 	for _, name := range authorChannels["security"].KeyNames {
-		k, err := ensureKey(ctx, pub.Keys.(*keys.DirStore), keys.RoleAuthor, name)
+		k, err := ensureKey(ctx, ks, keys.RoleAuthor, name)
 		if err != nil {
 			return err
 		}
@@ -152,6 +164,7 @@ func buildAll(site, keysDir string) error {
 	if _, err := pub.ChannelAdd(ctx, publisher.ChannelSpec{
 		Name: "security", DisplayName: channels[0].DisplayName,
 		Description: channels[0].Description, Threshold: 2, Authors: authorIDs,
+		KeyID: channelIDs["security"],
 	}); err != nil {
 		return err
 	}
@@ -161,6 +174,7 @@ func buildAll(site, keysDir string) error {
 		}
 		if _, err := pub.ChannelAdd(ctx, publisher.ChannelSpec{
 			Name: ch.Name, DisplayName: ch.DisplayName, Description: ch.Description, Simple: true,
+			KeyID: channelIDs[ch.Name],
 		}); err != nil {
 			return err
 		}
@@ -180,7 +194,6 @@ func buildAll(site, keysDir string) error {
 	}
 
 	fmt.Println("== signing public items (one TUF target per item) ==")
-	ks := pub.Keys.(*keys.DirStore)
 	for _, it := range publicItems {
 		item := itemToMap(it)
 		signers := []string{it.Channel}
