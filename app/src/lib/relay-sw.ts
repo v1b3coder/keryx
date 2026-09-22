@@ -250,6 +250,7 @@ async function notifyClients(origin: string): Promise<void> {
  */
 export async function ensureRelayRegistration(
   companies: CompanyRecord[],
+  fresh = false,
 ): Promise<RelayRegistration | undefined> {
   const base = relayBaseUrl();
   const vapid = vapidPublicKey();
@@ -262,7 +263,18 @@ export async function ensureRelayRegistration(
     await deleteRegistrationRecord(base);
     return undefined;
   }
-  let relay = await getRegistration(base);
+  if (fresh) {
+    // the push service reported the endpoint dead (410): drop the browser
+    // subscription and the local record so a new endpoint is obtained (§5.3)
+    try {
+      const previous = await pushManagerSubscription();
+      if (previous) await previous.unsubscribe();
+    } catch {
+      // best-effort: a failed unsubscribe must not block the fresh one
+    }
+    await deleteRegistrationRecord(base);
+  }
+  let relay = fresh ? undefined : await getRegistration(base);
   try {
     if (!relay) {
       const sub = await subscribePush(vapid);

@@ -103,8 +103,24 @@ export interface SelfTestResult {
 export async function runSelfTest(companies: CompanyRecord[]): Promise<SelfTestResult> {
   const base = relayBaseUrl();
   if (!base) return { endpoint: 'failed', leg: 'registration' };
-  const relay = await ensureRelayRegistration(companies);
+  let relay = await ensureRelayRegistration(companies);
   if (!relay) return { endpoint: 'failed', leg: 'registration' };
+  const first = await attemptTest(base, relay);
+  if (first !== 'dead') return first;
+  // the push service says the endpoint is gone (410): the browser's
+  // subscription is stale and no wake-up can reach it. A fresh subscription
+  // and registration is the only recovery; retry the test once on it.
+  relay = await ensureRelayRegistration(companies, true);
+  if (relay) {
+    const second = await attemptTest(base, relay);
+    if (second !== 'dead') return second;
+  }
+  await clearPendingTest(base);
+  return { endpoint: 'failed', leg: 'endpoint' };
+}
+
+/** One self-test attempt; 'dead' means the endpoint is gone at the push service. */
+async function attemptTest(base: string, relay: RelayRegistration): Promise<SelfTestResult | 'dead'> {
   try {
     const { nonce, expiresAt } = await testRegistration(base, relay.id, relay.managementToken);
     const expires = Date.parse(expiresAt);
@@ -120,7 +136,8 @@ export async function runSelfTest(companies: CompanyRecord[]): Promise<SelfTestR
     // keep the pending nonce: the service worker still accepts it until
     // expiresAt, so a slow first delivery is not reported as a failure
     return { endpoint: 'pending', leg: 'endpoint' };
-  } catch {
+  } catch (err) {
+    if (err instanceof Error && /endpoint dead/.test(err.message)) return 'dead';
     await clearPendingTest(base);
     return { endpoint: 'failed', leg: 'endpoint' };
   }

@@ -268,6 +268,41 @@ describe('relay registration client (relay/SPECIFICATION.md §5.3)', () => {
     vi.unstubAllEnvs();
   });
 
+  it('obtains a fresh subscription when the endpoint is dead', async () => {
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    await putRegistration({ baseUrl: 'https://relay.example', id: 'old', managementToken: 'old-token', topics: {} });
+    let unsubscribed = false;
+    vi.stubGlobal('navigator', {
+      serviceWorker: {
+        ready: Promise.resolve({
+          pushManager: {
+            getSubscription: () =>
+              Promise.resolve({
+                unsubscribe: () => {
+                  unsubscribed = true;
+                  return Promise.resolve(true);
+                },
+              }),
+            subscribe: () =>
+              Promise.resolve({ toJSON: () => ({ endpoint: 'https://push.example/new', keys: { p256dh: 'p', auth: 'a' } }) }),
+          },
+        }),
+      },
+    });
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      requests.push(`${init.method} ${url}`);
+      return Promise.resolve(new Response(JSON.stringify({ id: 'new', management_token: 'new-token' }), { status: 200 }));
+    });
+    const reg = await ensureRelayRegistration([company(newOrigin())], true);
+    expect(unsubscribed).toBe(true);
+    expect(reg?.id).toBe('new');
+    expect(requests.some((r) => r === 'POST https://relay.example/v1/registrations')).toBe(true);
+    await deleteRegistrationRecord('https://relay.example');
+    vi.unstubAllEnvs();
+  });
+
   it('registers the union of every company topic on one relay', async () => {
     vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
     vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
