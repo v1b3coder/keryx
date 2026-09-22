@@ -168,7 +168,7 @@ export class ChainBreakError extends Error {
   }
 }
 
-export type FetchLike = (url: string) => Promise<Response>;
+export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
 // ---------------------------------------------------------------------------
 // Signature verification
@@ -308,7 +308,10 @@ export function checkKeyids(keys: Record<string, TufKey>, where: string): void {
 async function fetchBytes(fetchFn: FetchLike, url: string): Promise<Uint8Array> {
   let res: Response;
   try {
-    res = await fetchFn(url);
+    // Metadata is version/hash-pinned, so a cached body is not a correctness
+    // risk — but a stale one fails the pin and hides new content for as long
+    // as the HTTP cache holds it (GitHub Pages: max-age=600). Revalidate.
+    res = await fetchFn(url, { cache: 'no-cache' });
   } catch (err) {
     throw new FetchError(`fetch ${url}: ${(err as Error).message}`);
   }
