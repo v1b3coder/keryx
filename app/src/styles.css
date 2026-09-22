@@ -549,6 +549,23 @@ a {
   color: var(--text-2);
 }
 
+/* ---------- notification points ---------- */
+
+.points {
+  margin: 0 0 24px;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.points strong {
+  color: var(--text);
+}
+
 /* ---------- notification banner ---------- */
 .banner {
   display: flex;

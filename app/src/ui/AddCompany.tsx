@@ -474,10 +474,26 @@ function NotificationsScreen({
       <h1 className="t-title" style={{ margin: 0 }}>
         Turn on notifications
       </h1>
-      <p className="t-body t-muted" style={{ margin: '8px 0 24px' }}>
+      <p className="t-body t-muted" style={{ margin: '8px 0 12px' }}>
         Timely updates — security incidents and order status — reach this device
         only with notifications on.
       </p>
+      <ul className="points">
+        <li>
+          <strong>Allow them in the next step.</strong> We strongly recommend it —
+          the app works as expected only with notifications on. No second ask:
+          decline, and you will have to allow notifications yourself, in your
+          browser or system settings.
+        </li>
+        <li>
+          <strong>No spam.</strong> Only the companies you follow can reach you —
+          and only on the channels you keep on.
+        </li>
+        <li>
+          <strong>You are in control.</strong> Turn any channel off to silence it,
+          or turn notifications off entirely, in your browser or system settings.
+        </li>
+      </ul>
       {phase === 'busy' ? (
         <div className="empty" style={{ padding: 0, alignItems: 'flex-start' }}>
           <div className="spinner" />
