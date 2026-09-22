@@ -11,6 +11,19 @@ export function formatDate(iso: string): string {
   return new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(t));
 }
 
+/** The same date with the exact local time (hour and minute). */
+export function formatDateTime(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return '';
+  return new Intl.DateTimeFormat(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(t));
+}
+
 export function formatRelative(iso: string): string {
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return '';

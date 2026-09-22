@@ -10,7 +10,7 @@ import { ArrowLeft, GearSix, ArrowClockwise, Trash, ShieldWarning, LockSimple, P
 import { Capacitor } from '@capacitor/core';
 import { Browser } from '@capacitor/browser';
 import type { CompanyRecord, StoredItem, ChannelState } from '../lib/store';
-import { formatDate, matchesFilter } from '../lib/format';
+import { formatDate, formatDateTime, matchesFilter } from '../lib/format';
 import { loadImage } from '../lib/media';
 import { CompanyLogo } from './CompanyLogo';
 import { SanitizedHtml, LinkConfirm } from './SanitizedHtml';
@@ -316,7 +316,10 @@ function FeedArticle({
     return () => io.disconnect();
   }, [onRead]);
 
-  const date = item.date_published ? formatDate(item.date_published) : '';
+  const published = item.date_published ?? '';
+  const date = published ? formatDate(published) : '';
+  const dateTime = published ? formatDateTime(published) : '';
+  const [showTime, setShowTime] = useState(false);
 
   return (
     <article className="article-card" ref={ref}>
@@ -324,7 +327,16 @@ function FeedArticle({
       <div className="article-card-body">
         <h2 className="article-card-title">{item.title ?? 'Untitled'}</h2>
         <div className="article-card-meta">
-          {date && <span>{date}</span>}
+          {date && (
+            <button
+              type="button"
+              className="meta-time"
+              title={showTime ? 'Hide the time' : 'Show the exact time'}
+              onClick={() => setShowTime((v) => !v)}
+            >
+              {showTime ? dateTime : date}
+            </button>
+          )}
           {stored.updated && <span className="chip chip-accent">Updated</span>}
           {(item.tags ?? []).slice(0, 4).map((tag) => (
             <span key={tag} className="chip">
