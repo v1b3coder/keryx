@@ -16,7 +16,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -184,6 +183,3 @@ func descriptorID(descriptor map[string]any) (string, error) {
 	sum := sha256.Sum256(append([]byte(scopeSalt), canonical...))
 	return hex.EncodeToString(sum[:]), nil
 }
-
-// ErrNoChannelKey reports a missing channel key in the store.
-var ErrNoChannelKey = errors.New("notify: no channel key")
