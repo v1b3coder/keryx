@@ -707,7 +707,7 @@ describe('sync failure semantics (spec/core.md §4)', () => {
     // serve a timestamp whose signed bytes no longer verify (a ProtocolError,
     // not a validly-signed-but-unchainable root)
     const tampered = async (url: string) => {
-      if (url.endsWith('/keryx/timestamp.json')) {
+      if (url.includes('/keryx/timestamp.json')) {
         const doc = loadJson<Record<string, any>>('keryx/timestamp.json');
         doc.signed.meta['snapshot.json'].version += 1;
         return new Response(JSON.stringify(doc), { status: 200, headers: { 'content-type': 'application/json' } });

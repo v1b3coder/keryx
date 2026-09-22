@@ -470,9 +470,15 @@ export async function loadAndVerifyMetadata(
   const consistent = root.signed.consistent_snapshot === true;
   let stale = isExpired(root.signed.expires);
 
-  // --- timestamp: unversioned, short expiry (anti-freeze)
+  // --- timestamp: unversioned, short expiry (anti-freeze). Its URL carries a
+  // per-fetch nonce: a static host's CDN edge may still serve the previous
+  // body after a publish (the client's ETag matches the edge's, so revalidation
+  // answers 304), and a stale timestamp silently pins the whole chain one
+  // publish behind. A fresh URL cannot be answered from a cache.
   const timestamp = JSON.parse(
-    new TextDecoder().decode(await fetchBytes(fetchFn, new URL('timestamp.json', base).toString())),
+    new TextDecoder().decode(
+      await fetchBytes(fetchFn, new URL(`timestamp.json?t=${Date.now()}`, base).toString()),
+    ),
   ) as TimestampDoc;
   if (timestamp.signed._type !== 'timestamp') throw new ProtocolError('timestamp.json: not a timestamp document');
   verifyTimestamp(root, timestamp);
