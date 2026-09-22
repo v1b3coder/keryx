@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -14,11 +15,19 @@ import (
 // notifyCmd is the publisher-side wake-up step: after `pub publish` put the
 // content on the static repo, tell the relay to wake the devices
 // (relay/SPECIFICATION.md §5.1). The channel key signs; the relay never
-// holds publisher keys. Call `pub refresh-timestamp` (or the relay's
-// `/v1/companies/{id}/refresh`) first when metadata changed.
+// holds publisher keys.
+//
+// Before waking anyone it waits for the deployed repo to actually serve the
+// metadata `pub publish` just wrote: a static host's CDN edge can serve the
+// previous files for a while after a deploy, and a device woken during that
+// window syncs one publish behind. The wait polls the repository itself, so it
+// does not depend on a guessed platform-specific delay; `--no-wait` skips it
+// (e.g. when the deploy already settled or the repo is local).
 func (a *app) notifyCmd() *cobra.Command {
-	var channel, company, relay string
+	var channel, company, relay, repoBase string
 	var seq int64
+	var noWait bool
+	var waitTimeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "notify",
 		Short: "Sign a wake-up and publish it to the relay",
@@ -39,6 +48,25 @@ func (a *app) notifyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			client := &http.Client{Timeout: 30 * time.Second}
+			if !noWait {
+				base := repoBase
+				if base == "" {
+					base = a.cfg().RepoBase
+				}
+				if base == "" {
+					base = "https://" + id + "/keryx/"
+				}
+				want, err := notify.LocalVersions(a.repoPath(), channel)
+				if err != nil {
+					return fmt.Errorf("local repo (publish first, or pass --no-wait): %w", err)
+				}
+				got, err := notify.WaitForDeploy(a.ctx(), client, base, channel, want, waitTimeout)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("deployed repo is at %s (publish is live)\n", got)
+			}
 			if seq <= 0 {
 				seq = time.Now().Unix()
 			}
@@ -47,7 +75,7 @@ func (a *app) notifyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			res, err := notify.Publish(a.ctx(), relay, id, channel, key, seq, nil)
+			res, err := notify.Publish(a.ctx(), relay, id, channel, key, seq, client)
 			if err != nil {
 				return err
 			}
@@ -61,6 +89,9 @@ func (a *app) notifyCmd() *cobra.Command {
 	f.StringVar(&channel, "channel", "security", "channel name")
 	f.StringVar(&company, "company", "", "company_id (the join origin; default config origin)")
 	f.StringVar(&relay, "relay", "", "relay base URL (e.g. https://relay.example)")
+	f.StringVar(&repoBase, "repo-base", "", "deployed repo base URL (default config repo_base, else https://<company>/keryx/)")
+	f.BoolVar(&noWait, "no-wait", false, "publish the wake-up without waiting for the deploy to propagate")
+	f.DurationVar(&waitTimeout, "wait-timeout", 5*time.Minute, "how long to wait for the deploy to propagate")
 	f.Int64Var(&seq, "seq", 0, "wake-up seq (default: now)")
 	return cmd
 }
