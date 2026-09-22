@@ -9,6 +9,14 @@ import { handlePush } from './lib/relay-sw';
 
 declare const self: ServiceWorkerGlobalScope;
 
+declare global {
+  // The Notifications API supports renotify (alert again when replacing a
+  // notification with the same tag); the DOM lib has not caught up yet.
+  interface NotificationOptions {
+    renotify?: boolean;
+  }
+}
+
 // A new build must take over immediately: without this the old worker keeps
 // serving its precached bundle on installed (mobile) PWAs until every client is
 // closed. The page reloads once when the controller changes (src/main.tsx).
@@ -32,6 +40,8 @@ self.addEventListener('push', (event) => {
       await self.registration.showNotification(outcome.title ?? 'Keryx', {
         body: outcome.body,
         tag: `keryx-${outcome.origin ?? 'update'}`,
+        // a new wake-up must alert, not silently replace the previous notice
+        renotify: true,
         data: { origin: outcome.origin },
       });
     })(),
