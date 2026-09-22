@@ -239,7 +239,9 @@ func (m *Manager) cadenceSweep() {
 }
 
 // attempt reserves the next eligible time and either starts a refresh or
-// schedules one for later.
+// schedules one for later. The reservation is the per-company interval (one
+// attempt per minute, §5.2), not the background cadence: a hint from a
+// publisher after a metadata change must not wait for the 12h sweep.
 func (m *Manager) attempt(id string) {
 	now := time.Now().UTC()
 	known := m.Known(id)
@@ -317,7 +319,7 @@ func (m *Manager) refresh(id string) {
 		m.logger.Warn("company scope table", "company", id, "err", err)
 		return
 	}
-	if err := m.store.SaveState(next, time.Now().UTC().Add(m.cadence)); err != nil {
+	if err := m.store.SaveState(next, time.Now().UTC().Add(m.interval)); err != nil {
 		m.logger.Error("save company state", "company", id, "err", err)
 		return
 	}
