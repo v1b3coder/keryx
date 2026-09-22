@@ -93,6 +93,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(t);
   }, [notification.kind]);
 
+  // the service worker tells us when a wake-up synced content: re-read the
+  // store so the UI shows the new item without a manual reload
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    const onMessage = (event: MessageEvent) => {
+      if ((event.data as { type?: string } | null)?.type !== 'keryx-sync') return;
+      void (async () => {
+        itemsRef.current = await getAllItems();
+        setCompanies(await getAllCompanies());
+        setNotification(await notificationState());
+      })();
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, []);
+
   /** Replace the in-memory items of one origin with the post-sync state. */
   const applyOutcome = (origin: string, existing: Map<string, StoredItem>) => {
     itemsRef.current = applyOutcomeItems(itemsRef.current, origin, existing);

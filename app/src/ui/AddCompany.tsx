@@ -444,13 +444,17 @@ function NotificationsScreen({
   // then continue to the company view
   useEffect(() => {
     if (phase !== 'pending') return;
-    if (notification.kind === 'ok' && notification.testedAt) {
-      setPhase('green');
-      const t = setTimeout(onDone, 2000);
-      return () => clearTimeout(t);
-    }
-    if (notification.kind === 'failed') setPhase('failed');
-  }, [phase, notification, onDone]);
+    if (notification.kind === 'ok' && notification.testedAt) setPhase('green');
+    else if (notification.kind === 'failed') setPhase('failed');
+  }, [phase, notification.kind, notification.testedAt]);
+
+  // continue once, and never cancel the timer just because the app-wide state
+  // was re-read (the notification object is rebuilt on every poll)
+  useEffect(() => {
+    if (phase !== 'green') return;
+    const t = setTimeout(onDone, 2000);
+    return () => clearTimeout(t);
+  }, [phase, onDone]);
 
   return (
     <div className="screen screen-pad" style={{ paddingTop: 48 }}>

@@ -390,7 +390,13 @@ export async function fetchMetadataBytes(
       }
     }
   }
-  return fetchVerifiedBytes(fetchFn, new URL(filename, base).toString(), expected);
+  // The version is part of the URL: a static host's CDN edge may serve the
+  // previous body for the plain filename for minutes after a publish, and its
+  // ETag then matches the cached one, so revalidation answers 304 with stale
+  // bytes. A versioned URL is a different cache key, so it cannot.
+  const url = new URL(filename, base);
+  url.searchParams.set('v', String(info.version));
+  return fetchVerifiedBytes(fetchFn, url.toString(), expected);
 }
 
 function isExpired(expires: string): boolean {

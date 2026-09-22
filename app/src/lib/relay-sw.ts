@@ -7,6 +7,9 @@
  * accepted `seq`, then reconciles content and shows a notification.
  */
 
+/** The service worker global scope (only imported by src/sw.ts and tests). */
+declare const self: ServiceWorkerGlobalScope;
+
 import {
   getAllCompanies,
   getAllItems,
@@ -168,6 +171,7 @@ export async function handlePush(data: string | ArrayBuffer | Uint8Array): Promi
   void heartbeatRelay(company.origin);
 
   if (!recovered) await sync(company);
+  await notifyClients(company.origin);
 
   const name = company.targets.signed.custom?.company_name ?? company.origin;
   return {
@@ -220,8 +224,17 @@ export async function handleTestPayload(payload: unknown): Promise<boolean> {
   return false;
 }
 
-/** The union of every followed company's topic bindings. */
-export function unionTopics(companies: CompanyRecord[]): Record<string, TopicBinding> {
+/**
+ * Tell every open window that a wake-up synced content, so the UI re-reads
+ * the store and shows the new item without a manual reload. Best-effort.
+ */
+async function notifyClients(origin: string): Promise<void> {
+  if (typeof self === 'undefined' || !('clients' in self)) return;
+  const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  for (const client of windows) client.postMessage({ type: 'keryx-sync', origin });
+}
+
+/** The union of every followed company's topic bindings. */export function unionTopics(companies: CompanyRecord[]): Record<string, TopicBinding> {
   const topics: Record<string, TopicBinding> = {};
   for (const company of companies) Object.assign(topics, topicBindings(company));
   return topics;
