@@ -338,21 +338,33 @@ func TestJoinPayload(t *testing.T) {
 
 func TestRefreshTimestampBumpsVersion(t *testing.T) {
 	e := newEnv(t)
-	before, err := e.pub.Validate(e.ctx())
-	if err != nil {
-		t.Fatal(err)
+	load := func() int64 {
+		t.Helper()
+		st, err := tufrepo.Load(e.ctx(), e.pub.Base, e.pub.Anchor)
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		return st.Timestamp.Signed.Version
 	}
+	before := load()
 	res, err := e.pub.RefreshTimestamp(e.ctx())
 	if err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
-	if res.Version <= 0 {
-		t.Fatalf("timestamp version = %d", res.Version)
+	if res.Version != before+1 {
+		t.Fatalf("timestamp version = %d, want %d", res.Version, before+1)
+	}
+	// a second refresh must bump again: clients reject a version that goes back
+	res, err = e.pub.RefreshTimestamp(e.ctx())
+	if err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+	if res.Version != before+2 {
+		t.Fatalf("timestamp version after second refresh = %d, want %d", res.Version, before+2)
 	}
 	if _, err := e.pub.Validate(e.ctx()); err != nil {
 		t.Fatalf("validate after refresh: %v", err)
 	}
-	_ = before
 }
 
 func TestRotateRootChain(t *testing.T) {

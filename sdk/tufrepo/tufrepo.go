@@ -411,7 +411,11 @@ func (s *State) RefreshTimestamp(ops *keys.Key, expires time.Duration, now time.
 	if err != nil {
 		return err
 	}
+	version := s.Timestamp.Signed.Version
 	s.Timestamp = metadata.Timestamp(now.Add(expires))
+	// the constructor starts at v1: a refresh must move the version forward,
+	// never back — clients reject a lower timestamp version as a rollback
+	s.Timestamp.Signed.Version = version + 1
 	if err := s.BuildTimestamp(snapshotBytes); err != nil {
 		return err
 	}
