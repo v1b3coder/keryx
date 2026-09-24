@@ -22,8 +22,9 @@ deleting one company would delete the other's registration.
 The registration is keyed by relay base URL even though there is exactly one
 entry today: if on-premise relays ever return (relay spec §11), they become
 additional entries rather than a rewrite. Every change — pairing,
-follow/unfollow, company removal, wake-up heartbeat — recomputes the union and
-`PUT`s it; a `409`/`401` obtains a fresh subscription and re-registers.
+follow/unfollow, company removal — recomputes the union and `PUT`s it; the
+wake-up heartbeat and the foreground check extend `last_seen` and obtain a fresh
+subscription and registration on `404`/`401`.
 
 ## States
 
