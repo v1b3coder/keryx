@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { handlePush, RECOVERY_COOLDOWN_MS, ensureRelayRegistration } from './relay-sw';
+import { handlePush, RECOVERY_COOLDOWN_MS, ensureRelayRegistration, recoverRelayRegistration } from './relay-sw';
 import {
   putCompany,
   relaySeq,
@@ -266,6 +266,76 @@ describe('relay registration client (relay/SPECIFICATION.md §5.3)', () => {
     expect((await getRegistration('https://relay.example'))?.id).toBe('reg-1');
     await deleteRegistrationRecord('https://relay.example');
     vi.unstubAllEnvs();
+  });
+
+  it('recovers a gone registration with a fresh subscription and POST', async () => {
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    await putRegistration({ baseUrl: 'https://relay.example', id: 'old', managementToken: 'old-token', topics: {} });
+    let unsubscribed = false;
+    vi.stubGlobal('navigator', {
+      serviceWorker: {
+        ready: Promise.resolve({
+          pushManager: {
+            getSubscription: () =>
+              Promise.resolve({
+                unsubscribe: () => {
+                  unsubscribed = true;
+                  return Promise.resolve(true);
+                },
+              }),
+            subscribe: () =>
+              Promise.resolve({
+                toJSON: () => ({ endpoint: 'https://push.example/new', keys: { p256dh: 'p', auth: 'a' } }),
+              }),
+          },
+        }),
+      },
+    });
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      requests.push(`${init.method} ${url}`);
+      return Promise.resolve(
+        new Response(JSON.stringify({ id: 'new', management_token: 'new-token' }), { status: 200 }),
+      );
+    });
+    const reg = await recoverRelayRegistration('https://relay.example');
+    expect(unsubscribed).toBe(true);
+    expect(reg?.id).toBe('new');
+    expect(requests).toEqual(['POST https://relay.example/v1/registrations']);
+    expect((await getRegistration('https://relay.example'))?.id).toBe('new');
+    await deleteRegistrationRecord('https://relay.example');
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('never destroys a working subscription on a transport failure', async () => {
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    await putRegistration({ baseUrl: 'https://relay.example', id: 'old', managementToken: 'old-token', topics: {} });
+    let unsubscribed = false;
+    vi.stubGlobal('navigator', {
+      serviceWorker: {
+        ready: Promise.resolve({
+          pushManager: {
+            getSubscription: () =>
+              Promise.resolve({
+                unsubscribe: () => {
+                  unsubscribed = true;
+                  return Promise.resolve(true);
+                },
+              }),
+          },
+        }),
+      },
+    });
+    vi.stubGlobal('fetch', () => Promise.reject(new Error('offline')));
+    expect(await ensureRelayRegistration([company(newOrigin())])).toBeUndefined();
+    expect(unsubscribed).toBe(false);
+    expect((await getRegistration('https://relay.example'))?.id).toBe('old');
+    await deleteRegistrationRecord('https://relay.example');
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   });
 
   it('obtains a fresh subscription when the endpoint is dead', async () => {

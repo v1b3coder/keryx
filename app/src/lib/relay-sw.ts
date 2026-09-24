@@ -45,10 +45,12 @@ import {
   updateRegistration,
   relayHeartbeat,
   subscribePush,
+  subscribePushWith,
   deleteRegistration,
   relayBaseUrl,
   vapidPublicKey,
   hasDuplicateKeys,
+  RelayGone,
   type RelayRegistration,
   type TopicBinding,
   type Wakeup,
@@ -263,18 +265,8 @@ export async function ensureRelayRegistration(
     await deleteRegistrationRecord(base);
     return undefined;
   }
-  if (fresh) {
-    // the push service reported the endpoint dead (410): drop the browser
-    // subscription and the local record so a new endpoint is obtained (§5.3)
-    try {
-      const previous = await pushManagerSubscription();
-      if (previous) await previous.unsubscribe();
-    } catch {
-      // best-effort: a failed unsubscribe must not block the fresh one
-    }
-    await deleteRegistrationRecord(base);
-  }
-  let relay = fresh ? undefined : await getRegistration(base);
+  if (fresh) return recoverRelayRegistration(base);
+  let relay = await getRegistration(base);
   try {
     if (!relay) {
       const sub = await subscribePush(vapid);
@@ -284,26 +276,59 @@ export async function ensureRelayRegistration(
       await updateRegistration(base, relay.id, relay.managementToken, topicList);
       relay = { ...relay, topics };
     }
-  } catch {
-    // stale token or an existing endpoint: obtain a fresh subscription (§5.3)
-    try {
-      const previous = await pushManagerSubscription();
-      if (previous) await previous.unsubscribe();
-      const sub = await subscribePush(vapid);
-      const created = await createRegistration(base, sub, topicList);
-      relay = { baseUrl: base, id: created.id, managementToken: created.managementToken, topics };
-    } catch {
-      return undefined;
-    }
+  } catch (err) {
+    // the relay no longer knows the registration: recover with a fresh one;
+    // a transport failure must never destroy a working subscription (§5.3)
+    if (!(err instanceof RelayGone)) return undefined;
+    return recoverRelayRegistration(base);
   }
   await putRegistration(relay);
   return relay;
 }
 
+/**
+ * The active service worker registration: the worker's own registration when
+ * this runs in the service worker, the page's controller registration
+ * otherwise. The recovery runs in both contexts (§5.3).
+ */
+async function pushManagerRegistration(): Promise<ServiceWorkerRegistration> {
+  if (typeof self !== 'undefined' && 'registration' in self) return self.registration;
+  return navigator.serviceWorker.ready;
+}
+
+/**
+ * Recover a registration the relay no longer knows: obtain a fresh browser
+ * subscription and POST it with the current topic union (§5.3). Shared by the
+ * page's ensure/foreground check and the service worker's wake-up heartbeat.
+ */
+export async function recoverRelayRegistration(base: string): Promise<RelayRegistration | undefined> {
+  const vapid = vapidPublicKey();
+  if (!vapid) return undefined;
+  const topics = unionTopics(await getAllCompanies());
+  try {
+    const previous = await pushManagerSubscription();
+    if (previous) await previous.unsubscribe();
+  } catch {
+    // best-effort: a failed unsubscribe must not block the fresh one
+  }
+  await deleteRegistrationRecord(base);
+  try {
+    const sub = await subscribePushWith(await pushManagerRegistration(), vapid);
+    const created = await createRegistration(base, sub, Object.keys(topics));
+    const relay = { baseUrl: base, id: created.id, managementToken: created.managementToken, topics };
+    await putRegistration(relay);
+    return relay;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The browser's current push subscription, or null. */
 async function pushManagerSubscription(): Promise<PushSubscription | null> {
-  if (!('serviceWorker' in navigator)) return null;
-  const registration = await navigator.serviceWorker.ready;
+  if (typeof self === 'undefined' || !('registration' in self)) {
+    if (!('serviceWorker' in navigator)) return null;
+  }
+  const registration = await pushManagerRegistration();
   return registration.pushManager.getSubscription();
 }
 

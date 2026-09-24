@@ -343,9 +343,11 @@ function throwIfGone(res: Response, label: string): void {
   }
 }
 
-/** Subscribe the browser's PushManager with the relay's VAPID key. */
-export async function subscribePush(vapid: string): Promise<PushSubscriptionKeys> {
-  const registration = await navigator.serviceWorker.ready;
+/** Subscribe the given registration's PushManager with the relay's VAPID key. */
+export async function subscribePushWith(
+  registration: ServiceWorkerRegistration,
+  vapid: string,
+): Promise<PushSubscriptionKeys> {
   const sub = await registration.pushManager.subscribe({
     userVisibleOnly: true,
     applicationServerKey: base64urlToBytes(vapid) as BufferSource,
@@ -356,6 +358,11 @@ export async function subscribePush(vapid: string): Promise<PushSubscriptionKeys
     throw new Error('push subscription is missing endpoint or keys');
   }
   return { endpoint: json.endpoint, p256dh: keys.p256dh, auth: keys.auth };
+}
+
+/** Subscribe the page's PushManager with the relay's VAPID key (§5.3). */
+export async function subscribePush(vapid: string): Promise<PushSubscriptionKeys> {
+  return subscribePushWith(await navigator.serviceWorker.ready, vapid);
 }
 
 /** POST /v1/registrations — create the registration and return its token. */
