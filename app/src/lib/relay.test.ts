@@ -20,6 +20,9 @@ import {
   relayBaseUrl,
   vapidPublicKey,
   testRegistration,
+  relayHeartbeat,
+  updateRegistration,
+  RelayGone,
   DEFAULT_RELAY_URL,
   DEFAULT_VAPID_PUBLIC,
   type Wakeup,
@@ -195,6 +198,26 @@ describe('self-test client (§5.3.1)', () => {
     expect(captured!.url).toBe('https://relay.example/v1/registrations/reg-1/test');
     expect((captured!.init.headers as Record<string, string>).Authorization).toBe('Bearer tok-1');
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('management errors (§5.3)', () => {
+  it('marks a gone registration as RelayGone, never a transport failure', async () => {
+    for (const status of [401, 404, 409, 410]) {
+      vi.stubGlobal('fetch', () => Promise.resolve(new Response('x', { status })));
+      await expect(relayHeartbeat('https://relay.example', 'reg-1', 'tok-1')).rejects.toBeInstanceOf(RelayGone);
+      await expect(
+        updateRegistration('https://relay.example', 'reg-1', 'tok-1', ['t']),
+      ).rejects.toBeInstanceOf(RelayGone);
+      await expect(testRegistration('https://relay.example', 'reg-1', 'tok-1')).rejects.toBeInstanceOf(RelayGone);
+    }
+    for (const status of [500, 503]) {
+      vi.stubGlobal('fetch', () => Promise.resolve(new Response('x', { status })));
+      await expect(relayHeartbeat('https://relay.example', 'reg-1', 'tok-1')).rejects.not.toBeInstanceOf(RelayGone);
+    }
+    vi.stubGlobal('fetch', () => Promise.reject(new Error('offline')));
+    await expect(relayHeartbeat('https://relay.example', 'reg-1', 'tok-1')).rejects.not.toBeInstanceOf(RelayGone);
     vi.unstubAllGlobals();
   });
 });

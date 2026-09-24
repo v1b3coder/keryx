@@ -328,6 +328,21 @@ async function relayFetch(baseUrl: string, path: string, init: RequestInit): Pro
   return res;
 }
 
+/**
+ * The registration cannot be used as it is: the relay does not know it (`404`),
+ * the management token is stale (`401`), the endpoint belongs to another
+ * registration (`409`) or the push service reported it dead (`410`). A fresh
+ * browser subscription and registration are the only recovery (§5.3).
+ */
+export class RelayGone extends Error {}
+
+/** Throw RelayGone for the statuses that require a fresh registration. */
+function throwIfGone(res: Response, label: string): void {
+  if ([401, 404, 409, 410].includes(res.status)) {
+    throw new RelayGone(`${label}: HTTP ${res.status}`);
+  }
+}
+
 /** Subscribe the browser's PushManager with the relay's VAPID key. */
 export async function subscribePush(vapid: string): Promise<PushSubscriptionKeys> {
   const registration = await navigator.serviceWorker.ready;
@@ -371,6 +386,7 @@ export async function updateRegistration(
     headers: { Authorization: `Bearer ${managementToken}` },
     body: JSON.stringify({ topics }),
   });
+  throwIfGone(res, 'relay update');
   if (!res.ok) throw new Error(`relay update: HTTP ${res.status}`);
 }
 
@@ -384,6 +400,7 @@ export async function relayHeartbeat(
     method: 'POST',
     headers: { Authorization: `Bearer ${managementToken}` },
   });
+  throwIfGone(res, 'relay heartbeat');
   if (!res.ok) throw new Error(`relay heartbeat: HTTP ${res.status}`);
 }
 
@@ -397,7 +414,7 @@ export async function testRegistration(
     method: 'POST',
     headers: { Authorization: `Bearer ${managementToken}` },
   });
-  if (res.status === 410) throw new Error('relay self-test: endpoint dead');
+  throwIfGone(res, 'relay self-test');
   if (!res.ok) throw new Error(`relay self-test: HTTP ${res.status}`);
   const body = (await res.json()) as { nonce?: string; expires_at?: string };
   if (!body.nonce || !body.expires_at) throw new Error('relay self-test: malformed response');
