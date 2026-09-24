@@ -824,8 +824,8 @@ func validateTargetsCustom(targets *metadata.Metadata[metadata.TargetsType]) err
 				return fmt.Errorf("targets.json: custom.logo data URL must be base64")
 			}
 		} else if strings.HasPrefix(logo, "https://") {
-			if sum, _ := c["logo_sha256"].(string); sum == "" {
-				return fmt.Errorf("targets.json: linked custom.logo requires logo_sha256")
+			if sum, _ := c["logo_sha256"].(string); !feed.IsSHA256Hex(sum) {
+				return fmt.Errorf("targets.json: linked custom.logo requires logo_sha256 as a lowercase hex SHA-256")
 			}
 		} else {
 			return fmt.Errorf("targets.json: custom.logo must be a data URL or absolute HTTPS URL")

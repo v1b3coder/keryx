@@ -3,6 +3,7 @@ package feed_test
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"strings"
 	"testing"
 	"time"
 
@@ -124,6 +125,32 @@ func TestValidateItemImageRules(t *testing.T) {
 	it["attachments"] = []any{map[string]any{"url": "http://cdn.example.com/a.pdf"}}
 	if err := feed.ValidateItem(it); err == nil {
 		t.Fatal("accepted an HTTP attachment")
+	}
+}
+
+func TestSHA256FieldsRequireLowercaseHex(t *testing.T) {
+	tests := []struct {
+		name, sum string
+		ok        bool
+	}{
+		{"valid", strings.Repeat("0a", 32), true},
+		{"flag", "--workspace", false},
+		{"uppercase", strings.Repeat("0A", 32), false},
+		{"63 chars", strings.Repeat("a", 63), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			img := item("hello")
+			img["image"] = "https://cdn.example.com/a.jpg"
+			img["image_sha256"] = tt.sum
+			att := item("hello")
+			att["attachments"] = []any{map[string]any{"url": "https://cdn.example.com/a.pdf", "sha256": tt.sum}}
+			for field, it := range map[string]map[string]any{"image_sha256": img, "attachment sha256": att} {
+				if err := feed.ValidateItem(it); (err == nil) != tt.ok {
+					t.Errorf("%s %q: err = %v", field, tt.sum, err)
+				}
+			}
+		})
 	}
 }
 

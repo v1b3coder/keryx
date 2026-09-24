@@ -86,8 +86,8 @@ func (p *Publisher) Init(ctx context.Context, params InitParams) (Result, error)
 	if params.Logo != "" {
 		custom["logo"] = params.Logo
 		if strings.HasPrefix(params.Logo, "https://") {
-			if params.LogoSHA256 == "" {
-				return Result{}, fmt.Errorf("linked logo requires logo_sha256")
+			if !feed.IsSHA256Hex(params.LogoSHA256) {
+				return Result{}, fmt.Errorf("linked logo requires logo_sha256 as a lowercase hex SHA-256")
 			}
 			custom["logo_sha256"] = params.LogoSHA256
 		}
@@ -1169,8 +1169,8 @@ func (p *Publisher) StageCompanySet(ctx context.Context, name, logo, logoSHA256,
 }
 
 func (p *Publisher) companySetMutation(_ context.Context, name, logo, logoSHA256 string) (mutation, error) {
-	if logo != "" && strings.HasPrefix(logo, "https://") && logoSHA256 == "" {
-		return mutation{}, fmt.Errorf("linked logo requires logo_sha256")
+	if strings.HasPrefix(logo, "https://") && !feed.IsSHA256Hex(logoSHA256) {
+		return mutation{}, fmt.Errorf("linked logo requires logo_sha256 as a lowercase hex SHA-256")
 	}
 	return mutation{
 		apply: func(st *tufrepo.State) error {

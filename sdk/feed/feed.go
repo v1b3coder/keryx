@@ -36,7 +36,10 @@ type Attachment struct {
 	SHA256      string `json:"sha256,omitempty"`
 }
 
-var idRe = regexp.MustCompile(`^[a-z0-9-_]+$`)
+var (
+	idRe     = regexp.MustCompile(`^[a-z0-9-_]+$`)
+	sha256Re = regexp.MustCompile(`^[0-9a-f]{64}$`)
+)
 
 // TargetPath returns the TUF target path of one public item.
 func TargetPath(channel, id string) string {
@@ -209,8 +212,8 @@ func ValidateItemOptions(obj map[string]any, allowLocalHTTP bool) error {
 			if !linkedAllowed(img, allowLocalHTTP) {
 				return fmt.Errorf("item %s: image must be a data URL or absolute HTTPS URL", id)
 			}
-			if sum, _ := obj["image_sha256"].(string); sum == "" {
-				return fmt.Errorf("item %s: linked image requires image_sha256", id)
+			if sum, _ := obj["image_sha256"].(string); !IsSHA256Hex(sum) {
+				return fmt.Errorf("item %s: linked image requires image_sha256 as a lowercase hex SHA-256", id)
 			}
 		}
 	}
@@ -224,8 +227,8 @@ func ValidateItemOptions(obj map[string]any, allowLocalHTTP bool) error {
 			if !linkedAllowed(url, allowLocalHTTP) {
 				return fmt.Errorf("item %s: attachment %d url must be absolute HTTPS", id, i)
 			}
-			if sum, _ := m["sha256"].(string); sum != "" && len(sum) != 64 {
-				return fmt.Errorf("item %s: attachment %d sha256 must be lowercase hex", id, i)
+			if sum, _ := m["sha256"].(string); sum != "" && !IsSHA256Hex(sum) {
+				return fmt.Errorf("item %s: attachment %d sha256 must be a lowercase hex SHA-256", id, i)
 			}
 		}
 	}
@@ -308,6 +311,9 @@ func deepCopyValue(v any) any {
 		return v
 	}
 }
+
+// IsSHA256Hex reports whether s is a lowercase hex SHA-256 digest.
+func IsSHA256Hex(s string) bool { return sha256Re.MatchString(s) }
 
 // HashBytes returns the lowercase-hex SHA-256 of data.
 func HashBytes(data []byte) string {
