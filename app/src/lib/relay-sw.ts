@@ -347,6 +347,31 @@ export async function heartbeatRelay(origin: string): Promise<void> {
   }
 }
 
+/** Foreground re-check cadence: tab switches must not spam the relay. */
+export const FOREGROUND_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * The foreground check (§5.3): a liveness ack that extends `last_seen`, and
+ * the app's only way to learn that the relay no longer knows the registration.
+ * Returns 'ok' when the registration is current or was recovered, 'failed' when
+ * the relay says gone and the recovery could not re-register, and undefined
+ * when there is nothing to check or the relay was unreachable.
+ */
+export async function checkRelayRegistration(): Promise<'ok' | 'failed' | undefined> {
+  const base = relayBaseUrl();
+  if (!base) return undefined;
+  const relay = await getRegistration(base);
+  if (!relay) return undefined;
+  if (!(await pushManagerSubscription())) return (await recoverRelayRegistration(base)) ? 'ok' : 'failed';
+  try {
+    await relayHeartbeat(base, relay.id, relay.managementToken);
+    return 'ok';
+  } catch (err) {
+    if (!(err instanceof RelayGone)) return undefined;
+    return (await recoverRelayRegistration(base)) ? 'ok' : 'failed';
+  }
+}
+
 /** Run one content reconciliation and persist its outcome. */
 export async function sync(company: CompanyRecord): Promise<void> {
   const all = await getAllItems();

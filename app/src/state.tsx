@@ -18,7 +18,7 @@ import {
   type StoredItem,
 } from './lib/store';
 import { syncCompany, applyOutcomeItems } from './lib/sync';
-import { ensureRelayRegistration, heartbeatRelay } from './lib/relay-sw';
+import { checkRelayRegistration, ensureRelayRegistration, FOREGROUND_CHECK_INTERVAL_MS, heartbeatRelay } from './lib/relay-sw';
 import { relayBaseUrl } from './lib/relay';
 import { notificationState, permissionState, runSelfTest, type NotificationState, type SelfTestResult } from './lib/notify';
 import { initDebugBuild } from './lib/build';
@@ -96,6 +96,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => clearTimeout(t);
   }, [freshTestAt]);
 
+  // the foreground check (§5.3): extend last_seen and recover a registration
+  // the relay no longer knows; throttled so tab switches do not spam it
+  const lastRelayCheck = useRef(0);
+  const runRelayCheck = useCallback(async () => {
+    if (Date.now() - lastRelayCheck.current < FOREGROUND_CHECK_INTERVAL_MS) return;
+    lastRelayCheck.current = Date.now();
+    const result = await checkRelayRegistration();
+    if (result === 'failed') setNotification({ kind: 'failed', leg: 'registration' });
+    else if (result === 'ok') await refreshNotificationState();
+  }, [refreshNotificationState]);
+
   useEffect(() => {
     initDebugBuild();
     void (async () => {
@@ -108,14 +119,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setLoaded(true);
     })();
     void refreshNotificationState();
+    void runRelayCheck();
     // the banner re-checks when the app returns to the foreground, so an
     // in-flight test that landed in the background upgrades to green
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void refreshNotificationState();
+      if (document.visibilityState !== 'visible') return;
+      void refreshNotificationState();
+      void runRelayCheck();
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [refreshNotificationState]);
+  }, [refreshNotificationState, runRelayCheck]);
 
   // while a self-test is in flight, re-read the app-wide state so a late
   // nonce upgrades it to green without user action

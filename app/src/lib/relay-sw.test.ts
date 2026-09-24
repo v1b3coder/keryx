@@ -10,7 +10,13 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { handlePush, RECOVERY_COOLDOWN_MS, ensureRelayRegistration, recoverRelayRegistration } from './relay-sw';
+import {
+  handlePush,
+  RECOVERY_COOLDOWN_MS,
+  ensureRelayRegistration,
+  recoverRelayRegistration,
+  checkRelayRegistration,
+} from './relay-sw';
 import {
   putCompany,
   relaySeq,
@@ -439,6 +445,102 @@ describe('relay registration client (relay/SPECIFICATION.md §5.3)', () => {
     expect(requests.some((r) => r === 'POST https://relay.example/v1/registrations')).toBe(true);
     await deleteRegistrationRecord('https://relay.example');
     vi.unstubAllEnvs();
+  });
+
+  it('checks the registration on foreground and recovers a gone one (§5.3)', async () => {
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      requests.push(`${init.method} ${url}`);
+      return Promise.resolve(new Response(null, { status: 204 }));
+    });
+    // node's navigator has no service worker: the current-subscription branch
+    vi.stubGlobal('navigator', {
+      serviceWorker: {
+        ready: Promise.resolve({
+          pushManager: {
+            getSubscription: () => Promise.resolve({ unsubscribe: () => Promise.resolve(true) }),
+          },
+        }),
+      },
+    });
+    // no local record: nothing to check
+    expect(await checkRelayRegistration()).toBeUndefined();
+    expect(requests).toEqual([]);
+    // a current registration: one heartbeat, no recovery
+    await putRegistration({ baseUrl: 'https://relay.example', id: 'reg-1', managementToken: 'tok-1', topics: {} });
+    expect(await checkRelayRegistration()).toBe('ok');
+    expect(requests).toEqual(['POST https://relay.example/v1/registrations/reg-1/heartbeat']);
+    await deleteRegistrationRecord('https://relay.example');
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('recovers on foreground when the relay says gone (§5.3)', async () => {
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    const origin = newOrigin();
+    await putCompany(company(origin));
+    await putRegistration({
+      baseUrl: 'https://relay.example',
+      id: 'reg-1',
+      managementToken: 'tok-1',
+      topics: { [fixture.topic]: { channel: 'security', scopeId: fixture.scopeId } },
+    });
+    vi.stubGlobal('navigator', {
+      serviceWorker: {
+        ready: Promise.resolve({
+          pushManager: {
+            getSubscription: () => Promise.resolve(null),
+            subscribe: () =>
+              Promise.resolve({
+                toJSON: () => ({ endpoint: 'https://push.example/new', keys: { p256dh: 'p', auth: 'a' } }),
+              }),
+          },
+        }),
+      },
+    });
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      requests.push(`${init.method} ${url}`);
+      if (String(url).includes('/heartbeat')) return Promise.resolve(new Response(null, { status: 404 }));
+      return Promise.resolve(
+        new Response(JSON.stringify({ id: 'new', management_token: 'new-token' }), { status: 200 }),
+      );
+    });
+    expect(await checkRelayRegistration()).toBe('ok');
+    expect(requests).toContain('POST https://relay.example/v1/registrations');
+    expect((await getRegistration('https://relay.example'))?.id).toBe('new');
+    await deleteRegistrationRecord('https://relay.example');
+    await deleteCompany(origin);
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('reports a failed recovery when the relay is unreachable', async () => {
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    await putRegistration({ baseUrl: 'https://relay.example', id: 'reg-1', managementToken: 'tok-1', topics: {} });
+    vi.stubGlobal('navigator', {
+      serviceWorker: {
+        ready: Promise.resolve({
+          pushManager: {
+            getSubscription: () => Promise.resolve(null),
+            subscribe: () => Promise.reject(new Error('offline')),
+          },
+        }),
+      },
+    });
+    vi.stubGlobal('fetch', (url: string) =>
+      String(url).includes('/heartbeat')
+        ? Promise.resolve(new Response(null, { status: 404 }))
+        : Promise.reject(new Error('offline')),
+    );
+    expect(await checkRelayRegistration()).toBe('failed');
+    await deleteRegistrationRecord('https://relay.example');
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   });
 
   it('registers the union of every company topic on one relay', async () => {
