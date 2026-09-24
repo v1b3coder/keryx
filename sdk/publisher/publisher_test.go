@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -549,7 +550,7 @@ func TestCompanySetLogoRules(t *testing.T) {
 		t.Fatal("accepted a linked logo without logo_sha256")
 	}
 	// linked + sha256 is accepted and recorded
-	if _, err := e.pub.CompanySet(e.ctx(), "", "https://cdn.example.com/logo.png", "abc123"); err != nil {
+	if _, err := e.pub.CompanySet(e.ctx(), "", "https://cdn.example.com/logo.png", strings.Repeat("ab", 32)); err != nil {
 		t.Fatalf("linked logo: %v", err)
 	}
 	if _, err := e.pub.Validate(e.ctx()); err != nil {
@@ -561,6 +562,36 @@ func TestCompanySetLogoRules(t *testing.T) {
 	}
 	if _, err := e.pub.Validate(e.ctx()); err != nil {
 		t.Fatalf("validate after inline logo: %v", err)
+	}
+}
+
+func TestLogoSHA256RequiresLowercaseHex(t *testing.T) {
+	const logo = "https://cdn.example.com/logo.png"
+	tests := []struct {
+		name, sum string
+		ok        bool
+	}{
+		{"valid", strings.Repeat("0a", 32), true},
+		{"flag", "--workspace", false},
+		{"uppercase", strings.Repeat("0A", 32), false},
+		{"63 chars", strings.Repeat("a", 63), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			if _, err := e.pub.CompanySet(e.ctx(), "", logo, tt.sum); (err == nil) != tt.ok {
+				t.Errorf("company set %q: err = %v", tt.sum, err)
+			}
+			dir := t.TempDir()
+			fresh := publisher.New(repo.NewDirRepo(filepath.Join(dir, "repo")), repo.NewDirRepo(filepath.Join(dir, "anchor")), keys.NewDirStore(filepath.Join(dir, "keys"), ""))
+			fresh.GenerateKeys = true
+			_, err := fresh.Init(e.ctx(), publisher.InitParams{
+				RepoBase: "https://cdn.example.com/keryx", CompanyName: "ACME s.r.o.", Logo: logo, LogoSHA256: tt.sum,
+			})
+			if (err == nil) != tt.ok {
+				t.Errorf("init %q: err = %v", tt.sum, err)
+			}
+		})
 	}
 }
 
