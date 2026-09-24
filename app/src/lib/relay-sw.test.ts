@@ -205,6 +205,74 @@ describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
     vi.unstubAllEnvs();
   });
 
+  it('recovers the registration when the heartbeat says gone (§5.3)', async () => {
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    const origin = newOrigin();
+    await putCompany(company(origin));
+    await putRegistration({
+      baseUrl: 'https://relay.example',
+      id: 'reg-hb',
+      managementToken: 'tok-hb',
+      topics: { [fixture.topic]: { channel: 'security', scopeId: fixture.scopeId } },
+    });
+    vi.stubGlobal('navigator', {
+      serviceWorker: {
+        ready: Promise.resolve({
+          pushManager: {
+            getSubscription: () => Promise.resolve(null),
+            subscribe: () =>
+              Promise.resolve({
+                toJSON: () => ({ endpoint: 'https://push.example/new', keys: { p256dh: 'p', auth: 'a' } }),
+              }),
+          },
+        }),
+      },
+    });
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      requests.push(`${init.method} ${url}`);
+      if (String(url).includes('/heartbeat')) return Promise.resolve(new Response(null, { status: 404 }));
+      return Promise.resolve(
+        new Response(JSON.stringify({ id: 'new', management_token: 'new-token' }), { status: 200 }),
+      );
+    });
+    const outcome = await handlePush(JSON.stringify(fixture.wakeup));
+    expect(outcome.accepted).toBe(true);
+    await vi.waitFor(() => {
+      expect(requests).toContain('POST https://relay.example/v1/registrations');
+    });
+    expect(requests).toContain('POST https://relay.example/v1/registrations/reg-hb/heartbeat');
+    expect((await getRegistration('https://relay.example'))?.id).toBe('new');
+    await deleteRegistrationRecord('https://relay.example');
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('does not recover on a heartbeat transport failure', async () => {
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    const origin = newOrigin();
+    await putCompany(company(origin));
+    await putRegistration({
+      baseUrl: 'https://relay.example',
+      id: 'reg-hb',
+      managementToken: 'tok-hb',
+      topics: { [fixture.topic]: { channel: 'security', scopeId: fixture.scopeId } },
+    });
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+      if (init?.method) requests.push(`${init.method} ${url}`);
+      return Promise.resolve(new Response(null, { status: 500 }));
+    });
+    expect((await handlePush(JSON.stringify(fixture.wakeup))).accepted).toBe(true);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(requests).toEqual(['POST https://relay.example/v1/registrations/reg-hb/heartbeat']);
+    await deleteRegistrationRecord('https://relay.example');
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
   it('ignores a topic that is not currently followed', async () => {
     const origin = newOrigin();
     const c = company(origin);

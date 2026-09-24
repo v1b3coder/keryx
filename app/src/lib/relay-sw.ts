@@ -332,7 +332,7 @@ async function pushManagerSubscription(): Promise<PushSubscription | null> {
   return registration.pushManager.getSubscription();
 }
 
-/** Foreground liveness ack (§5.3). */
+/** Liveness ack after an accepted wake-up (§5.3). */
 export async function heartbeatRelay(origin: string): Promise<void> {
   const base = relayBaseUrl();
   if (!base) return;
@@ -340,8 +340,10 @@ export async function heartbeatRelay(origin: string): Promise<void> {
   if (!relay) return;
   try {
     await relayHeartbeat(relay.baseUrl, relay.id, relay.managementToken);
-  } catch {
-    // best-effort
+  } catch (err) {
+    // the relay no longer knows this registration: obtain a fresh one (§5.3).
+    // A transport failure is best-effort and never destroys a subscription.
+    if (err instanceof RelayGone) void recoverRelayRegistration(relay.baseUrl);
   }
 }
 
