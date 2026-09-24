@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import 'fake-indexeddb/auto';
-import { notificationState } from './notify';
+import { notificationState, runSelfTest } from './notify';
 import {
   putCompany,
   putRegistration,
@@ -89,6 +89,52 @@ describe('notification state machine: in-flight self-test', () => {
     await clearPendingTest('https://relay.example');
     await deleteRegistrationRecord('https://relay.example');
     await deleteCompany(origin);
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('treats a missing registration like a dead endpoint', async () => {
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    const c = company();
+    await putCompany(c);
+    await putRegistration({ baseUrl: 'https://relay.example', id: 'old', managementToken: 'old-token', topics: topicBindings(c) });
+    let unsubscribed = false;
+    vi.stubGlobal('navigator', {
+      serviceWorker: {
+        ready: Promise.resolve({
+          pushManager: {
+            getSubscription: () =>
+              Promise.resolve({
+                unsubscribe: () => {
+                  unsubscribed = true;
+                  return Promise.resolve(true);
+                },
+              }),
+            subscribe: () =>
+              Promise.resolve({
+                toJSON: () => ({ endpoint: 'https://push.example/new', keys: { p256dh: 'p', auth: 'a' } }),
+              }),
+          },
+        }),
+      },
+    });
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      calls.push(`${init.method} ${url}`);
+      // every test call finds the row gone; the fresh POST succeeds
+      if (String(url).endsWith('/test')) return Promise.resolve(new Response('x', { status: 404 }));
+      return Promise.resolve(
+        new Response(JSON.stringify({ id: 'new', management_token: 'new-token' }), { status: 200 }),
+      );
+    });
+    const result = await runSelfTest([c]);
+    expect(unsubscribed).toBe(true);
+    expect(calls).toContain('POST https://relay.example/v1/registrations');
+    expect(result.endpoint).toBe('failed');
+    await clearPendingTest('https://relay.example');
+    await deleteRegistrationRecord('https://relay.example');
+    await deleteCompany(c.origin);
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });

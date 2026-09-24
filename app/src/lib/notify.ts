@@ -16,7 +16,7 @@ import {
   putPendingTest,
   type CompanyRecord,
 } from './store';
-import { relayBaseUrl, testRegistration, vapidPublicKey } from './relay';
+import { relayBaseUrl, testRegistration, vapidPublicKey, RelayGone } from './relay';
 import { ensureRelayRegistration, topicBindings, unionTopics } from './relay-sw';
 import type { RelayRegistration } from './relay';
 
@@ -137,7 +137,9 @@ async function attemptTest(base: string, relay: RelayRegistration): Promise<Self
     // expiresAt, so a slow first delivery is not reported as a failure
     return { endpoint: 'pending', leg: 'endpoint' };
   } catch (err) {
-    if (err instanceof Error && /endpoint dead/.test(err.message)) return 'dead';
+    // the relay says the registration is gone: a fresh subscription and
+    // registration are the only recovery (§5.3)
+    if (err instanceof RelayGone) return 'dead';
     await clearPendingTest(base);
     return { endpoint: 'failed', leg: 'endpoint' };
   }
