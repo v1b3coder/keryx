@@ -38,24 +38,40 @@ export function NotificationBanner({
     if (!freshTest) return null;
     return <div className="banner banner-ok">Notifications are working.</div>;
   }
+  if (state.kind === 'default' || state.kind === 'no-subscription') {
+    return (
+      <div className="banner banner-danger">
+        <span>Turn on notifications to get timely updates.</span>
+        <button className="btn btn-primary" onClick={onEnable}>
+          Turn on
+        </button>
+      </div>
+    );
+  }
+  if (state.kind === 'unregistered') {
+    return (
+      <div className="banner banner-danger">
+        <span>Notifications need to be re-enabled.</span>
+        <button className="btn btn-primary" onClick={onEnable}>
+          Re-subscribe
+        </button>
+      </div>
+    );
+  }
   const message =
     state.kind === 'denied'
       ? 'Notifications are off. Allow them in your browser or system settings, then check again.'
-      : state.kind === 'default'
-        ? 'Turn on notifications to get timely updates.'
-        : state.kind === 'failed'
-          ? state.leg === 'registration'
-            ? 'Notifications could not be registered. Try again.'
-            : 'The test notification did not arrive. Try again.'
-          : 'Notifications need to be re-enabled.';
+      : state.leg === 'registration'
+        ? 'Notifications could not be registered. Try again.'
+        : 'The test notification did not arrive. Try again.';
   return (
     <div className="banner banner-danger">
       <span>{message}</span>
       <button
         className="btn btn-primary"
-        onClick={state.kind === 'default' ? onEnable : state.kind === 'failed' ? onRetry : onCheck}
+        onClick={state.kind === 'failed' ? onRetry : onCheck}
       >
-        {state.kind === 'default' ? 'Turn on' : state.kind === 'failed' ? 'Try again' : 'Check again'}
+        {state.kind === 'failed' ? 'Try again' : 'Check again'}
       </button>
     </div>
   );
