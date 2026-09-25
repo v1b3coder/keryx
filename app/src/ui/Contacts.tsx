@@ -62,7 +62,7 @@ export function Contacts({
                 <div className="t-body" style={{ fontWeight: 600 }}>
                   {company.targets.signed.custom?.company_name ?? company.origin}
                 </div>
-                <div className="t-mono" style={{ fontSize: 12, color: 'var(--text-2)' }}>
+                <div className="t-mono" style={{ fontSize: '0.75rem', color: 'var(--text-2)' }}>
                   {company.origin}
                 </div>
               </div>

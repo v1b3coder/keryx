@@ -9,6 +9,10 @@
  * feedback (200ms, not 1200ms), and a dark mode from the same palette.
  * Documented deviation: a single semantic red for destructive actions only
  * (the token set defines none; Apple-style UX requires one).
+ *
+ * Typography is expressed in rem so the user's OS/browser text-size preference
+ * scales the whole app (WCAG 2.2 Resize Text); index.html opts into text
+ * scaling and the iOS/iPadOS system body size follows the Larger Text setting.
  */
 
 :root {
@@ -71,12 +75,21 @@ body,
   height: 100%;
 }
 
+/* the user's text-size preference scales every rem size below: the root stays
+   at the browser's own base, and on iOS/iPadOS (and the Capacitor WKWebView)
+   the system body size follows the Larger Text setting (WebKit) */
+html {
+  font-size: 100%;
+  font: -apple-system-body;
+  font-family: var(--font);
+}
+
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -118,32 +131,32 @@ a {
 /* ---------- text ---------- */
 
 .t-title {
-  font-size: 28px;
+  font-size: 1.75rem;
   font-weight: 700;
   line-height: 1.25;
   letter-spacing: -0.01em;
 }
 
 .t-section {
-  font-size: 20px;
+  font-size: 1.25rem;
   font-weight: 600;
   line-height: 1.25;
 }
 
 .t-body {
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.5;
 }
 
 .t-small {
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.45;
   color: var(--text-2);
 }
 
 .t-mono {
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.5;
 }
 
@@ -161,7 +174,7 @@ a {
   min-height: 50px;
   padding: 0 24px;
   border-radius: var(--radius-pill);
-  font-size: 16px;
+  font-size: 1rem;
   font-weight: 600;
   transition: opacity var(--tap), background var(--tap), transform var(--tap);
   width: 100%;
@@ -201,7 +214,7 @@ a {
   border-radius: var(--radius-pill);
   background: var(--surface);
   color: var(--text);
-  font-size: 16px;
+  font-size: 1rem;
   font-family: inherit;
 }
 
@@ -281,7 +294,7 @@ a {
 }
 
 .companybar-name {
-  font-size: 17px;
+  font-size: 1.0625rem;
   font-weight: 600;
   line-height: 1.2;
   white-space: nowrap;
@@ -291,7 +304,7 @@ a {
 
 .companybar-origin {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--text-2);
   white-space: nowrap;
   overflow: hidden;
@@ -328,7 +341,7 @@ a {
 }
 
 .article-card-title {
-  font-size: 24px;
+  font-size: 1.5rem;
   font-weight: 700;
   line-height: 1.25;
   letter-spacing: -0.01em;
@@ -340,7 +353,7 @@ a {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--text-2);
   margin-bottom: 14px;
 }
@@ -369,7 +382,7 @@ a {
   border-radius: var(--radius-pill);
   background: var(--surface-2);
   color: var(--text);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
   line-height: 1.4;
   border: 1px solid transparent;
@@ -412,7 +425,7 @@ a {
   border-radius: var(--radius-pill);
   background: var(--accent);
   color: var(--on-accent);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 700;
   display: inline-flex;
   align-items: center;
@@ -501,7 +514,7 @@ a {
 .badge-new {
   background: var(--accent);
   color: var(--on-accent);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 700;
   padding: 2px 8px;
   border-radius: var(--radius-pill);
@@ -538,13 +551,13 @@ a {
 
 .alert h3 {
   margin: 0 0 4px;
-  font-size: 17px;
+  font-size: 1.0625rem;
   font-weight: 600;
 }
 
 .alert p {
   margin: 0;
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1.45;
   color: var(--text-2);
 }
@@ -557,7 +570,7 @@ a {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.45;
   color: var(--text-2);
 }
@@ -573,7 +586,7 @@ a {
   gap: 12px;
   border-radius: var(--radius-card);
   padding: 12px 16px;
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1.45;
 }
 
@@ -585,7 +598,7 @@ a {
   width: auto;
   min-height: 36px;
   padding: 0 16px;
-  font-size: 14px;
+  font-size: 0.875rem;
   flex-shrink: 0;
 }
 
@@ -616,7 +629,7 @@ a {
 /* ---------- article body (sanitized content) ---------- */
 
 .article-body {
-  font-size: 17px;
+  font-size: 1.0625rem;
   line-height: 1.6;
 }
 
@@ -637,7 +650,7 @@ a {
 }
 
 .article-body .ext-domain {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--text-2);
 }
 
@@ -657,7 +670,7 @@ a {
   margin-top: 28px;
   padding-top: 16px;
   border-top: 1px solid var(--border);
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--text-2);
   display: flex;
   gap: 8px;

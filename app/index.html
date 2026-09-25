@@ -4,8 +4,12 @@
     <meta charset="UTF-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
     />
+    <!-- the user's OS text-size preference scales the rem-based type scale
+         (CSS Fonts 5 §2); Firefox Android already scales, Chrome needs the
+         opt-in, iOS/iPadOS needs the -apple-system-body base in styles.css -->
+    <meta name="text-scale" content="scale" />
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#101013" media="(prefers-color-scheme: dark)" />
     <meta name="apple-mobile-web-app-capable" content="yes" />

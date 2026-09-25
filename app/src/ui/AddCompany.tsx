@@ -262,7 +262,7 @@ export function AddCompany({
           You are subscribing to messages from:
         </p>
         <div className="card" style={{ margin: '16px 0', padding: 20 }}>
-          <div className="t-mono" style={{ fontSize: 16, wordBreak: 'break-all' }}>
+          <div className="t-mono" style={{ fontSize: '1rem', wordBreak: 'break-all' }}>
             {step.origin}
           </div>
         </div>
@@ -351,7 +351,7 @@ function ConsentScreen({
         <CompanyLogo url={offer.logo} origin={offer.origin} expectedSha={offer.logoSHA256} size={56} />
         <div>
           <div className="t-section">{offer.companyName}</div>
-          <div className="t-mono" style={{ fontSize: 12, color: 'var(--text-2)' }}>
+          <div className="t-mono" style={{ fontSize: '0.75rem', color: 'var(--text-2)' }}>
             {offer.origin}
           </div>
         </div>

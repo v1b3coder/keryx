@@ -102,7 +102,7 @@ export function CompanyView({
             This company's identity changed. This can mean the company's website or
             signing keys were compromised.
           </p>
-          <p className="t-mono" style={{ fontSize: 12, marginTop: 8 }}>
+          <p className="t-mono" style={{ fontSize: '0.75rem', marginTop: 8 }}>
             {company.origin}
           </p>
         </div>
@@ -128,7 +128,7 @@ export function CompanyView({
             A company's name can only change after you confirm it again. Scan a fresh QR
             code from the company to continue receiving its messages.
           </p>
-          <p className="t-mono" style={{ fontSize: 12, marginTop: 8 }}>
+          <p className="t-mono" style={{ fontSize: '0.75rem', marginTop: 8 }}>
             {company.origin}
           </p>
         </div>
@@ -198,7 +198,7 @@ export function CompanyView({
             </div>
             <button
               className="btn btn-secondary"
-              style={{ minHeight: 40, padding: '0 16px', fontSize: 14 }}
+              style={{ minHeight: 40, padding: '0 16px', fontSize: '0.875rem' }}
               onClick={() => void actions.acknowledgeLogo(company.origin)}
             >
               Got it
