@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "12127959291",
+    "project_id": "keryx-f5b5a",
+    "storage_bucket": "keryx-f5b5a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:12127959291:android:2abb9f8db25395fe98585e",
+        "android_client_info": {
+          "package_name": "cz.v1b3coder.keryx"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyButvM5ExJNqmaUNADQRDqHv4bKV9r4qTo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
