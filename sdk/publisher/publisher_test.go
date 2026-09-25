@@ -591,6 +591,11 @@ func TestLogoSHA256RequiresLowercaseHex(t *testing.T) {
 			if (err == nil) != tt.ok {
 				t.Errorf("init %q: err = %v", tt.sum, err)
 			}
+			if !tt.ok {
+				if _, kerr := fresh.Keys.Find(e.ctx(), keys.RoleMaster, "master"); kerr == nil {
+					t.Error("init minted a master key before refusing the logo")
+				}
+			}
 		})
 	}
 }
