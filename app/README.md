@@ -172,9 +172,14 @@ worker come from vite-plugin-pwa
   `VITE_RELAY_URL` and `VITE_VAPID_PUBLIC` at build time to enable it;
   without them the app runs exactly as before (polling is the backstop).
 
+**In progress:** the Android wake-up transport. The de-Googled path (ntfy as a
+UnifiedPush distributor) has its transport probe and UI states in place; the
+connector registration is next, FCM last — see
+[`../design/notifications.md`](../design/notifications.md) "Transport selection".
+
 **Out of scope** (per spec Phase 1/2): FCM/native wake-ups (the relay's topic
-leg is implemented; the native shell does not yet embed a UnifiedPush connector),
-lite mode (spec/clients.md §3), backup/restore export/import (Phase 2).
+leg is implemented), lite mode (spec/clients.md §3), backup/restore export/import
+(Phase 2).
 
 ## Relay wake-ups (optional)
 
@@ -216,6 +221,8 @@ self-test silently.
 | Granted, no subscription | `getSubscription() === null` | red bar + "Turn on" |
 | Registered, relay says gone | heartbeat `404`/`401` | red bar + "Re-subscribe" |
 | Registered, test failed | self-test per-leg result | red bar + the failing leg |
+| Android, no transport | no Google services and no UnifiedPush distributor | red bar + "Install ntfy" |
+| Android, ntfy ready | a distributor is present; registration is the next phase (mock) | neutral note |
 
 After a denial no browser shows the prompt again, so "Check again" re-reads
 the permission and subscription state instead of re-prompting; the wording is

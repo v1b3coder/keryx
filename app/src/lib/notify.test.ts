@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { notificationState, runSelfTest } from './notify';
+import { nativePushSupport } from './native-push';
+
+vi.mock('./native-push', () => ({ nativePushSupport: vi.fn() }));
 import {
   putCompany,
   putRegistration,
@@ -41,6 +44,28 @@ describe('notification state machine', () => {
     vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     expect((await notificationState()).kind).toBe('no-subscription');
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('notification state machine: Android transports', () => {
+  it('asks for ntfy when there is no Google services and no distributor', async () => {
+    vi.stubGlobal('androidBridge', {});
+    vi.mocked(nativePushSupport).mockResolvedValue({
+      fcm: false,
+      unifiedPush: { available: false, distributors: [] },
+    });
+    expect((await notificationState()).kind).toBe('no-transport');
+    vi.unstubAllGlobals();
+  });
+
+  it('reports ntfy-ready when a distributor is installed', async () => {
+    vi.stubGlobal('androidBridge', {});
+    vi.mocked(nativePushSupport).mockResolvedValue({
+      fcm: false,
+      unifiedPush: { available: true, distributors: ['io.heckel.ntfy'] },
+    });
+    expect((await notificationState()).kind).toBe('ntfy-ready');
     vi.unstubAllGlobals();
   });
 });

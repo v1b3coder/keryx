@@ -65,7 +65,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [companies, setCompanies] = useState<CompanyRecord[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [notification, setNotification] = useState<NotificationState>({ kind: 'unsupported' });
+  const [notification, setNotification] = useState<NotificationState>({ kind: 'checking' });
   const [freshTestAt, setFreshTestAt] = useState<number | null>(null);
   const itemsRef = useRef<StoredItem[]>([]);
   // an enable/retry self-test may still be in flight: its late arrival is the

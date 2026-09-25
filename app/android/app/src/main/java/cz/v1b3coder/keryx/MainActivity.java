@@ -10,6 +10,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(KeryxEnvPlugin.class);
+        registerPlugin(KeryxPushPlugin.class);
         super.onCreate(savedInstanceState);
 
         // Local-dev HTTP exception, debug builds only: the WebView page is
