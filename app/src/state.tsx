@@ -8,7 +8,11 @@ import {
   getAllCompanies,
   getAllItems,
   getCompany,
+  lastPushAt,
   pendingTest,
+  pendingRecoveries,
+  clearPendingRecovery,
+  reserveRecovery,
   putCompany,
   putItems,
   deleteItems,
@@ -18,7 +22,13 @@ import {
   type StoredItem,
 } from './lib/store';
 import { syncCompany, applyOutcomeItems } from './lib/sync';
-import { checkRelayRegistration, ensureRelayRegistration, FOREGROUND_CHECK_INTERVAL_MS, heartbeatRelay } from './lib/relay-sw';
+import {
+  checkRelayRegistration,
+  ensureRelayRegistration,
+  FOREGROUND_CHECK_INTERVAL_MS,
+  heartbeatRelay,
+  RECOVERY_COOLDOWN_MS,
+} from './lib/relay-sw';
 import { relayBaseUrl } from './lib/relay';
 import { notificationState, permissionState, runSelfTest, type NotificationState, type SelfTestResult } from './lib/notify';
 import { initDebugBuild } from './lib/build';
@@ -107,6 +117,67 @@ export function AppProvider({ children }: { children: ReactNode }) {
     else if (result === 'ok') await refreshNotificationState();
   }, [refreshNotificationState]);
 
+  /** Replace the in-memory items of one origin with the post-sync state. */
+  const applyOutcome = (origin: string, existing: Map<string, StoredItem>) => {
+    itemsRef.current = applyOutcomeItems(itemsRef.current, origin, existing);
+  };
+
+  /** One content reconciliation from the page (never the worker). */
+  const syncCompanyNow = useCallback(
+    async (origin: string) => {
+      setSyncing(true);
+      try {
+        const company = await getCompany(origin);
+        if (!company) return;
+        const existing = new Map(
+          itemsRef.current.filter((i) => i.origin === origin).map((i) => [i.id, i]),
+        );
+        const outcome = await syncCompany(company, netFetch, existing);
+        applyOutcome(origin, existing);
+        await putCompany(outcome.company);
+        if (outcome.toPut.length > 0) await putItems(outcome.toPut);
+        if (outcome.toDelete.length > 0) await deleteItems(outcome.toDelete);
+        void heartbeatRelay(outcome.company.origin);
+        const list = await getAllCompanies();
+        setCompanies(list);
+        // the app-wide state may have changed (a test landed, a leg died)
+        await refreshNotificationState();
+      } finally {
+        setSyncing(false);
+      }
+    },
+    [refreshNotificationState],
+  );
+
+  /**
+   * The network work the worker deliberately does not do (design/notifications.md,
+   * "Worker-side processing"): re-verify a wake-up the worker could not verify
+   * against its cached metadata, under the page's one-refresh-per-cooldown
+   * allowance.
+   */
+  const drainPendingRecoveries = useCallback(async () => {
+    for (const pending of await pendingRecoveries()) {
+      if (!(await reserveRecovery(pending.origin, Date.now(), RECOVERY_COOLDOWN_MS))) {
+        await clearPendingRecovery(pending.origin);
+        continue; // within the cooldown: metadata was refreshed recently
+      }
+      await syncCompanyNow(pending.origin);
+      await clearPendingRecovery(pending.origin);
+    }
+  }, [syncCompanyNow]);
+
+  /**
+   * A wake-up that arrived with no page open: the worker recorded the receipt
+   * and the page catches up on the next open.
+   */
+  const catchUpOnWakeups = useCallback(async () => {
+    for (const company of await getAllCompanies()) {
+      if ((await lastPushAt(company.origin)) > (company.lastSyncAt ?? 0)) {
+        await syncCompanyNow(company.origin);
+      }
+    }
+  }, [syncCompanyNow]);
+
   useEffect(() => {
     initDebugBuild();
     void (async () => {
@@ -117,19 +188,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
       itemsRef.current = await getAllItems();
       setCompanies(list);
       setLoaded(true);
+      await drainPendingRecoveries();
+      await catchUpOnWakeups();
     })();
     void refreshNotificationState();
     void runRelayCheck();
     // the banner re-checks when the app returns to the foreground, so an
-    // in-flight test that landed in the background upgrades to green
+    // in-flight test that landed in the background upgrades to green, and the
+    // page drains any wake-up the worker recorded
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
       void refreshNotificationState();
       void runRelayCheck();
+      void drainPendingRecoveries();
+      void catchUpOnWakeups();
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [refreshNotificationState, runRelayCheck]);
+  }, [refreshNotificationState, runRelayCheck, drainPendingRecoveries, catchUpOnWakeups]);
 
   // while a self-test is in flight, re-read the app-wide state so a late
   // nonce upgrades it to green without user action
@@ -139,26 +215,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(t);
   }, [notification.kind, refreshNotificationState]);
 
-  // the service worker tells us when a wake-up synced content: re-read the
-  // store so the UI shows the new item without a manual reload
+  // the service worker tells us when a wake-up was accepted: the page owns
+  // the content sync (and its recovery), so sync and re-read the store
   useEffect(() => {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
     const onMessage = (event: MessageEvent) => {
       if ((event.data as { type?: string } | null)?.type !== 'keryx-sync') return;
-      void (async () => {
-        itemsRef.current = await getAllItems();
-        setCompanies(await getAllCompanies());
-        void refreshNotificationState();
-      })();
+      const origin = (event.data as { origin?: string } | null)?.origin;
+      if (origin) void syncCompanyNow(origin);
     };
     navigator.serviceWorker.addEventListener('message', onMessage);
     return () => navigator.serviceWorker.removeEventListener('message', onMessage);
-  }, [refreshNotificationState]);
-
-  /** Replace the in-memory items of one origin with the post-sync state. */
-  const applyOutcome = (origin: string, existing: Map<string, StoredItem>) => {
-    itemsRef.current = applyOutcomeItems(itemsRef.current, origin, existing);
-  };
+  }, [syncCompanyNow]);
 
   const actions = useMemo<AppActions>(
     () => ({
@@ -182,28 +250,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setSyncing(false);
         }
       },
-      async syncCompanyNow(origin) {
-        setSyncing(true);
-        try {
-          const company = await getCompany(origin);
-          if (!company) return;
-          const existing = new Map(
-            itemsRef.current.filter((i) => i.origin === origin).map((i) => [i.id, i]),
-          );
-          const outcome = await syncCompany(company, netFetch, existing);
-          applyOutcome(origin, existing);
-          await putCompany(outcome.company);
-          if (outcome.toPut.length > 0) await putItems(outcome.toPut);
-          if (outcome.toDelete.length > 0) await deleteItems(outcome.toDelete);
-          void heartbeatRelay(outcome.company.origin);
-          const list = await getAllCompanies();
-          setCompanies(list);
-          // the app-wide state may have changed (a test landed, a leg died)
-          await refreshNotificationState();
-        } finally {
-          setSyncing(false);
-        }
-      },
+      syncCompanyNow,
       async toggleChannel(origin, channel, followed) {
         const company = await getCompany(origin);
         if (!company) return;
@@ -306,7 +353,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setCompanies(await getAllCompanies());
       },
     }),
-    [companies, refreshNotificationState],
+    [companies, refreshNotificationState, syncCompanyNow],
   );
 
   const value = useMemo(

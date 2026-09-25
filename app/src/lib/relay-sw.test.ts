@@ -29,6 +29,8 @@ import {
   putPendingTest,
   pendingTest,
   clearPendingTest,
+  pendingRecoveries,
+  clearPendingRecovery,
   type CompanyRecord,
 } from './store';
 import { hexToBytes } from './bytes';
@@ -140,11 +142,18 @@ describe('app-wide registration store', () => {
 });
 
 describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
+  const signedWakeup = () => fixture.wakeup;
+  const unsignedWakeup = () => ({
+    ...fixture.wakeup,
+    sig: [{ ...fixture.wakeup.sig[0], sig: 'A'.repeat(86) }],
+  });
+
   beforeEach(async () => {
     // transport failures keep the cache and retry — never a crash
     vi.stubGlobal('fetch', () => Promise.reject(new Error('offline')));
     // isolate tests: every company is removed between tests
     for (const c of await getAllCompanies()) await deleteCompany(c.origin);
+    for (const pending of await pendingRecoveries()) await clearPendingRecovery(pending.origin);
   });
 
   it('drops malformed, unknown-topic and invalid-signature wake-ups', async () => {
@@ -167,23 +176,64 @@ describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
     expect((await handlePush(JSON.stringify(fixture.wakeup))).accepted).toBe(false);
   });
 
+  it('verifies a wake-up with the heartbeat as its only network call', async () => {
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    const origin = newOrigin();
+    await putCompany(company(origin));
+    await putRegistration({
+      baseUrl: 'https://relay.example',
+      id: 'reg-1',
+      managementToken: 'tok',
+      topics: {},
+    });
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      calls.push(`${init.method} ${url}`);
+      if (String(url).endsWith('/heartbeat')) return Promise.resolve(new Response(null, { status: 204 }));
+      throw new Error(`the service worker must not fetch ${url}`);
+    });
+    const outcome = await handlePush(JSON.stringify(signedWakeup()));
+    expect(outcome.accepted).toBe(true);
+    await vi.waitFor(() => {
+      expect(calls).toEqual(['POST https://relay.example/v1/registrations/reg-1/heartbeat']);
+    });
+    await deleteRegistrationRecord('https://relay.example');
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it('records an unverifiable wake-up for the page without any network call', async () => {
+    const origin = newOrigin();
+    await putCompany(company(origin));
+    const failing = vi.fn(() => {
+      throw new Error('the service worker must not touch the network');
+    });
+    vi.stubGlobal('fetch', failing);
+    const outcome = await handlePush(JSON.stringify(unsignedWakeup()));
+    expect(outcome.accepted).toBe(false);
+    expect(outcome.pendingRecovery).toBe(true);
+    expect(await pendingRecoveries()).toHaveLength(1);
+    expect(failing).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
   it('reserves at most one recovery refresh per company cooldown', async () => {
     const origin = newOrigin();
     await putCompany(company(origin));
-    // two concurrent forged wake-ups: the first consumes the allowance and the
-    // second is suppressed before networking
-    const bad = { ...fixture.wakeup, seq: fixture.seq + 1, sig: [{ ...fixture.wakeup.sig[0], sig: 'A'.repeat(86) }] };
-    const first = await handlePush(JSON.stringify(bad));
+    // two concurrent forged wake-ups: both are recorded for the page, neither
+    // touches the network (the page owns the one-refresh-per-cooldown allowance)
+    const first = await handlePush(JSON.stringify({ ...unsignedWakeup(), seq: fixture.seq + 1 }));
     expect(first.accepted).toBe(false);
-    const second = await handlePush(JSON.stringify({ ...bad, seq: fixture.seq + 2 }));
+    const second = await handlePush(JSON.stringify({ ...unsignedWakeup(), seq: fixture.seq + 2 }));
     expect(second.accepted).toBe(false);
-    // the allowance is consumed even though verification still fails, and a valid
-    // cached-key wake-up is unaffected by the cooldown
+    expect(await pendingRecoveries()).toHaveLength(1);
+    // the allowance is not consumed by the worker: a valid cached-key wake-up
+    // is unaffected
     const good = await handlePush(JSON.stringify(fixture.wakeup));
     expect(good.accepted).toBe(true);
     const stored = await getCompany(origin);
     expect(stored).toBeDefined();
-    // the cooldown is persisted before networking
+    // the page-side cooldown constant stays part of the contract
     const now = Date.now();
     expect(now).toBeLessThan(now + RECOVERY_COOLDOWN_MS);
   });
@@ -211,7 +261,7 @@ describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
     vi.unstubAllEnvs();
   });
 
-  it('recovers the registration when the heartbeat says gone (§5.3)', async () => {
+  it('leaves a gone registration to the page and does not recover on wake-up (§5.3)', async () => {
     vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
     vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     const origin = newOrigin();
@@ -246,10 +296,11 @@ describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
     const outcome = await handlePush(JSON.stringify(fixture.wakeup));
     expect(outcome.accepted).toBe(true);
     await vi.waitFor(() => {
-      expect(requests).toContain('POST https://relay.example/v1/registrations');
+      expect(requests).toContain('POST https://relay.example/v1/registrations/reg-hb/heartbeat');
     });
-    expect(requests).toContain('POST https://relay.example/v1/registrations/reg-hb/heartbeat');
-    expect((await getRegistration('https://relay.example'))?.id).toBe('new');
+    // the worker never recovers: the registration is left for the page
+    expect(requests.some((r) => r === 'POST https://relay.example/v1/registrations')).toBe(false);
+    expect((await getRegistration('https://relay.example'))?.id).toBe('reg-hb');
     await deleteRegistrationRecord('https://relay.example');
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();

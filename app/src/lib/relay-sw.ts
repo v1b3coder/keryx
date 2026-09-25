@@ -2,9 +2,14 @@
  * Service-worker wake-up handling (relay/SPECIFICATION.md §4.2): the push
  * event carries the decrypted §4 envelope (the browser performs RFC 8291),
  * so the worker parses it strictly, resolves the locally followed topic, tries
- * the signature threshold against the company's verified TUF authorization,
- * allows at most one metadata refresh per company cooldown, persists the
- * accepted `seq`, then reconciles content and shows a notification.
+ * the signature threshold against the company's verified TUF authorization, and
+ * persists the accepted `seq`.
+ *
+ * The worker does no TUF metadata or content network work: verification reads
+ * only the locally cached metadata, an unverifiable wake-up is recorded for the
+ * page to re-verify with the full TUF state and its recovery allowance, and the
+ * content sync belongs to the page (design/notifications.md, "Worker-side
+ * processing"). The one network call is the liveness/delivery ack (§5.3).
  */
 
 /** The service worker global scope (only imported by src/sw.ts and tests). */
@@ -13,13 +18,12 @@ declare const self: ServiceWorkerGlobalScope;
 import {
   getAllCompanies,
   getAllItems,
-  getCompany,
   putCompany,
   putItems,
   deleteItems,
   relaySeq,
   setRelaySeq,
-  reserveRecovery,
+  markPendingRecovery,
   getRegistration,
   getRegistrations,
   putRegistration,
@@ -112,8 +116,8 @@ export interface PushOutcome {
   accepted: boolean;
   /** the payload was a §4.3 self-test, not a wake-up */
   test?: boolean;
-  /** a metadata refresh was attempted under the recovery allowance */
-  recovered?: boolean;
+  /** a wake-up the worker could not verify against cached metadata: the page re-verifies */
+  pendingRecovery?: boolean;
   title?: string;
   body?: string;
   origin?: string;
@@ -140,26 +144,17 @@ export async function handlePush(data: string | ArrayBuffer | Uint8Array): Promi
   }
   const found = await companyForTopic(wakeup.t);
   if (!found) return { accepted: false }; // topic not currently followed
-  let { company } = found;
-  const { binding } = found;
+  const { company, binding } = found;
 
-  let authorization = topicAuthorization(company.targets, binding);
-  let recovered = false;
+  const authorization = topicAuthorization(company.targets, binding);
   if (!authorization || !verifyWakeup(wakeup, authorization.keys, authorization.threshold)) {
-    // At most one metadata refresh per company per cooldown, reserved BEFORE
-    // networking. A failed or timed-out refresh still consumes the allowance.
-    if (!(await reserveRecovery(company.origin, Date.now(), RECOVERY_COOLDOWN_MS))) {
-      return { accepted: false };
-    }
-    recovered = true;
-    await sync(company);
-    const refreshed = await getCompany(company.origin);
-    if (!refreshed) return { accepted: false };
-    company = refreshed;
-    authorization = topicAuthorization(company.targets, binding);
-    if (!authorization || !verifyWakeup(wakeup, authorization.keys, authorization.threshold)) {
-      return { accepted: false }; // still unverifiable: never fetch content
-    }
+    // The worker does no TUF metadata or content work (design/notifications.md,
+    // "Worker-side processing"): a failed verification may just mean the cached
+    // metadata is stale after a key rotation, so record the wake-up for the page —
+    // which re-verifies with the full TUF state and its recovery allowance — and
+    // never notify on it here.
+    await markPendingRecovery({ origin: company.origin, topic: wakeup.t, seq: wakeup.seq, at: Date.now() });
+    return { accepted: false, pendingRecovery: true };
   }
 
   // Only after successful verification: atomically compare and persist `seq`.
@@ -168,17 +163,17 @@ export async function handlePush(data: string | ArrayBuffer | Uint8Array): Promi
   await setRelaySeq(company.origin, wakeup.t, wakeup.seq);
   await markPushReceived(company.origin, Date.now());
 
-  // The service worker acks receipt so the relay's registry TTL sweep keeps
-  // the installation alive (§5.3); best-effort, never blocks the notification.
-  void heartbeatRelay(company.origin);
+  // The liveness/delivery ack (§5.3): the worker keeps this one call, but it
+  // never recovers — the page's foreground check owns recovery.
+  void ackRelayReceipt(company.origin);
 
-  if (!recovered) await sync(company);
+  // The page owns the metadata recovery and the content sync: this message
+  // makes it sync content; with no page open, the next open catches up.
   await notifyClients(company.origin);
 
   const name = company.targets.signed.custom?.company_name ?? company.origin;
   return {
     accepted: true,
-    recovered,
     origin: company.origin,
     title: name,
     // Locally authored generic notice: it never claims a publisher message
@@ -344,6 +339,23 @@ export async function heartbeatRelay(origin: string): Promise<void> {
     // the relay no longer knows this registration: obtain a fresh one (§5.3).
     // A transport failure is best-effort and never destroys a subscription.
     if (err instanceof RelayGone) void recoverRelayRegistration(relay.baseUrl);
+  }
+}
+
+/**
+ * The worker's liveness/delivery ack (§5.3: "Sent by the service worker on
+ * wake-up receipt"): one POST, no recovery. A gone registration is left to the
+ * page's foreground check (checkRelayRegistration), which owns recovery.
+ */
+export async function ackRelayReceipt(origin: string): Promise<void> {
+  const base = relayBaseUrl();
+  if (!base) return;
+  const relay = await getRegistration(base);
+  if (!relay) return;
+  try {
+    await relayHeartbeat(relay.baseUrl, relay.id, relay.managementToken);
+  } catch {
+    // best-effort: the page's foreground check recovers a gone registration
   }
 }
 

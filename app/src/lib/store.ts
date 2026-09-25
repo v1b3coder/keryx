@@ -329,6 +329,35 @@ export async function lastPushAt(origin: string): Promise<number> {
   return rec?.at ?? 0;
 }
 
+/** A wake-up the worker could not verify against its cached metadata. */
+export interface PendingRecovery {
+  origin: string;
+  topic: string;
+  seq: number;
+  at: number;
+}
+
+/**
+ * Record a wake-up the worker could not verify: the cached metadata may simply
+ * be stale after a key rotation, so the page re-verifies with the full TUF
+ * state and its recovery allowance (design/notifications.md, worker rule).
+ */
+export async function markPendingRecovery(pending: PendingRecovery): Promise<void> {
+  const db = await openAppDb();
+  await db.put('relay', { key: `recovery-pending\u0000${pending.origin}`, ...pending });
+}
+
+export async function pendingRecoveries(): Promise<PendingRecovery[]> {
+  const db = await openAppDb();
+  const all = (await db.getAll('relay')) as (PendingRecovery & { key: string })[];
+  return all.filter((r) => r.key.startsWith('recovery-pending\u0000'));
+}
+
+export async function clearPendingRecovery(origin: string): Promise<void> {
+  const db = await openAppDb();
+  await db.delete('relay', `recovery-pending\u0000${origin}`);
+}
+
 /** The pending self-test the service worker matches by nonce (§5.3.1). */
 export interface PendingTest {
   baseUrl: string;
