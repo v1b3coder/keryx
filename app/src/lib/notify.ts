@@ -7,6 +7,7 @@
  * followed company's topics. Nothing durable is per company.
  */
 
+import { Capacitor } from '@capacitor/core';
 import {
   clearPendingTest,
   getAllCompanies,
@@ -17,10 +18,12 @@ import {
   type CompanyRecord,
 } from './store';
 import { relayBaseUrl, testRegistration, vapidPublicKey, RelayGone } from './relay';
+import { currentPushTransport } from './push';
 import { ensureRelayRegistration, topicBindings, unionTopics } from './relay-sw';
 import type { RelayRegistration } from './relay';
 
 export type NotificationStateKind =
+  | 'checking'
   | 'unsupported'
   | 'default'
   | 'denied'
@@ -28,7 +31,11 @@ export type NotificationStateKind =
   | 'unregistered'
   | 'pending'
   | 'failed'
-  | 'ok';
+  | 'ok'
+  /** Android: no FCM and no UnifiedPush distributor — install ntfy */
+  | 'no-transport'
+  /** Android: a distributor is present; registration is the next phase (mock) */
+  | 'ntfy-ready';
 
 export interface NotificationState {
   kind: NotificationStateKind;
@@ -49,6 +56,23 @@ export function permissionState(): NotificationPermission | 'unsupported' {
 
 /** The current app-wide notification state (no network, no prompt). */
 export async function notificationState(): Promise<NotificationState> {
+  const transport = await currentPushTransport();
+  if (transport === 'none') {
+    // an Android install can fix this by installing ntfy; a browser without
+    // PushManager cannot (polling is its backstop)
+    return Capacitor.getPlatform() === 'android'
+      ? { kind: 'no-transport' }
+      : { kind: 'unsupported' };
+  }
+  if (transport === 'unifiedpush') {
+    // MOCK (UnifiedPush phase): a distributor is present, but the connector
+    // registration is not wired yet
+    return { kind: 'ntfy-ready' };
+  }
+  if (transport === 'fcm') {
+    // the FCM phase: the native notification permission and topic subscribe
+    return { kind: 'default' };
+  }
   const permission = permissionState();
   if (permission === 'unsupported') return { kind: 'unsupported' };
   if (permission === 'default') return { kind: 'default' };

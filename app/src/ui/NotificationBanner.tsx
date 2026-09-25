@@ -5,6 +5,7 @@
  * enable/retry in this session, never a persistent status row.
  */
 import type { NotificationState } from '../lib/notify';
+import { openNtfyInstallPage } from '../lib/push';
 
 export function NotificationBanner({
   state,
@@ -20,6 +21,27 @@ export function NotificationBanner({
   onCheck: () => void;
   onRetry: () => void;
 }) {
+  if (state.kind === 'checking') return null;
+  if (state.kind === 'no-transport') {
+    return (
+      <div className="banner banner-danger">
+        <span>Notifications need ntfy on this device.</span>
+        <button className="btn btn-secondary" onClick={onCheck}>
+          Check again
+        </button>
+        <button className="btn btn-primary" onClick={() => void openNtfyInstallPage()}>
+          Install ntfy
+        </button>
+      </div>
+    );
+  }
+  if (state.kind === 'ntfy-ready') {
+    return (
+      <div className="banner banner-neutral">
+        ntfy is ready on this device — notification setup continues in the next step.
+      </div>
+    );
+  }
   if (state.kind === 'unsupported') {
     return (
       <div className="banner banner-neutral">

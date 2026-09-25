@@ -26,6 +26,35 @@ follow/unfollow, company removal — recomputes the union and `PUT`s it; the
 wake-up heartbeat and the foreground check extend `last_seen` and obtain a fresh
 subscription and registration on `404`/`401`.
 
+## Transport selection
+
+One install has exactly one wake-up transport, chosen by a capability probe, never by
+a user setting:
+
+| Device | Transport | Probe |
+|---|---|---|
+| Web / PWA | browser `PushManager` — the endpoint leg (relay spec §6.2) | `PushManager` present |
+| Android with Google services | FCM topics — the topic leg (relay spec §6.1) | `com.google.android.gms` present |
+| De-Googled Android | UnifiedPush distributor (ntfy today) — the endpoint leg over the distributor's connection (relay spec §6.3) | a distributor answers `org.unifiedpush.android.distributor.REGISTER` |
+| Android without either | none | neither probe |
+
+The probe runs at startup and on `visibilitychange`, so installing ntfy and
+returning to the app clears the state without a restart. FCM is chosen only when
+the device can actually use it; if an FCM registration fails, the app falls back
+to UnifiedPush before it gives up (the FCM phase). The relay needs **no change**
+for ntfy: its endpoint leg already delivers RFC 8291/VAPID WebPush to any approved
+push origin, and `ntfy.sh` is approved by default (relay spec §5.6). A self-hosted
+ntfy server must be added to the relay's approved push origins.
+
+When the transport is `none` on Android, the state is **"notifications need
+ntfy"**: the red bar and the first-company screen carry the install link plus the
+battery-optimization note. The web `unsupported` state (no `PushManager`) stays a
+neutral note — there installing an app cannot fix it, and polling is the backstop.
+
+**Mock (until the FCM phase):** the native probe reports no Google services
+(`fcm: false`) unconditionally, so the Android app exercises the ntfy branch; the
+distributor probe itself is real.
+
 ## States
 
 | State | Detection | Presentation |
@@ -36,6 +65,8 @@ subscription and registration on `404`/`401`.
 | Granted, no subscription | `getSubscription() === null` | red top bar + "Turn on" |
 | Registered, relay says gone | heartbeat `404`/`401`, update `409` | red top bar + "Re-subscribe" |
 | Registered, test failed | self-test per-leg result | red top bar + the failing leg |
+| Android, no transport | no Google services and no UnifiedPush distributor | red top bar + "Install ntfy" (see Transport selection) |
+| Android, ntfy ready | a distributor is present; registration is the next phase (mock) | neutral note until the UnifiedPush phase |
 | Healthy | permission granted, subscription present, registration current | no bar — it is reserved for attention states and the enable flow's tail |
 
 Placement: the **first-company "Turn on notifications" screen** (no skip),

@@ -15,6 +15,7 @@ import { getAllCompanies, getItems, deleteItems, type CompanyRecord } from '../l
 import { relayBaseUrl } from '../lib/relay';
 import { ensureRelayRegistration, topicBindings } from '../lib/relay-sw';
 import { permissionState, type SelfTestResult } from '../lib/notify';
+import { openNtfyInstallPage } from '../lib/push';
 import { CompanyLogo } from './CompanyLogo';
 import { useApp } from '../state';
 
@@ -468,6 +469,58 @@ function NotificationsScreen({
     const t = setTimeout(onDone, 2000);
     return () => clearTimeout(t);
   }, [phase, onDone]);
+
+  // MOCK (UnifiedPush phase): the transport probe runs before this screen, so
+  // the ntfy variants render from the app-wide state, not the enable flow.
+  if (notification.kind === 'no-transport') {
+    return (
+      <div className="screen screen-pad" style={{ paddingTop: 48 }}>
+        <h1 className="t-title" style={{ margin: 0 }}>
+          Notifications need ntfy
+        </h1>
+        <p className="t-body t-muted" style={{ margin: '8px 0 12px' }}>
+          This phone has no Google services, so Keryx uses ntfy — a free, open-source
+          push app — to deliver timely updates.
+        </p>
+        <ul className="points">
+          <li>
+            <strong>Install ntfy.</strong> The F-Droid build works without Google
+            services.
+          </li>
+          <li>
+            <strong>Let it run.</strong> Disable battery optimization for ntfy so
+            wake-ups are not delayed.
+          </li>
+          <li>
+            <strong>You are in control.</strong> ntfy only carries Keryx wake-ups —
+            never your content.
+          </li>
+        </ul>
+        <button className="btn btn-primary" onClick={() => void openNtfyInstallPage()}>
+          Install ntfy
+        </button>
+        <button className="btn btn-secondary" style={{ marginTop: 10 }} onClick={onDone}>
+          Continue
+        </button>
+      </div>
+    );
+  }
+  if (notification.kind === 'ntfy-ready') {
+    return (
+      <div className="screen screen-pad" style={{ paddingTop: 48 }}>
+        <h1 className="t-title" style={{ margin: 0 }}>
+          Turn on notifications
+        </h1>
+        <p className="t-body t-muted" style={{ margin: '8px 0 12px' }}>
+          ntfy is ready on this device. Keryx will use it to deliver timely
+          updates — the registration step is the next phase.
+        </p>
+        <button className="btn btn-primary" onClick={onDone}>
+          Continue
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="screen screen-pad" style={{ paddingTop: 48 }}>
