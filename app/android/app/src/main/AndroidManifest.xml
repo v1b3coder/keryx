@@ -40,4 +40,15 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
+
+    <!--
+        Android 11+ package visibility: the transport probe must be able to
+        discover installed UnifiedPush distributors (ntfy). The connector library
+        merges its own queries, but the KeryxPush probe queries directly.
+    -->
+    <queries>
+        <intent>
+            <action android:name="org.unifiedpush.android.distributor.REGISTER" />
+        </intent>
+    </queries>
 </manifest>
