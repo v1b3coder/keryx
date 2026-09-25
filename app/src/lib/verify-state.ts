@@ -8,6 +8,7 @@
  * The native worker reads only this mirror: it is derived from the JS-verified
  * state, so a malicious relay cannot forge it, only replay (dropped by `seq`).
  */
+import { Capacitor } from '@capacitor/core';
 import { getAllCompanies, getRegistration, relaySeq } from './store';
 import { topicBindings } from './relay-sw';
 import { topicAuthorization, relayBaseUrl } from './relay';
@@ -15,6 +16,8 @@ import { KeryxPush } from './native-push';
 import { bytesToHex } from './bytes';
 
 export async function pushVerifyState(): Promise<void> {
+  // the mirror is the native worker's state: the web/PWA has no native side
+  if (Capacitor.getPlatform() !== 'android') return;
   const topics: Record<string, unknown> = {};
   for (const company of await getAllCompanies()) {
     for (const [topic, binding] of Object.entries(topicBindings(company))) {
