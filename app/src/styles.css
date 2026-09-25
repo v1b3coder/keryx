@@ -13,6 +13,8 @@
  * Typography is expressed in rem so the user's OS/browser text-size preference
  * scales the whole app (WCAG 2.2 Resize Text); index.html opts into text
  * scaling and the iOS/iPadOS system body size follows the Larger Text setting.
+ * The text size stays the system's own setting: no in-app size control, and
+ * pinch zoom stays available (the viewport never sets user-scalable=no).
  */
 
 :root {
