@@ -208,13 +208,8 @@ func ValidateItemOptions(obj map[string]any, allowLocalHTTP bool) error {
 			if !strings.Contains(img, ";base64,") {
 				return fmt.Errorf("item %s: image data URL must be base64", id)
 			}
-		} else {
-			if !linkedAllowed(img, allowLocalHTTP) {
-				return fmt.Errorf("item %s: image must be a data URL or absolute HTTPS URL", id)
-			}
-			if sum, _ := obj["image_sha256"].(string); !IsSHA256Hex(sum) {
-				return fmt.Errorf("item %s: linked image requires image_sha256 as a lowercase hex SHA-256", id)
-			}
+		} else if !linkedAllowed(img, allowLocalHTTP) {
+			return fmt.Errorf("item %s: image must be a data URL or absolute HTTPS URL", id)
 		}
 	}
 	if atts, ok := obj["attachments"].([]any); ok {
@@ -226,6 +221,29 @@ func ValidateItemOptions(obj map[string]any, allowLocalHTTP bool) error {
 			url, _ := m["url"].(string)
 			if !linkedAllowed(url, allowLocalHTTP) {
 				return fmt.Errorf("item %s: attachment %d url must be absolute HTTPS", id, i)
+			}
+		}
+	}
+	return ValidateItemHashes(obj)
+}
+
+// ValidateItemHashes checks the hash-format fields of an item (spec/feeds.md
+// §1.1): a linked image requires image_sha256, and a present attachment
+// sha256 must be a lowercase hex SHA-256. It is the subset of the item schema
+// that can be checked on already-published items without taking a position on
+// URL policy (the plain-HTTP local-dev exception).
+func ValidateItemHashes(obj map[string]any) error {
+	id, _ := obj["id"].(string)
+	if img, ok := obj["image"].(string); ok && !strings.HasPrefix(img, "data:") {
+		if sum, _ := obj["image_sha256"].(string); !IsSHA256Hex(sum) {
+			return fmt.Errorf("item %s: linked image requires image_sha256 as a lowercase hex SHA-256", id)
+		}
+	}
+	if atts, ok := obj["attachments"].([]any); ok {
+		for i, a := range atts {
+			m, ok := a.(map[string]any)
+			if !ok {
+				continue
 			}
 			if raw, present := m["sha256"]; present {
 				sum, ok := raw.(string)
