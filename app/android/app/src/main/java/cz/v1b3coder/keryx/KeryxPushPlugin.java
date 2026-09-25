@@ -176,7 +176,8 @@ public class KeryxPushPlugin extends Plugin {
         postNotification(
                 getContext(),
                 call.getString("title", "Keryx"),
-                call.getString("body", "New update available"));
+                call.getString("body", "New update available"),
+                call.getString("tag", "keryx-wakeup"));
         call.resolve();
     }
 
@@ -259,13 +260,13 @@ public class KeryxPushPlugin extends Plugin {
         } catch (Exception ignored) {
             // a corrupt mirror verifies nothing: the wake-up is queued for the page
         }
-        boolean accepted = verify.verify(payload);
-        if (accepted) {
+        WakeupVerify.TopicState state = verify.verify(payload);
+        if (state != null) {
             prefs(context).edit().putString(VERIFY_KEY, verify.toJson().toString()).apply();
         }
         enqueue(context, payload);
         final KeryxPushPlugin self = instance;
-        if (!accepted) {
+        if (state == null) {
             // queued for the page; never acked or announced natively
             if (self != null && self.getActivity() != null) {
                 self.getActivity().runOnUiThread(() -> {
@@ -275,16 +276,20 @@ public class KeryxPushPlugin extends Plugin {
             return;
         }
         ackReceipt(context);
+        // the locally verified channel label: the generic notice names it, the
+        // tag keys the notice off the wake-up's own topic
+        final String body = state.label.isEmpty() ? "New update available" : "New update in " + state.label;
+        final String tag = state.topic.isEmpty() ? "keryx-wakeup" : "keryx-" + state.topic;
         if (self != null && self.getActivity() != null) {
             self.getActivity().runOnUiThread(() -> {
                 if (self.hasListeners("push")) {
                     emitPush(self, payload);
                 } else {
-                    postNotification(context, "Keryx", "New update available");
+                    postNotification(context, "Keryx", body, tag);
                 }
             });
         } else {
-            postNotification(context, "Keryx", "New update available");
+            postNotification(context, "Keryx", body, tag);
         }
     }
 
@@ -387,8 +392,9 @@ public class KeryxPushPlugin extends Plugin {
         });
     }
 
-    /** The generic native notice; it never carries content. */
-    private static void postNotification(Context context, String title, String body) {
+    /** The generic native notice; it never carries content. The tag is the
+     * wake-up's own topic, so one channel's notice never replaces another's. */
+    private static void postNotification(Context context, String title, String body, String tag) {
         NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm == null) return;
         if (Build.VERSION.SDK_INT >= 26) {
@@ -408,6 +414,6 @@ public class KeryxPushPlugin extends Plugin {
                 .setContentText(body)
                 .setAutoCancel(true)
                 .setContentIntent(pi);
-        nm.notify("keryx-wakeup", 1, builder.build());
+        nm.notify(tag, 1, builder.build());
     }
 }

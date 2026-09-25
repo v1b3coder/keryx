@@ -279,6 +279,8 @@ export function topicAuthorization(
 
 export interface TopicBinding {
   channel: string;
+  /** the locally verified label for the notification (channel display_name) */
+  displayName: string;
   scopeId: string;
 }
 

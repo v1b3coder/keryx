@@ -124,7 +124,7 @@ export function topicBindings(company: CompanyRecord): Record<string, TopicBindi
     if (!ch.followed) continue;
     const scopeId = publicScopeId(ch.name);
     const h = sourceHash(companyId, ch.name);
-    out[deriveTopic(companyId, scopeId, h)] = { channel: ch.name, scopeId };
+    out[deriveTopic(companyId, scopeId, h)] = { channel: ch.name, displayName: ch.displayName, scopeId };
   }
   for (const sub of company.privateFeeds) {
     if (sub.closed) continue;
@@ -134,7 +134,11 @@ export function topicBindings(company: CompanyRecord): Record<string, TopicBindi
     if (!entry) continue;
     const scopeId = privateScopeId(entry.channel, entry.pattern);
     const h = sourceHash(companyId, token);
-    out[deriveTopic(companyId, scopeId, h)] = { channel: entry.channel, scopeId };
+    out[deriveTopic(companyId, scopeId, h)] = {
+      channel: entry.channel,
+      displayName: sub.displayName ?? entry.channel,
+      scopeId,
+    };
   }
   return out;
 }
@@ -160,6 +164,8 @@ export interface PushOutcome {
   title?: string;
   body?: string;
   origin?: string;
+  /** the wake-up's derived topic: the notification tag keys off it */
+  topic?: string;
 }
 
 /**
@@ -214,10 +220,13 @@ export async function handlePush(data: string | ArrayBuffer | Uint8Array): Promi
   return {
     accepted: true,
     origin: company.origin,
+    topic: wakeup.t,
     title: name,
     // Locally authored generic notice: it never claims a publisher message
-    // exists and never includes unverified content (§6.2).
-    body: 'New update available',
+    // exists and never includes unverified content (§6.2). The channel label is
+    // the locally verified display_name, so it leaks nothing the app does not
+    // already know.
+    body: `New update in ${binding.displayName}`,
   };
 }
 

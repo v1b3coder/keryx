@@ -31,7 +31,7 @@ export interface KeryxPushPlugin {
   getEndpoint(): Promise<{ endpoint: string | null; p256dh: string | null; auth: string | null }>;
   setVerifyState(options: { state: { topics: unknown } }): Promise<void>;
   setRegistration(options: { registration: NativeRegistration | null }): Promise<void>;
-  showNotification(options: { title: string; body: string }): Promise<void>;
+  showNotification(options: { title: string; body: string; tag?: string }): Promise<void>;
   requestNotificationPermission(): Promise<{ granted: boolean }>;
   getNotificationPermission(): Promise<{ granted: boolean }>;
   drainMessages(): Promise<{ messages: string[] }>;

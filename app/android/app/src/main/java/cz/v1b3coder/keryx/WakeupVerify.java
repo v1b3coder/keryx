@@ -25,17 +25,21 @@ public final class WakeupVerify {
     private static final String DOMAIN = "keryx/wakeup/v1|";
 
     public static final class TopicState {
+        public final String topic;
         public final String[] keyids;
         public final byte[][] pubs;
         public final String[] pubHex;
         public final int threshold;
+        public final String label;
         public long lastSeq;
 
-        public TopicState(String[] keyids, byte[][] pubs, String[] pubHex, int threshold, long lastSeq) {
+        public TopicState(String topic, String[] keyids, byte[][] pubs, String[] pubHex, int threshold, String label, long lastSeq) {
+            this.topic = topic;
             this.keyids = keyids;
             this.pubs = pubs;
             this.pubHex = pubHex;
             this.threshold = threshold;
+            this.label = label;
             this.lastSeq = lastSeq;
         }
     }
@@ -81,7 +85,14 @@ public final class WakeupVerify {
             if (!valid) continue;
             topics.put(
                     topic,
-                    new TopicState(keyids, pubs, pubHex, Math.max(1, t.optInt("threshold", 1)), t.optLong("lastSeq", 0)));
+                    new TopicState(
+                            topic,
+                            keyids,
+                            pubs,
+                            pubHex,
+                            Math.max(1, t.optInt("threshold", 1)),
+                            t.optString("label", ""),
+                            t.optLong("lastSeq", 0)));
         }
     }
 
@@ -106,6 +117,7 @@ public final class WakeupVerify {
                 topic.put("keys", keys);
                 topic.put("threshold", state.threshold);
                 topic.put("lastSeq", state.lastSeq);
+                topic.put("label", state.label);
                 topicsJson.put(entry.getKey(), topic);
             } catch (Exception e) {
                 // impossible for a JSONObject of JSON-safe values
@@ -124,23 +136,24 @@ public final class WakeupVerify {
      * Verify one §4 envelope: strict fields, topic known, Ed25519 threshold,
      * `seq` above the mirror's last accepted value. On acceptance the mirror's
      * `seq` advances, so a replay is dropped even while the app is killed
-     * (the mirror itself is persisted by the caller).
+     * (the mirror itself is persisted by the caller). Returns the matched topic
+     * state (its label feeds the notice) or null when rejected.
      */
-    public synchronized boolean verify(String payload) {
+    public synchronized TopicState verify(String payload) {
         JSONObject envelope;
         try {
             envelope = new JSONObject(payload);
         } catch (Exception e) {
-            return false;
+            return null;
         }
-        if (envelope.optInt("v", -1) != 1) return false;
+        if (envelope.optInt("v", -1) != 1) return null;
         String topic = envelope.optString("t", "");
         long seq = envelope.optLong("seq", -1);
         JSONArray sigs = envelope.optJSONArray("sig");
-        if (topic.isEmpty() || seq < 1 || sigs == null || sigs.length() == 0) return false;
+        if (topic.isEmpty() || seq < 1 || sigs == null || sigs.length() == 0) return null;
         TopicState state = topics.get(topic);
-        if (state == null) return false;
-        if (seq <= state.lastSeq) return false;
+        if (state == null) return null;
+        if (seq <= state.lastSeq) return null;
         // the signed bytes are exactly wakeup.go's SignedBytes: the OLPC canonical
         // form sorts keys `seq`, `t`, `v`; the topic is base64url, so no escaping
         byte[] signed = (DOMAIN + "{\"seq\":" + seq + ",\"t\":\"" + topic + "\",\"v\":1}")
@@ -149,13 +162,13 @@ public final class WakeupVerify {
         int valid = 0;
         for (int i = 0; i < sigs.length(); i++) {
             JSONObject sig = sigs.optJSONObject(i);
-            if (sig == null) return false;
+            if (sig == null) return null;
             String keyid = sig.optString("keyid", "");
             byte[] raw;
             try {
                 raw = base64urlToBytes(sig.optString("sig", ""));
             } catch (IllegalArgumentException e) {
-                return false;
+                return null;
             }
             if (raw.length != 64 || keyid.isEmpty() || seen.containsKey(keyid)) continue;
             int keyIndex = -1;
@@ -172,9 +185,9 @@ public final class WakeupVerify {
             verifier.update(signed, 0, signed.length);
             if (verifier.verifySignature(raw)) valid++;
         }
-        if (valid < state.threshold) return false;
+        if (valid < state.threshold) return null;
         state.lastSeq = seq;
-        return true;
+        return state;
     }
 
     /** 64 hex chars → 32 bytes; throws on anything else. */

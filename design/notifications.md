@@ -60,8 +60,9 @@ distributor probe itself is real.
 On Android the UnifiedPush connector receives and decrypts the RFC 8291 message,
 then hands the plaintext §4 envelope to the app's service. The native worker
 verifies it against a **native mirror of the verification state** (topic → keys +
-threshold + last `seq`, pushed by the JS layer from its TUF-verified state). A
-verified wake-up shows the generic notice and is queued for the JS layer; an
+threshold + last `seq` + channel label, pushed by the JS layer from its TUF-verified
+state). A verified wake-up shows the generic notice — `New update in <channel>`,
+named from the locally verified channel label — and is queued for the JS layer; an
 unverified one is queued but never announced. When the WebView is alive the JS
 layer also processes the queued payload (`handlePush`: full verification, recovery,
 sync), so the native mirror is an anti-spam/replay gate, not a second trust root.

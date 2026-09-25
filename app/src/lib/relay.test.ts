@@ -172,7 +172,11 @@ describe('topic bindings (§10)', () => {
       publicScopeId('security'),
       sourceHash('company.example', 'security'),
     );
-    expect(bindings[publicTopic]).toEqual({ channel: 'security', scopeId: publicScopeId('security') });
+    expect(bindings[publicTopic]).toEqual({
+      channel: 'security',
+      displayName: 'Security',
+      scopeId: publicScopeId('security'),
+    });
     expect(Object.keys(bindings)).toHaveLength(2); // security + the order feed
 
     const privateTopic = deriveTopic(
@@ -181,6 +185,8 @@ describe('topic bindings (§10)', () => {
       sourceHash('company.example', 'AbCdEf0123456789_-xyZ'),
     );
     expect(bindings[privateTopic].channel).toBe('tracking');
+    // no offer display_name: the pattern label is the fallback
+    expect(bindings[privateTopic].displayName).toBe('tracking');
   });
 });
 

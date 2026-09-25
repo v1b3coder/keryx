@@ -27,6 +27,8 @@ export async function pushVerifyState(): Promise<void> {
         keys: authorization.keys.map((k) => ({ keyid: k.keyid, pub: bytesToHex(k.pub) })),
         threshold: authorization.threshold,
         lastSeq: await relaySeq(company.origin, topic),
+        // the native fallback notice's label (the locally verified display_name)
+        label: binding.displayName,
       };
     }
   }

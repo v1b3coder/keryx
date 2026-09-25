@@ -172,6 +172,8 @@ describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
     const outcome = await handlePush(JSON.stringify(fixture.wakeup));
     expect(outcome.accepted).toBe(true);
     expect(outcome.title).toBe(origin);
+    expect(outcome.body).toBe('New update in Security');
+    expect(outcome.topic).toBe(fixture.topic);
     expect(await relaySeq(origin, fixture.topic)).toBe(fixture.seq);
     expect((await handlePush(JSON.stringify(fixture.wakeup))).accepted).toBe(false);
   });
@@ -251,7 +253,7 @@ describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
       baseUrl: 'https://relay.example',
       id: 'reg-hb',
       managementToken: 'tok-hb',
-      topics: { [fixture.topic]: { channel: 'security', scopeId: fixture.scopeId } },
+      topics: { [fixture.topic]: { channel: 'security', displayName: 'Security', scopeId: fixture.scopeId } },
     });
     const outcome = await handlePush(JSON.stringify(fixture.wakeup));
     expect(outcome.accepted).toBe(true);
@@ -270,7 +272,7 @@ describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
       baseUrl: 'https://relay.example',
       id: 'reg-hb',
       managementToken: 'tok-hb',
-      topics: { [fixture.topic]: { channel: 'security', scopeId: fixture.scopeId } },
+      topics: { [fixture.topic]: { channel: 'security', displayName: 'Security', scopeId: fixture.scopeId } },
     });
     vi.stubGlobal('navigator', {
       serviceWorker: {
@@ -315,7 +317,7 @@ describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
       baseUrl: 'https://relay.example',
       id: 'reg-hb',
       managementToken: 'tok-hb',
-      topics: { [fixture.topic]: { channel: 'security', scopeId: fixture.scopeId } },
+      topics: { [fixture.topic]: { channel: 'security', displayName: 'Security', scopeId: fixture.scopeId } },
     });
     const requests: string[] = [];
     vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
@@ -541,7 +543,7 @@ describe('relay registration client (relay/SPECIFICATION.md §5.3)', () => {
       baseUrl: 'https://relay.example',
       id: 'reg-1',
       managementToken: 'tok-1',
-      topics: { [fixture.topic]: { channel: 'security', scopeId: fixture.scopeId } },
+      topics: { [fixture.topic]: { channel: 'security', displayName: 'Security', scopeId: fixture.scopeId } },
     });
     vi.stubGlobal('navigator', {
       serviceWorker: {

@@ -243,6 +243,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             await KeryxPush.showNotification({
               title: outcome.title ?? 'Keryx',
               body: outcome.body ?? 'New update available',
+              tag: outcome.topic ? `keryx-${outcome.topic}` : undefined,
             });
           }
           await pushVerifyState();
@@ -255,6 +256,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           void KeryxPush.showNotification({
             title: outcome.title ?? 'Keryx',
             body: outcome.body ?? 'New update available',
+            tag: outcome.topic ? `keryx-${outcome.topic}` : undefined,
           });
         }
       }

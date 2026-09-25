@@ -39,7 +39,9 @@ self.addEventListener('push', (event) => {
       if (outcome.test) return; // silent record: the app shows the result
       await self.registration.showNotification(outcome.title ?? 'Keryx', {
         body: outcome.body,
-        tag: `keryx-${outcome.origin ?? 'update'}`,
+        // one notice per channel: a wake-up for another channel must not
+        // silently replace this one
+        tag: `keryx-${outcome.topic ?? outcome.origin ?? 'update'}`,
         // a new wake-up must alert, not silently replace the previous notice
         renotify: true,
         data: { origin: outcome.origin },
