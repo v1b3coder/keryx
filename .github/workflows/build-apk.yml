@@ -93,7 +93,7 @@ jobs:
         env:
           KERYX_VERSION_NAME: ${{ steps.version.outputs.apk_version }}
           KERYX_VERSION_CODE: ${{ steps.version.outputs.code }}
-        run: ./gradlew assembleDebug
+        run: ./gradlew testDebugUnitTest assembleDebug
 
       - name: Stage APK
         run: |

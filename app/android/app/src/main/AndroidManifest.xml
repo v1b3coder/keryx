@@ -43,6 +43,16 @@
                 <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
             </intent-filter>
         </service>
+
+        <!-- The FCM topic leg: Google's SDK delivers §4 envelopes here on
+             devices with Google Play services. -->
+        <service
+            android:name=".KeryxFcmService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
     </application>
 
     <!-- Permissions -->

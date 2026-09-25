@@ -19,6 +19,10 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.GoogleApiAvailability;
+import com.google.android.gms.tasks.Tasks;
+import com.google.firebase.messaging.FirebaseMessaging;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -28,7 +32,9 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -41,10 +47,11 @@ import java.util.concurrent.Executors;
  * the mirrored verification state, queues it for the JS layer, acks the relay's
  * liveness heartbeat and shows the generic notice when no page is listening.
  *
- * MOCK (FCM phase): `fcm` is always false until the FCM phase lands, so the web
- * layer always takes the UnifiedPush (ntfy) branch.
- * TODO(fcm): report Google Play services availability
- * (GoogleApiAvailability.isGooglePlayServicesAvailable == SUCCESS).
+ * The FCM probe is the real Google Play services availability check, and
+ * {@code setTopics} subscribes the Firebase SDK to exactly the union of every
+ * followed company's topics (relay/SPECIFICATION.md §6.1). The topic leg is
+ * registry-free and anonymous: the relay never learns the device's FCM token, so
+ * there is no endpoint, relay record or heartbeat for it.
  */
 @CapacitorPlugin(
         name = "KeryxPush",
@@ -53,7 +60,6 @@ public class KeryxPushPlugin extends Plugin {
     static final String PREFS = "keryx_push";
     static final String INSTANCE = "default";
     static final String CHANNEL_ID = "keryx-wakeup";
-    private static final boolean FCM_MOCK = false;
     private static final int MAX_QUEUE = 8;
     private static final String ENDPOINT_KEY = "endpoint";
     private static final String P256DH_KEY = "p256dh";
@@ -61,6 +67,7 @@ public class KeryxPushPlugin extends Plugin {
     private static final String VERIFY_KEY = "verifyState";
     private static final String REGISTRATION_KEY = "registration";
     private static final String QUEUE_KEY = "queue";
+    private static final String TOPICS_KEY = "topics";
 
     private static KeryxPushPlugin instance;
     private static final List<PluginCall> pendingRegistrations = new ArrayList<>();
@@ -84,8 +91,7 @@ public class KeryxPushPlugin extends Plugin {
     @PluginMethod
     public void getSupport(PluginCall call) {
         JSObject ret = new JSObject();
-        // MOCK (FCM phase): no Google services until the FCM phase.
-        ret.put("fcm", FCM_MOCK);
+        ret.put("fcm", playServicesAvailable(getContext()));
         List<String> distributors = UnifiedPush.getDistributors(getContext());
         JSArray list = new JSArray();
         for (String distributor : distributors) list.put(distributor);
@@ -167,6 +173,77 @@ public class KeryxPushPlugin extends Plugin {
         else editor.putString(REGISTRATION_KEY, registration.toString());
         editor.apply();
         call.resolve();
+    }
+
+    // --- FCM topic leg (relay/SPECIFICATION.md §6.1) ----------------------------
+
+    /**
+     * Subscribe the SDK to exactly the union of every followed company's
+     * topics. The relay publishes to the derived topic and never learns the
+     * device's FCM token, so this is the topic leg's whole registration: no
+     * endpoint, no relay record, no heartbeat.
+     */
+    @PluginMethod
+    public void setTopics(PluginCall call) {
+        final Context context = getContext();
+        final Set<String> current = subscribedTopics(context);
+        final Set<String> wanted = new HashSet<>();
+        JSArray topics = call.getArray("topics");
+        if (topics != null) {
+            for (int i = 0; i < topics.length(); i++) {
+                String topic = topics.optString(i, null);
+                if (topic != null && !topic.isEmpty()) wanted.add(topic);
+            }
+        }
+        final List<String> added = KeryxTopics.added(current, wanted);
+        final List<String> removed = KeryxTopics.removed(current, wanted);
+        io.execute(() -> {
+            try {
+                FirebaseMessaging messaging = FirebaseMessaging.getInstance();
+                for (String topic : added) Tasks.await(messaging.subscribeToTopic(topic));
+                for (String topic : removed) Tasks.await(messaging.unsubscribeFromTopic(topic));
+            } catch (Exception e) {
+                call.reject("FCM topic subscription failed: " + e.getMessage());
+                return;
+            }
+            putSubscribedTopics(context, wanted);
+            JSObject ret = new JSObject();
+            ret.put("topics", topicsArray(wanted));
+            call.resolve(ret);
+        });
+    }
+
+    /** The topics the SDK currently follows. */
+    @PluginMethod
+    public void getTopics(PluginCall call) {
+        JSObject ret = new JSObject();
+        ret.put("topics", topicsArray(subscribedTopics(getContext())));
+        call.resolve(ret);
+    }
+
+    /** Google services are present and usable: the topic leg's probe (§6.1). */
+    private static boolean playServicesAvailable(Context context) {
+        return GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context)
+                == ConnectionResult.SUCCESS;
+    }
+
+    private static Set<String> subscribedTopics(Context context) {
+        Set<String> topics = new HashSet<>();
+        String raw = prefs(context).getString(TOPICS_KEY, "");
+        for (String topic : raw.split("\n")) {
+            if (!topic.isEmpty()) topics.add(topic);
+        }
+        return topics;
+    }
+
+    private static void putSubscribedTopics(Context context, Set<String> topics) {
+        prefs(context).edit().putString(TOPICS_KEY, String.join("\n", topics)).apply();
+    }
+
+    private static JSArray topicsArray(Set<String> topics) {
+        JSArray out = new JSArray();
+        for (String topic : topics) out.put(topic);
+        return out;
     }
 
     // --- notifications -------------------------------------------------------

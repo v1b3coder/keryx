@@ -39,6 +39,10 @@ dependencies {
     implementation project(':capacitor-android')
     // UnifiedPush connector: the de-Googled wake-up transport (relay/SPECIFICATION.md §6.3)
     implementation "org.unifiedpush.android:connector:3.3.5"
+    // FCM: the topic leg on devices with Google services (relay/SPECIFICATION.md §6.1)
+    implementation "com.google.firebase:firebase-messaging:25.1.3"
+    // GoogleApiAvailability: the Play services probe (not pulled in by firebase-messaging 25.x)
+    implementation "com.google.android.gms:play-services-base:18.11.0"
     // Ed25519 verification for the native §4 envelope gate (Java has none before API 33)
     implementation "org.bouncycastle:bcprov-jdk18on:1.86"
     testImplementation "junit:junit:$junitVersion"
