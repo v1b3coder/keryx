@@ -8,17 +8,17 @@ design questions live here together so they cannot drift apart.
 
 ## 1. Phases
 
-| Phase | Scope |
-|---|---|
-| **0 — Design docs (current)** | Protocol, wire format, threat model. Feedback loop with finance/crypto companies. |
-| **1 — MVP** | Reference publisher tool (`pub`: full TUF repo, channels, per-channel role metadata, optional authors roles, QR); reference app (TUF client + one-way inbox, no push dependency); private capability feeds; suspension; pilots with 1–2 friendly companies. |
-| **2 — Ecosystem** | Lite mode implementation ([spec/clients.md §3](spec/clients.md)); UnifiedPush/WebPush wake-ups (PWA + de-Googled ntfy distributor) + neutral relay (incl. refresh-TTL revisit); per-item auto-hide (v2, app policy); cloud-KMS/hardware signer backends (Sigstore signer interface); optional TOFU-free anchor (zone-published root key, `_keryx.<domain>` TXT, DNSSEC-required); backup/restore UX; optional company directory. |
-| **3 — Bridge & federation** | Email bridge with virtual mailboxes (SPF/DKIM/DMARC verification); partner-channel semantics; possible standardization path. |
-| **4 — Standards** | Open governance, formal spec, independent implementations, security audit. |
+| Phase | Status | Scope |
+|---|---|---|
+| **0 — Design docs** | done | Protocol, wire format, threat model. The feedback loop with finance/crypto companies stays open. |
+| **1 — MVP** | **done** (pilots pending) | Reference publisher tool (`pub`: full TUF repo, channels, per-channel role metadata, optional authors roles, QR); reference app (TUF client + one-way inbox, no push dependency); private capability feeds; suspension. Remaining: pilots with 1–2 friendly companies. |
+| **2 — Ecosystem** | **current** | Done: the neutral relay (FCM + UnifiedPush/WebPush legs, deployed on Fly.io) and the endpoint-leg wake-ups — PWA WebPush and de-Googled Android via the ntfy distributor — with the app-wide registration, self-test and liveness recovery. Pending: lite mode ([spec/clients.md §3](spec/clients.md)); the native Android FCM client (the relay's FCM leg is implemented, the app probe is mocked to absent); the refresh-TTL revisit; per-item auto-hide (v2, app policy); cloud-KMS/hardware signer backends (Sigstore signer interface); the optional TOFU-free anchor (zone-published root key, `_keryx.<domain>` TXT, DNSSEC-required); backup/restore UX; optional company directory. |
+| **3 — Bridge & federation** | planned | Email bridge with virtual mailboxes (SPF/DKIM/DMARC verification); partner-channel semantics; possible standardization path. |
+| **4 — Standards** | planned | Open governance, formal spec, independent implementations, security audit. |
 
 ---
 
-## 2. Open Questions — Wire Format (resolve before locking v1)
+## 2. Open Questions — Wire Format (v1 locked; extensions and interop checks open)
 
 1. **Item field set:** locked — `id`, `title`, `content_html`, `image`,
    `date_published`, `date_modified`, `tags`, `language`, `attachments`,
@@ -27,34 +27,44 @@ design questions live here together so they cannot drift apart.
    attachments).
 2. **`sig` canonicalization:** OLPC (TUF canonical JSON) — verified against
    go-tuf v2.4.2 ([spec/feeds.md §1.2](spec/feeds.md#12-signing-and-verification)).
-3. **Mirrors:** v1 uses the single `custom.repo_base`; mirror selection
-   (multiple bases, failover) is a Phase 2 question.
-4. **TUF client interop** (verify against go-tuf / python-tuf / tuf-js before
-   lock): keyid computation (hash of the canonical key object); delegation
-   glob semantics (`*` matches one path segment and never crosses `/` — a
-   client that matched across `/` would silently widen a channel's
-   authorization); dotted delegated-role names (`channels.<channel>`,
-   `channels.<channel>.authors`)
-   round-tripping through metadata and filenames; the authors role (a
-   delegated role pinning no targets, sibling of a terminating role) —
-   **verified working with go-tuf v2.4.2's client** (resolution short-circuits
-   at the terminating channel role; the authors metadata verifies against the
-   delegation); and the fetcher routing
-   that keeps root at the well-known anchor.
+3. **Mirrors:** v1 uses the single `custom.repo_base`; `custom.mirrors` is
+   named in the spec as a Phase 2 field ([spec/core.md §1](spec/core.md))
+   but is not implemented. Mirror selection (multiple bases, failover) is a
+   Phase 2 question.
+4. **TUF client interop:** go-tuf v2.4.2's client verifies the generated
+   repos (SDK, relay, `pub pull`), and the app's in-repo TypeScript client
+   implements the standard TUF 1.0 workflow (tuf-js is Node-only and cannot
+   run in a browser); cross-stack tests run against real Go-signed artifacts.
+   Verified across the two implementations: keyid computation (hash of the
+   canonical key object); delegation glob semantics (`*` matches one path
+   segment and never crosses `/` — a client that matched across `/` would
+   silently widen a channel's authorization); dotted delegated-role names
+   (`channels.<channel>`, `channels.<channel>.authors`) round-tripping
+   through metadata and filenames; the authors role (a delegated role pinning
+   no targets, sibling of a terminating role — resolution short-circuits at
+   the terminating channel role; the authors metadata verifies against the
+   delegation); and the fetcher routing that keeps root at the well-known
+   anchor. Remaining: an independent python-tuf check before locking v1.
 5. **Root pruning:** the publisher keeps all `N.root.json` (TUF mandate);
    app-side retention policy for old roots is an open detail.
-6. **Lite mode:** implemented in Phase 2 — confirm the convention discovery
-   path and the per-metadata `expires` cadence against real publishers.
+6. **Lite mode:** specified ([spec/clients.md §3](spec/clients.md)) but not
+   implemented — the app refuses a lite repo and `pub` rejects `--mode lite`.
+   Open: implement it, then confirm the convention discovery path and the
+   per-metadata `expires` cadence against real publishers.
 
 ---
 
-## 3. Open Questions — Design and Operations (resolve in Phase 1)
+## 3. Open Questions — Design and Operations (Phase 2+ and field questions)
 
-1. **Key custody, cadence, and the hardware signing flow.** Software keys for
-   the MVP; cloud KMS via the Sigstore signer interface later; **hardware
-   signing devices** (e.g. Trezor) from Phase 2+ need a defined signing
-   *flow*, not a different wire format — the signature stays raw Ed25519 over
-   the TUF canonicalization ([`design/why.md` §4.4](design/why.md)). Open: how the device presents
+1. **Key custody, cadence, and the hardware signing flow.** Software keys
+   shipped: an age-encrypted key store outside the repo, role-scoped
+   workspaces (`operator|ci|author`), encrypted export/import between
+   machines, strict stage/apply master ceremonies, and
+   `rotate-root --announce-next-key`. Cloud KMS via the Sigstore signer
+   interface is Phase 2; **hardware signing devices** (e.g. Trezor) from
+   Phase 2+ need a defined signing *flow*, not a different wire format —
+   the signature stays raw Ed25519 over the TUF canonicalization
+   ([`design/why.md` §4.4](design/why.md)). Open: how the device presents
    what is being signed (a human-readable summary of the item, not opaque
    bytes), how the tool hands it over, and how the resulting signature is
    collected. This applies to **author keys as much as to the root key** —
@@ -66,25 +76,33 @@ design questions live here together so they cannot drift apart.
    it grows ~100 B per item and is pruned by unpublishing; there is no
    archive policy and no `next_url`. Open: practical index size limits and
    whether a channel should cap its published set.
-3. **Rich content format:** the exact HTML/CSS subset the sandboxed renderer
-   allows (styles, buttons, tables); inline data-URL media and referencing
-   conventions — settled by the item model
-   ([spec/feeds.md §1.1](spec/feeds.md#11-item), [§1.4](spec/feeds.md#14-rendering-and-links)).
+3. **Rich content format:** the item model settles inline data-URL media and
+   the referencing conventions
+   ([spec/feeds.md §1.1](spec/feeds.md#11-item), [§1.4](spec/feeds.md#14-rendering-and-links));
+   the reference renderer is stricter than the spec's sandbox and strips
+   content CSS entirely. Open: whether to allow the spec's HTML/CSS subset
+   (styles, buttons, tables) in an isolated container.
 4. **Thresholds in practice:** n-of-m signing (e.g. 2-of-3 for security
    alerts) is supported but off by default — how commonly will real companies
    use it?
-5. **Authors role operations:** author onboarding/removal requires the offline
-   master (like channel changes) — acceptable cadence in practice? Batch
-   changes; the reference tool supports it. (The re-signing question is
-   settled: strict verification, re-sign during the overlap —
-   [spec/feeds.md §2](spec/feeds.md#2-authors-role), [spec/repository.md §5](spec/repository.md).)
+5. **Authors role operations:** implemented (`author add/revoke/list`,
+   stage/apply ceremonies, re-sign during the overlap —
+   [spec/feeds.md §2](spec/feeds.md#2-authors-role), [spec/repository.md §5](spec/repository.md)).
+   Open: is the offline-master cadence (like channel changes) acceptable
+   in practice, and do real publishers need batch changes?
 6. **Local subscription portability:** backup/restore **format details**
    (join origin + pinned root keys + channel lists + private capability URLs
    across devices).
-7. **Push transport:** the whole wake-up layer is WIP — relay shape is
-   specified (FCM + UnifiedPush/WebPush endpoints,
-   [relay/SPECIFICATION.md](relay/SPECIFICATION.md)); implementation and
-   refresh TTL pending ([`design/why.md` §4.10](design/why.md)).
+7. **Push transport:** the endpoint leg is shipped and verified end to end —
+   the relay (Fly.io, idle-exit + cold start), PWA WebPush, and de-Googled
+   Android via the ntfy distributor, with the app-wide registration,
+   self-test and liveness recovery
+   ([relay/SPECIFICATION.md](relay/SPECIFICATION.md)). The relay's FCM leg
+   is implemented; the native Android FCM client is the remaining phase (the
+   probe is mocked to absent). Open (relay spec §11): the client recovery
+   budget X hours; shared-topic ntfy (bare ntfy app) in v1; the endpoint/FCM
+   registry TTLs against the protocol's freshness model; relay identity and
+   governance; the deferred on-premise relay; the refresh-TTL revisit.
 8. **Directory:** is a public, opt-in directory of companies worth the trust
    implications?
 9. **Delivery partner reality check:** which logistics/delivery providers
