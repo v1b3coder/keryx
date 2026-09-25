@@ -452,7 +452,7 @@ function NotificationsScreen({
   onDone: () => void;
 }) {
   const [phase, setPhase] = useState<'idle' | 'busy' | 'pending' | 'failed' | 'green'>('idle');
-  const { notification } = useApp();
+  const { notification, actions } = useApp();
 
   // the app-wide state upgrades when the late nonce lands: show green briefly,
   // then continue to the company view
@@ -472,6 +472,19 @@ function NotificationsScreen({
 
   // MOCK (UnifiedPush phase): the transport probe runs before this screen, so
   // the ntfy variants render from the app-wide state, not the enable flow.
+  if (notification.kind === 'checking') {
+    return (
+      <div className="screen screen-pad" style={{ paddingTop: 48 }}>
+        <h1 className="t-title" style={{ margin: 0 }}>
+          Notifications
+        </h1>
+        <div className="empty" style={{ flex: 'none', padding: '0 0 16px' }}>
+          <div className="spinner" />
+          <p className="t-small t-muted">Checking notifications…</p>
+        </div>
+      </div>
+    );
+  }
   if (notification.kind === 'no-transport') {
     return (
       <div className="screen screen-pad" style={{ paddingTop: 48 }}>
@@ -499,8 +512,12 @@ function NotificationsScreen({
         <button className="btn btn-primary" onClick={() => void openNtfyInstallPage()}>
           Install ntfy
         </button>
-        <button className="btn btn-secondary" style={{ marginTop: 10 }} onClick={onDone}>
-          Continue
+        <button
+          className="btn btn-secondary"
+          style={{ marginTop: 10 }}
+          onClick={() => void actions.checkNotifications()}
+        >
+          Check again
         </button>
       </div>
     );

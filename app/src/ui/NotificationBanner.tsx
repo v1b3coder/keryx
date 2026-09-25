@@ -26,11 +26,11 @@ export function NotificationBanner({
     return (
       <div className="banner banner-danger">
         <span>Notifications need ntfy on this device.</span>
-        <button className="btn btn-secondary" onClick={onCheck}>
-          Check again
-        </button>
         <button className="btn btn-primary" onClick={() => void openNtfyInstallPage()}>
           Install ntfy
+        </button>
+        <button className="btn btn-secondary" onClick={onCheck}>
+          Check again
         </button>
       </div>
     );

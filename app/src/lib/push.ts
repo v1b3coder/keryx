@@ -24,6 +24,9 @@ export type PushSupport = NativePushSupport;
 /** The ntfy install page: F-Droid and Google Play builds, plus direct APKs. */
 export const NTFY_INSTALL_URL = 'https://ntfy.sh/#subscribe-phone';
 
+/** The ntfy package id, used in the install guidance. */
+export const NTFY_PACKAGE = 'io.heckel.ntfy';
+
 /** Probe the native transports; the web has none of its own (PushManager instead). */
 export async function pushSupport(): Promise<PushSupport> {
   if (Capacitor.getPlatform() !== 'android') {
