@@ -83,7 +83,9 @@ function objectUrlFor(url: string, bytes: ArrayBuffer, mime: string): string {
  * for rendering, or null when the resource is unavailable (fetch error or
  * hash mismatch — never rendered).
  */
-export async function loadImage(url: string, origin: string, expectedSha?: string): Promise<string | null> {
+export async function loadImage(url: string, origin: string, expectedSha?: unknown): Promise<string | null> {
+  // a present non-string pin can never verify — unavailable, never rendered
+  if (expectedSha !== undefined && typeof expectedSha !== 'string') return null;
   const want = expectedSha?.toLowerCase();
   const cached = await getMedia(url);
   if (cached) {

@@ -41,7 +41,7 @@ import {
   type FeedItem,
 } from './item';
 import { verifyPrivateFeedDocument, matchesPattern, PRIVATE_FEED_MAX_BYTES } from './private';
-import { logoDisplayable, readLimitedBody } from './media';
+import { logoDisplayable, loadImage, readLimitedBody } from './media';
 import { redirectAllowed, safeFetch } from './urlpolicy';
 import { PUBLIC_ITEM_MAX_BYTES } from './item';
 import { parseJoinUrl, rootAnchorUrl, joinUrlFromDeepLink } from './payload';
@@ -541,6 +541,11 @@ describe('media and size policy', () => {
     expect(ok.length).toBe(500);
   });
 
+  it('never renders a media pin that is present but not a string', async () => {
+    await expect(loadImage('https://cdn.example.com/x.png', 'https://company.example', 5)).resolves.toBeNull();
+    await expect(loadImage('https://cdn.example.com/x.png', 'https://company.example', null)).resolves.toBeNull();
+  });
+
   it('verifies an attachment hash before opening (spec/feeds.md §1.1)', () => {
     const item = channelItems('news')[0];
     item.attachments = [
@@ -549,6 +554,10 @@ describe('media and size policy', () => {
     ];
     expect(attachmentSha(item, 'https://cdn.example.com/fw.pdf')).toBe('a'.repeat(64));
     expect(attachmentSha(item, 'https://cdn.example.com/faq')).toBeUndefined();
+    // a present non-string pin can never verify — never opened
+    const junk = JSON.parse(JSON.stringify(item)) as FeedItem;
+    junk.attachments = [{ url: 'https://cdn.example.com/fw.pdf', sha256: 5 as unknown as string }];
+    expect(attachmentSha(junk, 'https://cdn.example.com/fw.pdf')).toBeNull();
     const bytes = new Uint8Array([1, 2, 3]);
     // unhashed resources are mutable by design
     expect(bytesMatchSha(bytes, undefined)).toBe(true);
