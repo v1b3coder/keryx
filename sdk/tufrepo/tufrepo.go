@@ -739,6 +739,9 @@ func (s *State) verifyChannelItems(channel string, chMeta *metadata.Metadata[met
 		if id != want {
 			return fmt.Errorf("%s: item id %q != path segment %q", path, id, want)
 		}
+		if err := feed.ValidateItemHashes(obj); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
 		if err := feed.VerifyItem(obj, authorKeys, authorThreshold, channelKeys, channelThreshold); err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}

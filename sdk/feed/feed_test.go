@@ -183,6 +183,19 @@ func TestAttachmentSHA256MustBePresentAndValid(t *testing.T) {
 	}
 }
 
+func TestValidateItemHashesIgnoresURLPolicy(t *testing.T) {
+	it := item("hello")
+	it["image"] = "http://cdn.example.com/a.jpg" // URL policy violation
+	it["image_sha256"] = "not-a-hash"
+	if err := feed.ValidateItemHashes(it); err == nil {
+		t.Fatal("accepted a malformed image_sha256")
+	}
+	it["image_sha256"] = strings.Repeat("0a", 32)
+	if err := feed.ValidateItemHashes(it); err != nil {
+		t.Fatalf("hash-only check rejected a valid hash: %v", err)
+	}
+}
+
 func TestPrivateDocumentRoundTrip(t *testing.T) {
 	engine := signer(t, keys.RoleEngine, "tracking")
 	url := "https://eshop.example.com/channels/tracking/abcdefghijklmnopqrstuv/feed.json"
