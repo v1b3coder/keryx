@@ -21,7 +21,11 @@ No external script, timer or token is involved: `schedule_task` is the trigger a
    gh label create "triage:wontfix" --color FFFFFF --description "T3 Code audit found nothing to change" --force
    ```
 
-3. Send the dispatcher thread this message:
+3. Import the repository's worktree setup action once: **Settings → Projects &
+   threads → Actions** (with the keryx project selected) → import `t3.json`. It
+   runs `make app-install` in every new worktree so the per-issue agent can run
+   the test suites.
+4. Send the dispatcher thread this message:
 
    > Schedule a recurring task every 30 minutes, bound to this thread, that runs
    > the playbook in `tools/triage.md`.
