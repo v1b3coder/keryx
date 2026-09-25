@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/v1b3coder/keryx/sdk/feed"
 	"github.com/v1b3coder/keryx/sdk/publisher"
 )
 
@@ -90,14 +92,20 @@ func (a *app) companySetCmd() *cobra.Command {
 			if err := a.requireRole("operator"); err != nil {
 				return err
 			}
-			// a linked logo URL is fetched once and its sha256 recorded; a local
+			// a linked logo URL is always fetched and its sha256 recorded; a local
 			// file is embedded as an inline data URL (spec/clients.md §2)
-			if logo != "" && logoSHA == "" {
-				resolved, sha, err := resolveLogo(logo)
+			if logo != "" && !strings.HasPrefix(logo, "data:") {
+				if logoSHA != "" && !feed.IsSHA256Hex(logoSHA) {
+					return fmt.Errorf("--logo-sha256 must be a lowercase hex SHA-256")
+				}
+				resolved, computed, err := resolveLogo(logo)
 				if err != nil {
 					return err
 				}
-				logo, logoSHA = resolved, sha
+				if logoSHA != "" && computed != "" && logoSHA != computed {
+					return fmt.Errorf("--logo-sha256 %s does not match the logo bytes (%s)", logoSHA, computed)
+				}
+				logo, logoSHA = resolved, computed
 			}
 			res, err := runOrStage(cmd,
 				func(dir, pass string) (publisher.Result, error) {
