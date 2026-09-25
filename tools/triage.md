@@ -76,11 +76,18 @@ You work in one top-level thread with its own worktree, created from `main`.
 
 1. Read the issue and its comments:
    `gh issue view <number> --repo v1b3coder/keryx --comments`.
-2. Audit before writing code. Find the root cause or decide the request does not
-   make sense. Check `spec/` when the issue touches protocol behavior and
-   `AGENTS.md` for the project rules.
-3. Put the audit and the proposal in the conversation before you start editing:
-   what you found, what you propose, which files it touches, what the risks are.
+2. Audit before writing code. Check `spec/` when the issue touches protocol
+   behavior and `AGENTS.md` for the project rules.
+   - For a bug, **reproduce it first**: find or write the smallest
+     reproduction (a test, a script, a harness run) and run it. State openly in
+     the conversation whether the bug reproduced or not. If it did not reproduce,
+     say so and investigate why before proposing a fix; do not guess a fix for an
+     unreproduced bug. When the reproduction is a test, keep it as the
+     regression test for the fix.
+   - For a feature request, check the current behavior and the relevant spec.
+3. Put the audit, the reproduction result and the proposal in the conversation
+   before you start editing: what you found, whether it reproduced, what you
+   propose, which files it touches, what the risks are.
 4. Implement the change on this branch. Keep the diff focused on the issue; do not
    refactor unrelated code.
 5. Run the tests that cover the change: `make sdk-test`, `make relay-test` or
@@ -90,12 +97,14 @@ You work in one top-level thread with its own worktree, created from `main`.
    `fix(app): ... (#123)`. Do not push and do not open a pull request.
 7. Label the issue and finish with a summary:
    - `gh issue edit <number> --repo v1b3coder/keryx --add-label triage:done`,
-   - summarize what the audit found, what changed, which tests ran, what is
-     uncertain and what needs the maintainer's decision.
+   - summarize what the audit found, whether the bug reproduced, what changed,
+     which tests ran, what is uncertain and what needs the maintainer's decision.
 
 If the audit finds nothing worth changing, stop after step 3, label the issue
-`triage:wontfix` and explain why in the conversation. Do not implement a change
-you would not defend in review.
+`triage:wontfix` and explain why. If a bug does not reproduce, stop after step 3
+too and explain what you tried; leave the `triage:wip` label so the maintainer
+decides whether to close the issue or ask for a better reproduction. Do not
+implement a change you would not defend in review.
 
 ## For the maintainer
 
