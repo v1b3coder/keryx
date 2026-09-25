@@ -227,8 +227,11 @@ func ValidateItemOptions(obj map[string]any, allowLocalHTTP bool) error {
 			if !linkedAllowed(url, allowLocalHTTP) {
 				return fmt.Errorf("item %s: attachment %d url must be absolute HTTPS", id, i)
 			}
-			if sum, _ := m["sha256"].(string); sum != "" && !IsSHA256Hex(sum) {
-				return fmt.Errorf("item %s: attachment %d sha256 must be a lowercase hex SHA-256", id, i)
+			if raw, present := m["sha256"]; present {
+				sum, ok := raw.(string)
+				if !ok || !IsSHA256Hex(sum) {
+					return fmt.Errorf("item %s: attachment %d sha256 must be a lowercase hex SHA-256", id, i)
+				}
 			}
 		}
 	}

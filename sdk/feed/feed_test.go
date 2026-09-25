@@ -154,6 +154,35 @@ func TestSHA256FieldsRequireLowercaseHex(t *testing.T) {
 	}
 }
 
+func TestAttachmentSHA256MustBePresentAndValid(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		ok    bool
+	}{
+		{"absent", nil, true},
+		{"valid", strings.Repeat("0a", 32), true},
+		{"flag", "--workspace", false},
+		{"uppercase", strings.Repeat("0A", 32), false},
+		{"empty", "", false},
+		{"number", 5, false},
+		{"null", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			it := item("hello")
+			att := map[string]any{"url": "https://cdn.example.com/a.pdf"}
+			if tt.name != "absent" {
+				att["sha256"] = tt.value
+			}
+			it["attachments"] = []any{att}
+			if err := feed.ValidateItem(it); (err == nil) != tt.ok {
+				t.Errorf("attachment sha256 %#v: err = %v", tt.value, err)
+			}
+		})
+	}
+}
+
 func TestPrivateDocumentRoundTrip(t *testing.T) {
 	engine := signer(t, keys.RoleEngine, "tracking")
 	url := "https://eshop.example.com/channels/tracking/abcdefghijklmnopqrstuv/feed.json"
