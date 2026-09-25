@@ -131,9 +131,13 @@ export function verifyItemSignatures(
   }
 }
 
-/** The pinned hash of an attachment URL, when present (spec/feeds.md §1.1). */
-export function attachmentSha(item: FeedItem, url: string): string | undefined {
-  return item.attachments?.find((a) => a.url === url)?.sha256?.toLowerCase();
+/** The pinned hash of an attachment URL when present (spec/feeds.md §1.1).
+ * `undefined` = no pin (unhashed, mutable by design); `null` = a present
+ * non-string pin, which can never verify and must never be opened. */
+export function attachmentSha(item: FeedItem, url: string): string | null | undefined {
+  const sha = item.attachments?.find((a) => a.url === url)?.sha256;
+  if (sha === undefined) return undefined;
+  return typeof sha === 'string' ? sha.toLowerCase() : null;
 }
 
 /** True when bytes satisfy a pinned sha256 (absent hash = unhashed, mutable by design). */

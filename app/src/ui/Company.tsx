@@ -36,6 +36,7 @@ async function openExternal(url: string) {
  */
 async function openAttachment(url: string, item: FeedItem) {
   const sha = attachmentSha(item, url);
+  if (sha === null) return; // malformed pin — never opened
   if (sha) {
     let ok = false;
     try {
