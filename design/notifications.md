@@ -55,6 +55,27 @@ neutral note — there installing an app cannot fix it, and polling is the backs
 (`fcm: false`) unconditionally, so the Android app exercises the ntfy branch; the
 distributor probe itself is real.
 
+## Android wake-ups: the native worker and the page
+
+On Android the UnifiedPush connector receives and decrypts the RFC 8291 message,
+then hands the plaintext §4 envelope to the app's service. The native worker
+verifies it against a **native mirror of the verification state** (topic → keys +
+threshold + last `seq`, pushed by the JS layer from its TUF-verified state). A
+verified wake-up shows the generic notice and is queued for the JS layer; an
+unverified one is queued but never announced. When the WebView is alive the JS
+layer also processes the queued payload (`handlePush`: full verification, recovery,
+sync), so the native mirror is an anti-spam/replay gate, not a second trust root.
+
+A worker that processes a wake-up uses **only the locally cached TUF state** — no
+metadata refresh and no content fetch. It parses, verifies, replay-gates, persists,
+acks the relay's liveness heartbeat and notifies. The heartbeat
+(`POST /v1/registrations/{id}/heartbeat`) is the one deliberate network call:
+it is the delivery confirmation the relay can observe (relay spec §5.3), carries no
+content and never recovers. Metadata recovery and the content sync belong to the page
+(`checkRelayRegistration` / `syncCompanyNow`), which has a real, user-visible
+lifetime. The same rule applies to the PWA service worker, whose `handlePush` also
+records an unverifiable wake-up for the page instead of refreshing metadata.
+
 ## States
 
 | State | Detection | Presentation |
@@ -66,7 +87,6 @@ distributor probe itself is real.
 | Registered, relay says gone | heartbeat `404`/`401`, update `409` | red top bar + "Re-subscribe" |
 | Registered, test failed | self-test per-leg result | red top bar + the failing leg |
 | Android, no transport | no Google services and no UnifiedPush distributor | red top bar + "Install ntfy" (see Transport selection) |
-| Android, ntfy ready | a distributor is present; registration is the next phase (mock) | neutral note until the UnifiedPush phase |
 | Healthy | permission granted, subscription present, registration current | no bar — it is reserved for attention states and the enable flow's tail |
 
 Placement: the **first-company "Turn on notifications" screen** (no skip),

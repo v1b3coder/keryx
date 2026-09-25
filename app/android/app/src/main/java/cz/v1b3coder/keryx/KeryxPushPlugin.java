@@ -63,7 +63,7 @@ public class KeryxPushPlugin extends Plugin {
     private static final String QUEUE_KEY = "queue";
 
     private static KeryxPushPlugin instance;
-    private static PluginCall pendingRegistration;
+    private static final List<PluginCall> pendingRegistrations = new ArrayList<>();
     private static final Object lock = new Object();
     private static final ExecutorService io = Executors.newSingleThreadExecutor();
 
@@ -111,7 +111,7 @@ public class KeryxPushPlugin extends Plugin {
             return;
         }
         synchronized (lock) {
-            pendingRegistration = call;
+            pendingRegistrations.add(call);
         }
         call.setKeepAlive(true);
         getActivity().runOnUiThread(() -> UnifiedPush.tryUseCurrentOrDefaultDistributor(getActivity(), success -> {
@@ -224,12 +224,12 @@ public class KeryxPushPlugin extends Plugin {
                 .putString(P256DH_KEY, p256dh)
                 .putString(AUTH_KEY, auth)
                 .apply();
-        PluginCall pending;
+        List<PluginCall> pending;
         synchronized (lock) {
-            pending = pendingRegistration;
-            pendingRegistration = null;
+            pending = new ArrayList<>(pendingRegistrations);
+            pendingRegistrations.clear();
         }
-        if (pending != null) pending.resolve(endpointResult(context));
+        for (PluginCall call : pending) call.resolve(endpointResult(context));
     }
 
     static void onRegistrationFailed(String reason) {
@@ -264,15 +264,21 @@ public class KeryxPushPlugin extends Plugin {
             prefs(context).edit().putString(VERIFY_KEY, verify.toJson().toString()).apply();
         }
         enqueue(context, payload);
-        if (!accepted) return; // queued for the page; never ack or notify
-        ackReceipt(context);
         final KeryxPushPlugin self = instance;
+        if (!accepted) {
+            // queued for the page; never acked or announced natively
+            if (self != null && self.getActivity() != null) {
+                self.getActivity().runOnUiThread(() -> {
+                    if (self.hasListeners("push")) emitPush(self, payload);
+                });
+            }
+            return;
+        }
+        ackReceipt(context);
         if (self != null && self.getActivity() != null) {
             self.getActivity().runOnUiThread(() -> {
                 if (self.hasListeners("push")) {
-                    JSObject data = new JSObject();
-                    data.put("payload", payload);
-                    self.notifyListeners("push", data, true);
+                    emitPush(self, payload);
                 } else {
                     postNotification(context, "Keryx", "New update available");
                 }
@@ -280,6 +286,12 @@ public class KeryxPushPlugin extends Plugin {
         } else {
             postNotification(context, "Keryx", "New update available");
         }
+    }
+
+    private static void emitPush(KeryxPushPlugin self, String payload) {
+        JSObject data = new JSObject();
+        data.put("payload", payload);
+        self.notifyListeners("push", data, true);
     }
 
     // --- helpers -------------------------------------------------------------
@@ -298,12 +310,12 @@ public class KeryxPushPlugin extends Plugin {
     }
 
     private static void rejectPending(String message) {
-        PluginCall pending;
+        List<PluginCall> pending;
         synchronized (lock) {
-            pending = pendingRegistration;
-            pendingRegistration = null;
+            pending = new ArrayList<>(pendingRegistrations);
+            pendingRegistrations.clear();
         }
-        if (pending != null) pending.reject(message);
+        for (PluginCall call : pending) call.reject(message);
     }
 
     private static void enqueue(Context context, String payload) {

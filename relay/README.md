@@ -99,6 +99,21 @@ leg, put the service-account JSON on the volume and set
 `RELAY_FCM_SERVICE_ACCOUNT=/data/fcm-sa.json`; without it the leg reports
 `disabled`.
 
+The Capacitor Android shell serves the app from `https://localhost`, so that
+origin must be in `RELAY_CORS_ORIGINS` for `POST /v1/registrations` and the
+self-test to work from the app:
+
+```sh
+fly secrets set RELAY_CORS_ORIGINS="https://v1b3coder.github.io,https://localhost" -a keryx-relay
+```
+
+The de-Googled Android path uses ntfy as a UnifiedPush distributor. `ntfy.sh` is
+an approved push origin by default (`RELAY_PUSH_ORIGINS_MODE=strict`); a
+self-hosted ntfy server's origin must go into the approved push origins, e.g.
+`RELAY_PUSH_ORIGINS=https://ntfy.example`. The relay publishes nothing to the
+ntfy server itself — it POSTs an ordinary WebPush request to the UnifiedPush
+endpoint the distributor registered.
+
 `min_machines_running = 0` and `RELAY_IDLE_EXIT_SECONDS` let the relay exit
 itself when no non-health request has arrived for that long and the dispatch
 queue is empty; the platform starts it again on the next request (first request

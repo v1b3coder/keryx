@@ -246,6 +246,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             });
           }
           await pushVerifyState();
+          if (outcome.accepted) await catchUpOnWakeups();
         });
       });
       for (const payload of (await KeryxPush.drainMessages()).messages) {
@@ -257,14 +258,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
           });
         }
       }
-      await pushVerifyState();
       await ensureRelayRegistration(await getAllCompanies());
+      await pushVerifyState();
+      await catchUpOnWakeups();
     })();
     return () => {
       void listener?.remove();
       setSubscriptionSource(null);
     };
-  }, []);
+  }, [catchUpOnWakeups]);
 
   // while a self-test is in flight, re-read the app-wide state so a late
   // nonce upgrades it to green without user action
@@ -340,6 +342,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         sessionTestPending.current = true;
         const result = await runSelfTest(await getAllCompanies());
+        await pushVerifyState();
         if (result.endpoint === 'failed') {
           sessionTestPending.current = false;
           setNotification({ kind: 'failed', leg: result.leg });
@@ -355,6 +358,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       async runNotificationSelfTest() {
         sessionTestPending.current = true;
         const result = await runSelfTest(await getAllCompanies());
+        await pushVerifyState();
         if (result.endpoint === 'failed') {
           sessionTestPending.current = false;
           setNotification({ kind: 'failed', leg: result.leg });

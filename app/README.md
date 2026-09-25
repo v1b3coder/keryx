@@ -163,23 +163,24 @@ worker come from vite-plugin-pwa
   followed-topic set in step; the custom service worker receives the decrypted §4
   envelope, parses it strictly, verifies the Ed25519 threshold against the
   topic's exact scope from the company's verified targets, persists the accepted
-  `seq` (replay), allows at most one metadata refresh per company per
-  persisted cooldown, reconciles content and shows a locally authored generic
-  notice — never unverified content. The registration is **app-wide**: one
+  `seq` (replay), acks the relay's liveness heartbeat and shows a locally
+  authored generic notice — never unverified content. The worker does no TUF
+  metadata or content network work: an unverifiable wake-up is recorded for the
+  page, which re-verifies with the full TUF state under its recovery
+  allowance and owns the content sync. The registration is **app-wide**: one
   permission, one push subscription, one relay record holding the union of every
   followed company's topics (see
   [`../design/notifications.md`](../design/notifications.md)). Configure
   `VITE_RELAY_URL` and `VITE_VAPID_PUBLIC` at build time to enable it;
   without them the app runs exactly as before (polling is the backstop).
 
-**In progress:** the Android wake-up transport. The de-Googled path (ntfy as a
-UnifiedPush distributor) has its transport probe and UI states in place; the
-connector registration is next, FCM last — see
+**Android transport:** the Android shell probes the wake-up transport at startup
+and on `visibilitychange` (FCM > UnifiedPush > none; FCM is mocked to absent
+until the FCM phase). A de-Googled device registers with the ntfy UnifiedPush
+distributor, which delivers the same §4 envelope through the connector service;
+the native worker verifies it against a mirrored verification state, acks, shows the
+generic notice and queues it for the JS layer. FCM is the last phase — see
 [`../design/notifications.md`](../design/notifications.md) "Transport selection".
-
-**Out of scope** (per spec Phase 1/2): FCM/native wake-ups (the relay's topic
-leg is implemented), lite mode (spec/clients.md §3), backup/restore export/import
-(Phase 2).
 
 ## Relay wake-ups (optional)
 
@@ -222,7 +223,6 @@ self-test silently.
 | Registered, relay says gone | heartbeat `404`/`401` | red bar + "Re-subscribe" |
 | Registered, test failed | self-test per-leg result | red bar + the failing leg |
 | Android, no transport | no Google services and no UnifiedPush distributor | red bar + "Install ntfy" |
-| Android, ntfy ready | a distributor is present; registration is the next phase (mock) | neutral note |
 
 After a denial no browser shows the prompt again, so "Check again" re-reads
 the permission and subscription state instead of re-prompting; the wording is
