@@ -19,6 +19,7 @@ import {
 } from './store';
 import { relayBaseUrl, testRegistration, vapidPublicKey, RelayGone } from './relay';
 import { currentPushTransport } from './push';
+import { KeryxPush } from './native-push';
 import { ensureRelayRegistration, topicBindings, unionTopics } from './relay-sw';
 import type { RelayRegistration } from './relay';
 
@@ -33,9 +34,7 @@ export type NotificationStateKind =
   | 'failed'
   | 'ok'
   /** Android: no FCM and no UnifiedPush distributor — install ntfy */
-  | 'no-transport'
-  /** Android: a distributor is present; registration is the next phase (mock) */
-  | 'ntfy-ready';
+  | 'no-transport';
 
 export interface NotificationState {
   kind: NotificationStateKind;
@@ -54,6 +53,24 @@ export function permissionState(): NotificationPermission | 'unsupported' {
   return Notification.permission;
 }
 
+/** The native notification permission (Android; POST_NOTIFICATIONS). */
+export async function nativeNotificationGranted(): Promise<boolean> {
+  try {
+    return (await KeryxPush.getNotificationPermission()).granted;
+  } catch {
+    return false;
+  }
+}
+
+/** Ask for the native notification permission (Android; POST_NOTIFICATIONS). */
+export async function requestNativeNotificationPermission(): Promise<boolean> {
+  try {
+    return (await KeryxPush.requestNotificationPermission()).granted;
+  } catch {
+    return false;
+  }
+}
+
 /** The current app-wide notification state (no network, no prompt). */
 export async function notificationState(): Promise<NotificationState> {
   const transport = await currentPushTransport();
@@ -64,19 +81,20 @@ export async function notificationState(): Promise<NotificationState> {
       ? { kind: 'no-transport' }
       : { kind: 'unsupported' };
   }
-  if (transport === 'unifiedpush') {
-    // MOCK (UnifiedPush phase): a distributor is present, but the connector
-    // registration is not wired yet
-    return { kind: 'ntfy-ready' };
-  }
   if (transport === 'fcm') {
     // the FCM phase: the native notification permission and topic subscribe
     return { kind: 'default' };
   }
-  const permission = permissionState();
-  if (permission === 'unsupported') return { kind: 'unsupported' };
-  if (permission === 'default') return { kind: 'default' };
-  if (permission === 'denied') return { kind: 'denied' };
+  if (transport === 'unifiedpush') {
+    // Android: the native permission is the source of truth (POST_NOTIFICATIONS);
+    // the WebView's Notification API is not usable
+    if (!(await nativeNotificationGranted())) return { kind: 'default' };
+  } else {
+    const permission = permissionState();
+    if (permission === 'unsupported') return { kind: 'unsupported' };
+    if (permission === 'default') return { kind: 'default' };
+    if (permission === 'denied') return { kind: 'denied' };
+  }
   const base = relayBaseUrl();
   const vapid = vapidPublicKey();
   if (!base || !vapid) return { kind: 'unsupported' };

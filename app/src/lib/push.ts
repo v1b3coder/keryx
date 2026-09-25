@@ -15,7 +15,8 @@
  */
 import { Capacitor } from '@capacitor/core';
 import { Browser } from '@capacitor/browser';
-import { nativePushSupport, type NativePushSupport } from './native-push';
+import { nativePushSupport, KeryxPush, type NativePushSupport } from './native-push';
+import type { SubscriptionSource } from './relay-sw';
 
 export type PushTransport = 'webpush' | 'fcm' | 'unifiedpush' | 'none';
 
@@ -58,3 +59,19 @@ export async function openNtfyInstallPage(): Promise<void> {
   if (Capacitor.isNativePlatform()) await Browser.open({ url: NTFY_INSTALL_URL });
   else window.open(NTFY_INSTALL_URL, '_blank', 'noopener,noreferrer');
 }
+
+/**
+ * The UnifiedPush connector as a subscription source (Android only). The page
+ * installs it with `setSubscriptionSource`; the service worker never imports it.
+ */
+export const nativePushSource: SubscriptionSource = {
+  subscribe: (vapid) => KeryxPush.register({ vapid }),
+  async current() {
+    const { endpoint, p256dh, auth } = await KeryxPush.getEndpoint();
+    if (!endpoint || !p256dh || !auth) return null;
+    return { endpoint, p256dh, auth };
+  },
+  async unsubscribe() {
+    await KeryxPush.unregister();
+  },
+};

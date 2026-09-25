@@ -37,6 +37,10 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+    // UnifiedPush connector: the de-Googled wake-up transport (relay/SPECIFICATION.md §6.3)
+    implementation "org.unifiedpush.android:connector:3.3.5"
+    // Ed25519 verification for the native §4 envelope gate (Java has none before API 33)
+    implementation "org.bouncycastle:bcprov-jdk18on:1.86"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

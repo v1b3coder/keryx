@@ -35,13 +35,6 @@ export function NotificationBanner({
       </div>
     );
   }
-  if (state.kind === 'ntfy-ready') {
-    return (
-      <div className="banner banner-neutral">
-        ntfy is ready on this device — notification setup continues in the next step.
-      </div>
-    );
-  }
   if (state.kind === 'unsupported') {
     return (
       <div className="banner banner-neutral">

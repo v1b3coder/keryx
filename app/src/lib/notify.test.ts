@@ -1,9 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { notificationState, runSelfTest } from './notify';
-import { nativePushSupport } from './native-push';
+import { nativePushSupport, KeryxPush } from './native-push';
 
-vi.mock('./native-push', () => ({ nativePushSupport: vi.fn() }));
+vi.mock('./native-push', () => ({
+  nativePushSupport: vi.fn(),
+  KeryxPush: { getNotificationPermission: vi.fn(), requestNotificationPermission: vi.fn() },
+}));
 import {
   putCompany,
   putRegistration,
@@ -59,13 +62,28 @@ describe('notification state machine: Android transports', () => {
     vi.unstubAllGlobals();
   });
 
-  it('reports ntfy-ready when a distributor is installed', async () => {
+  it('reports default when a distributor is installed but the native permission is off', async () => {
     vi.stubGlobal('androidBridge', {});
     vi.mocked(nativePushSupport).mockResolvedValue({
       fcm: false,
       unifiedPush: { available: true, distributors: ['io.heckel.ntfy'] },
     });
-    expect((await notificationState()).kind).toBe('ntfy-ready');
+    vi.mocked(KeryxPush.getNotificationPermission).mockResolvedValue({ granted: false });
+    expect((await notificationState()).kind).toBe('default');
+    vi.unstubAllGlobals();
+  });
+
+  it('runs the ordinary registration flow when ntfy is ready and permitted', async () => {
+    vi.stubGlobal('androidBridge', {});
+    vi.mocked(nativePushSupport).mockResolvedValue({
+      fcm: false,
+      unifiedPush: { available: true, distributors: ['io.heckel.ntfy'] },
+    });
+    vi.mocked(KeryxPush.getNotificationPermission).mockResolvedValue({ granted: true });
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    expect((await notificationState()).kind).toBe('no-subscription');
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
 });
@@ -131,6 +149,7 @@ describe('notification state machine: in-flight self-test', () => {
           pushManager: {
             getSubscription: () =>
               Promise.resolve({
+                toJSON: () => ({ endpoint: 'https://push.example/old', keys: { p256dh: 'p', auth: 'a' } }),
                 unsubscribe: () => {
                   unsubscribed = true;
                   return Promise.resolve(true);

@@ -49,19 +49,58 @@ import {
   updateRegistration,
   relayHeartbeat,
   subscribePush,
-  subscribePushWith,
   deleteRegistration,
   relayBaseUrl,
   vapidPublicKey,
   hasDuplicateKeys,
   RelayGone,
   type RelayRegistration,
+  type PushSubscriptionKeys,
   type TopicBinding,
   type Wakeup,
 } from './relay';
 
 /** Client recovery cooldown: X hours per company, persisted (§4.2). */
 export const RECOVERY_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Where the endpoint subscription comes from (design/notifications.md): the
+ * browser's PushManager by default, the UnifiedPush connector on Android. The page
+ * installs the native source; the service-worker bundle never imports Capacitor.
+ */
+export interface SubscriptionSource {
+  subscribe(vapid: string): Promise<PushSubscriptionKeys>;
+  current(): Promise<PushSubscriptionKeys | null>;
+  unsubscribe(): Promise<void>;
+}
+
+let subscriptionSource: SubscriptionSource | null = null;
+
+/** The page installs the native source on Android; the SW keeps the default. */
+export function setSubscriptionSource(source: SubscriptionSource | null): void {
+  subscriptionSource = source;
+}
+
+/** The browser's PushManager as a subscription source (the default). */
+const webPushSource: SubscriptionSource = {
+  subscribe: (vapid) => subscribePush(vapid),
+  async current() {
+    const sub = await pushManagerSubscription();
+    if (!sub) return null;
+    const json = sub.toJSON();
+    const keys = json.keys ?? {};
+    if (!json.endpoint || !keys.p256dh || !keys.auth) return null;
+    return { endpoint: json.endpoint, p256dh: keys.p256dh, auth: keys.auth };
+  },
+  async unsubscribe() {
+    const sub = await pushManagerSubscription();
+    if (sub) await sub.unsubscribe();
+  },
+};
+
+function activeSource(): SubscriptionSource {
+  return subscriptionSource ?? webPushSource;
+}
 
 /** The order token is the capability URL's path segment before `feed.json`. */
 export function orderTokenFromUrl(url: string): string | null {
@@ -264,12 +303,34 @@ export async function ensureRelayRegistration(
   let relay = await getRegistration(base);
   try {
     if (!relay) {
-      const sub = await subscribePush(vapid);
+      const sub = await activeSource().subscribe(vapid);
       const created = await createRegistration(base, sub, topicList);
-      relay = { baseUrl: base, id: created.id, managementToken: created.managementToken, topics };
+      relay = {
+        baseUrl: base,
+        id: created.id,
+        managementToken: created.managementToken,
+        topics,
+        endpoint: sub.endpoint,
+      };
     } else {
-      await updateRegistration(base, relay.id, relay.managementToken, topicList);
-      relay = { ...relay, topics };
+      // a changed endpoint (a re-registered distributor) needs a fresh record:
+      // the old one can never receive a wake-up again
+      const current = await activeSource().current();
+      if (current && relay.endpoint && current.endpoint !== relay.endpoint) {
+        await deleteRegistration(base, relay.id, relay.managementToken).catch(() => undefined);
+        await deleteRegistrationRecord(base);
+        const created = await createRegistration(base, current, topicList);
+        relay = {
+          baseUrl: base,
+          id: created.id,
+          managementToken: created.managementToken,
+          topics,
+          endpoint: current.endpoint,
+        };
+      } else {
+        await updateRegistration(base, relay.id, relay.managementToken, topicList);
+        relay = { ...relay, topics, endpoint: current?.endpoint ?? relay.endpoint };
+      }
     }
   } catch (err) {
     // the relay no longer knows the registration: recover with a fresh one;
@@ -301,16 +362,21 @@ export async function recoverRelayRegistration(base: string): Promise<RelayRegis
   if (!vapid) return undefined;
   const topics = unionTopics(await getAllCompanies());
   try {
-    const previous = await pushManagerSubscription();
-    if (previous) await previous.unsubscribe();
+    await activeSource().unsubscribe();
   } catch {
     // best-effort: a failed unsubscribe must not block the fresh one
   }
   await deleteRegistrationRecord(base);
   try {
-    const sub = await subscribePushWith(await pushManagerRegistration(), vapid);
+    const sub = await activeSource().subscribe(vapid);
     const created = await createRegistration(base, sub, Object.keys(topics));
-    const relay = { baseUrl: base, id: created.id, managementToken: created.managementToken, topics };
+    const relay = {
+      baseUrl: base,
+      id: created.id,
+      managementToken: created.managementToken,
+      topics,
+      endpoint: sub.endpoint,
+    };
     await putRegistration(relay);
     return relay;
   } catch {
@@ -374,7 +440,7 @@ export async function checkRelayRegistration(): Promise<'ok' | 'failed' | undefi
   if (!base) return undefined;
   const relay = await getRegistration(base);
   if (!relay) return undefined;
-  if (!(await pushManagerSubscription())) return (await recoverRelayRegistration(base)) ? 'ok' : 'failed';
+  if (!(await activeSource().current())) return (await recoverRelayRegistration(base)) ? 'ok' : 'failed';
   try {
     await relayHeartbeat(base, relay.id, relay.managementToken);
     return 'ok';

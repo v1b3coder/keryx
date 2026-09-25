@@ -522,23 +522,6 @@ function NotificationsScreen({
       </div>
     );
   }
-  if (notification.kind === 'ntfy-ready') {
-    return (
-      <div className="screen screen-pad" style={{ paddingTop: 48 }}>
-        <h1 className="t-title" style={{ margin: 0 }}>
-          Turn on notifications
-        </h1>
-        <p className="t-body t-muted" style={{ margin: '8px 0 12px' }}>
-          ntfy is ready on this device. Keryx will use it to deliver timely
-          updates — the registration step is the next phase.
-        </p>
-        <button className="btn btn-primary" onClick={onDone}>
-          Continue
-        </button>
-      </div>
-    );
-  }
-
   return (
     <div className="screen screen-pad" style={{ paddingTop: 48 }}>
       <h1 className="t-title" style={{ margin: 0 }}>

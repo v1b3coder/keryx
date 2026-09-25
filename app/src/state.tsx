@@ -4,6 +4,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 import {
   getAllCompanies,
   getAllItems,
@@ -26,11 +27,23 @@ import {
   checkRelayRegistration,
   ensureRelayRegistration,
   FOREGROUND_CHECK_INTERVAL_MS,
+  handlePush,
   heartbeatRelay,
   RECOVERY_COOLDOWN_MS,
+  setSubscriptionSource,
 } from './lib/relay-sw';
-import { relayBaseUrl } from './lib/relay';
-import { notificationState, permissionState, runSelfTest, type NotificationState, type SelfTestResult } from './lib/notify';
+import { relayBaseUrl, vapidPublicKey } from './lib/relay';
+import {
+  notificationState,
+  permissionState,
+  requestNativeNotificationPermission,
+  runSelfTest,
+  type NotificationState,
+  type SelfTestResult,
+} from './lib/notify';
+import { nativePushSource } from './lib/push';
+import { KeryxPush } from './lib/native-push';
+import { pushVerifyState } from './lib/verify-state';
 import { initDebugBuild } from './lib/build';
 import { safeFetch } from './lib/urlpolicy';
 
@@ -142,6 +155,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setCompanies(list);
         // the app-wide state may have changed (a test landed, a leg died)
         await refreshNotificationState();
+        await pushVerifyState();
       } finally {
         setSyncing(false);
       }
@@ -207,6 +221,51 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [refreshNotificationState, runRelayCheck, drainPendingRecoveries, catchUpOnWakeups]);
 
+  // Android wake-ups arrive through the UnifiedPush connector: install the
+  // native subscription source, register on every start, drain the native queue
+  // and re-verify each payload with the full TUF state (the worker only gates)
+  useEffect(() => {
+    if (Capacitor.getPlatform() !== 'android') return;
+    let listener: PluginListenerHandle | undefined;
+    void (async () => {
+      setSubscriptionSource(nativePushSource);
+      const vapid = vapidPublicKey();
+      if (vapid) {
+        try {
+          await KeryxPush.register({ vapid });
+        } catch {
+          // the probe keeps the no-transport state; polling remains the backstop
+        }
+      }
+      listener = await KeryxPush.addListener('push', ({ payload }) => {
+        void handlePush(payload).then(async (outcome) => {
+          if (outcome.accepted && !outcome.test) {
+            await KeryxPush.showNotification({
+              title: outcome.title ?? 'Keryx',
+              body: outcome.body ?? 'New update available',
+            });
+          }
+          await pushVerifyState();
+        });
+      });
+      for (const payload of (await KeryxPush.drainMessages()).messages) {
+        const outcome = await handlePush(payload);
+        if (outcome.accepted && !outcome.test) {
+          void KeryxPush.showNotification({
+            title: outcome.title ?? 'Keryx',
+            body: outcome.body ?? 'New update available',
+          });
+        }
+      }
+      await pushVerifyState();
+      await ensureRelayRegistration(await getAllCompanies());
+    })();
+    return () => {
+      void listener?.remove();
+      setSubscriptionSource(null);
+    };
+  }, []);
+
   // while a self-test is in flight, re-read the app-wide state so a late
   // nonce upgrades it to green without user action
   useEffect(() => {
@@ -246,6 +305,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setCompanies(list);
           // the app-wide state may have changed (a test landed, a leg died)
           await refreshNotificationState();
+          await pushVerifyState();
         } finally {
           setSyncing(false);
         }
@@ -260,13 +320,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await putCompany({ ...company, channels });
         // keep the relay registration's followed-topic union in step (§5.3)
         await ensureRelayRegistration(await getAllCompanies());
+        await pushVerifyState();
         setCompanies(await getAllCompanies());
       },
       async enableNotifications() {
-        if (permissionState() === 'unsupported') return { endpoint: 'failed', leg: 'registration' };
-        if ((await Notification.requestPermission()) !== 'granted') {
-          setNotification(await notificationState());
-          return { endpoint: 'failed', leg: 'registration' };
+        if (Capacitor.getPlatform() === 'android') {
+          // the native permission is the source of truth (POST_NOTIFICATIONS);
+          // the WebView's Notification API is not usable
+          if (!(await requestNativeNotificationPermission())) {
+            setNotification(await notificationState());
+            return { endpoint: 'failed', leg: 'registration' };
+          }
+        } else {
+          if (permissionState() === 'unsupported') return { endpoint: 'failed', leg: 'registration' };
+          if ((await Notification.requestPermission()) !== 'granted') {
+            setNotification(await notificationState());
+            return { endpoint: 'failed', leg: 'registration' };
+          }
         }
         sessionTestPending.current = true;
         const result = await runSelfTest(await getAllCompanies());
@@ -323,6 +393,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setCompanies(await getAllCompanies());
         // drop the relay registration when no followed topic remains (§5.3)
         await ensureRelayRegistration(await getAllCompanies());
+        await pushVerifyState();
       },
       async saveCompany(company, newItems) {
         await putCompany(company);
@@ -332,6 +403,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           itemsRef.current = [...itemsRef.current.filter((i) => !ids.has(i.id)), ...newItems];
         }
         setCompanies(await getAllCompanies());
+        await pushVerifyState();
       },
       async rePairCompany(origin, company, newItems) {
         // the identity snapshot is refreshed to the just-confirmed values

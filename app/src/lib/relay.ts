@@ -288,6 +288,8 @@ export interface RelayRegistration {
   managementToken: string;
   /** derived topic → the followed channel + exact scope it binds */
   topics: Record<string, TopicBinding>;
+  /** the endpoint this registration was created with (UnifiedPush change detection) */
+  endpoint?: string;
 }
 
 export interface PushSubscriptionKeys {

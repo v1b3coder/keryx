@@ -511,7 +511,11 @@ describe('relay registration client (relay/SPECIFICATION.md §5.3)', () => {
       serviceWorker: {
         ready: Promise.resolve({
           pushManager: {
-            getSubscription: () => Promise.resolve({ unsubscribe: () => Promise.resolve(true) }),
+            getSubscription: () =>
+              Promise.resolve({
+                toJSON: () => ({ endpoint: 'https://push.example/old', keys: { p256dh: 'p', auth: 'a' } }),
+                unsubscribe: () => Promise.resolve(true),
+              }),
           },
         }),
       },
