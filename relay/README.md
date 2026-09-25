@@ -178,6 +178,13 @@ Base: `/v1/`.
   together; `Authorization: Bearer <management_token>`.
 - `DELETE /v1/registrations/{id}` — remove the registration.
 - `POST /v1/registrations/{id}/heartbeat` — `204` liveness ack.
+- `POST /v1/registrations/{id}/test` — endpoint-leg self-test: deliver a
+  §4.3 test payload through the stored endpoint (`202`).
+- `POST /v1/fcm/test` — start a topic-leg self-test (§5.3.1): a short-lived,
+  relay-generated topic and nonce, kept in memory only (`202`).
+- `POST /v1/fcm/test/{test_id}/ready` — publish the §4.3 payload to that
+  topic (`204`; `503` when the FCM leg is disabled). Both FCM endpoints are
+  per-IP rate-limited, and the relay never learns the device's FCM token.
 - `GET /healthz` — liveness for platform health checks (`200`); never rate
   limited and not logged.
 

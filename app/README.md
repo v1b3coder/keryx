@@ -175,11 +175,14 @@ worker come from vite-plugin-pwa
   without them the app runs exactly as before (polling is the backstop).
 
 **Android transport:** the Android shell probes the wake-up transport at startup
-and on `visibilitychange` (FCM > UnifiedPush > none; FCM is mocked to absent
-until the FCM phase). A de-Googled device registers with the ntfy UnifiedPush
-distributor, which delivers the same §4 envelope through the connector service;
-the native worker verifies it against a mirrored verification state, acks, shows the
-generic notice and queues it for the JS layer. FCM is the last phase — see
+and on `visibilitychange` (FCM > UnifiedPush > none). The FCM probe is the real
+`GoogleApiAvailability` check; when Google services are present the shell subscribes
+the Firebase SDK to the union of every followed company's topics (relay spec §6.1,
+registry-free and anonymous — the relay never learns the device's FCM token). A
+de-Googled device registers with the ntfy UnifiedPush distributor, which delivers
+the same §4 envelope through the connector service; the native worker verifies it
+against a mirrored verification state, acks, shows the generic notice and queues it
+for the JS layer. See
 [`../design/notifications.md`](../design/notifications.md) "Transport selection".
 
 ## Relay wake-ups (optional)
@@ -222,6 +225,8 @@ self-test silently.
 | Granted, no subscription | `getSubscription() === null` | red bar + "Turn on" |
 | Registered, relay says gone | heartbeat `404`/`401` | red bar + "Re-subscribe" |
 | Registered, test failed | self-test per-leg result | red bar + the failing leg |
+| Android, FCM topic set out of sync | native `getTopics` ≠ the followed union | red bar + "Re-subscribe" |
+| Android, topic test not confirmed | topic-leg self-test result | neutral "sent — not confirmed yet" |
 | Android, no transport | no Google services and no UnifiedPush distributor | red bar + "Install ntfy" |
 
 After a denial no browser shows the prompt again, so "Check again" re-reads

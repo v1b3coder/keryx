@@ -12,7 +12,7 @@ design questions live here together so they cannot drift apart.
 |---|---|---|
 | **0 — Design docs** | done | Protocol, wire format, threat model. The feedback loop with finance/crypto companies stays open. |
 | **1 — MVP** | **done** (pilots pending) | Reference publisher tool (`pub`: full TUF repo, channels, per-channel role metadata, optional authors roles, QR); reference app (TUF client + one-way inbox, no push dependency); private capability feeds; suspension. Remaining: pilots with 1–2 friendly companies. |
-| **2 — Ecosystem** | **current** | Done: the neutral relay (FCM + UnifiedPush/WebPush legs, deployed on Fly.io) and the endpoint-leg wake-ups — PWA WebPush and de-Googled Android via the ntfy distributor — with the app-wide registration, self-test and liveness recovery. Pending: lite mode ([spec/clients.md §3](spec/clients.md)); the native Android FCM client (the relay's FCM leg is implemented, the app probe is mocked to absent); the refresh-TTL revisit; per-item auto-hide (v2, app policy); cloud-KMS/hardware signer backends (Sigstore signer interface); the optional TOFU-free anchor (zone-published root key, `_keryx.<domain>` TXT, DNSSEC-required); backup/restore UX; optional company directory. |
+| **2 — Ecosystem** | **current** | Done: the neutral relay (FCM + UnifiedPush/WebPush legs, deployed on Fly.io) and the wake-up transports — PWA WebPush, native Android FCM topics, and de-Googled Android via the ntfy distributor — with the app-wide registration, self-test and liveness recovery. Pending: lite mode ([spec/clients.md §3](spec/clients.md)); the refresh-TTL revisit; per-item auto-hide (v2, app policy); cloud-KMS/hardware signer backends (Sigstore signer interface); the optional TOFU-free anchor (zone-published root key, `_keryx.<domain>` TXT, DNSSEC-required); backup/restore UX; optional company directory. |
 | **3 — Bridge & federation** | planned | Email bridge with virtual mailboxes (SPF/DKIM/DMARC verification); partner-channel semantics; possible standardization path. |
 | **4 — Standards** | planned | Open governance, formal spec, independent implementations, security audit. |
 
@@ -98,9 +98,9 @@ design questions live here together so they cannot drift apart.
    the relay (Fly.io, idle-exit + cold start), PWA WebPush, and de-Googled
    Android via the ntfy distributor, with the app-wide registration,
    self-test and liveness recovery
-   ([relay/SPECIFICATION.md](relay/SPECIFICATION.md)). The relay's FCM leg
-   is implemented; the native Android FCM client is the remaining phase (the
-   probe is mocked to absent). Open (relay spec §11): the client recovery
+   ([relay/SPECIFICATION.md](relay/SPECIFICATION.md)). The topic leg is also
+   shipped: native Android FCM topics with the topic-leg self-test and the
+   UnifiedPush fallback. Open (relay spec §11): the client recovery
    budget X hours; shared-topic ntfy (bare ntfy app) in v1; the endpoint/FCM
    registry TTLs against the protocol's freshness model; relay identity and
    governance; the deferred on-premise relay; the refresh-TTL revisit.

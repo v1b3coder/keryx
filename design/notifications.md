@@ -41,7 +41,7 @@ a user setting:
 The probe runs at startup and on `visibilitychange`, so installing ntfy and
 returning to the app clears the state without a restart. FCM is chosen only when
 the device can actually use it; if an FCM registration fails, the app falls back
-to UnifiedPush before it gives up (the FCM phase). The relay needs **no change**
+to UnifiedPush before it gives up. The relay needs **no change**
 for ntfy: its endpoint leg already delivers RFC 8291/VAPID WebPush to any approved
 push origin, and `ntfy.sh` is approved by default (relay spec §5.6). A self-hosted
 ntfy server must be added to the relay's approved push origins.
@@ -51,9 +51,12 @@ ntfy"**: the red bar and the first-company screen carry the install link plus th
 battery-optimization note. The web `unsupported` state (no `PushManager`) stays a
 neutral note — there installing an app cannot fix it, and polling is the backstop.
 
-**Mock (until the FCM phase):** the native probe reports no Google services
-(`fcm: false`) unconditionally, so the Android app exercises the ntfy branch; the
-distributor probe itself is real.
+The FCM probe is the real `GoogleApiAvailability` check. When it reports Google
+services, the native shell subscribes the Firebase SDK to exactly the union of every
+followed company's topics (relay spec §6.1); the topic leg is registry-free and
+anonymous — no endpoint, no relay registration, no heartbeat — and the relay never
+learns the device's FCM token. An FCM subscribe failure falls back to the
+UnifiedPush branch.
 
 ## Android wake-ups: the native worker and the page
 
@@ -147,10 +150,11 @@ to) and returns them with the test; the client cannot choose the topic, and a
 forged test can never produce a false "delivered".
 
 A test is never a wake-up: it fetches no content, advances no sequence, and
-consumes no recovery allowance or publish budget. The topic leg's handshake needs
-the native shell (FCM topic subscribe) — future work alongside the native shell;
-the endpoint leg's test works today for both the PWA and the UnifiedPush
-connector.
+consumes no recovery allowance or publish budget. The topic leg's handshake uses a
+relay-generated short-lived topic and nonce (relay spec §5.3.1): the client
+subscribes the native SDK to that topic, tells the relay it is ready, and the relay
+publishes the §4.3 payload under `message.data.test`; the endpoint leg's test works
+for both the PWA and the UnifiedPush connector.
 
 ### Outcome rendering (no red flicker)
 
