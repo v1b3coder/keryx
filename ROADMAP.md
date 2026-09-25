@@ -57,7 +57,8 @@ design questions live here together so they cannot drift apart.
 ## 3. Open Questions — Design and Operations (Phase 2+ and field questions)
 
 1. **Key custody, cadence, and the hardware signing flow.** Software keys
-   shipped: an age-encrypted key store outside the repo, role-scoped
+   shipped: a passphrase-encrypted (scrypt + AES-256-GCM) key store outside
+   the repo, role-scoped
    workspaces (`operator|ci|author`), encrypted export/import between
    machines, strict stage/apply master ceremonies, and
    `rotate-root --announce-next-key`. Cloud KMS via the Sigstore signer

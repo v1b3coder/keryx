@@ -1266,6 +1266,10 @@ exposes no state, is never rate-limited, and is not logged.
 
 ## 11. Open Questions
 
+These relay-specific questions are summarized in the project's single
+list of open items, [`../ROADMAP.md`](../ROADMAP.md) §3 ("Push
+transport"); resolve a question in both places together.
+
 1. **Client recovery budget** — clients must choose and document X hours
    per company plus a global rate/concurrency budget (§4.2). Larger X reduces
    attacker-triggered traffic but increases possible emergency-rotation delay.

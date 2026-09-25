@@ -1,5 +1,10 @@
 # App-wide Notifications and the Endpoint Self-Test — Implementation Plan
 
+**Status: implemented.** The work below shipped (relay self-test endpoint,
+app-wide registration, state machine and banner); the checkboxes were ticked
+after the fact to reflect the completed plan. The FCM topic-leg self-test
+remains out of scope, as noted below.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the PWA's wake-up registration app-wide (one record holding the union of every followed company's topics), add the relay's endpoint-leg self-test, and surface it through the first-company "Turn on notifications" screen and the notification status banner.
@@ -39,7 +44,7 @@
 - Create: `relay/internal/wakeup/test.go`
 - Test: `relay/internal/wakeup/test_test.go`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 package wakeup
@@ -68,12 +73,12 @@ func TestNewTestPayload(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd relay && go test ./internal/wakeup/ -run TestNewTestPayload -v`
 Expected: FAIL — `undefined: NewTestPayload`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```go
 package wakeup
@@ -108,12 +113,12 @@ func NewTestPayload() (nonce string, payload []byte) {
 
 `crypto/rand.Read` and `json.Marshal` of a fixed struct cannot fail in practice; a panic is the honest signal if they do (the relay cannot mint a nonce safely).
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd relay && go test ./internal/wakeup/ -run TestNewTestPayload -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add relay/internal/wakeup/test.go relay/internal/wakeup/test_test.go
@@ -128,7 +133,7 @@ git commit -m "feat(relay): add the self-test payload"
 - Modify: `relay/internal/store/store.go` (after `HeartbeatRegistration`, around line 660)
 - Test: `relay/internal/store/store_test.go`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 func TestRegistrationForManagement(t *testing.T) {
@@ -159,12 +164,12 @@ func TestRegistrationForManagement(t *testing.T) {
 
 Use the existing `testP256DH`/`testAuth`/`topicA` helpers from `store_test.go`; if they are named differently, reuse the file's existing fixtures.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd relay && go test ./internal/store/ -run TestRegistrationForManagement -v`
 Expected: FAIL — `st.RegistrationForManagement undefined`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```go
 // RegistrationForManagement returns one registration after checking its
@@ -199,12 +204,12 @@ func (s *Store) RegistrationForManagement(id, managementToken string) (Registrat
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd relay && go test ./internal/store/ -run TestRegistrationForManagement -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add relay/internal/store/store.go relay/internal/store/store_test.go
@@ -221,7 +226,7 @@ git commit -m "feat(relay): add authenticated single-registration lookup"
 - Modify: `relay/cmd/relay/main.go` (new flags)
 - Test: `relay/internal/api/api_test.go`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 func TestRegistrationSelfTest(t *testing.T) {
@@ -333,12 +338,12 @@ func TestRegistrationSelfTest(t *testing.T) {
 
 Copy `decryptRFC8291` from `relay/internal/e2e/e2e_test.go` into `api_test.go` (or move it into a small shared `internal/push/testutil` package — do not duplicate it silently).
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd relay && go test ./internal/api/ -run TestRegistrationSelfTest -v`
 Expected: FAIL — `404` (no route)
 
-- [ ] **Step 3: Add `SendToEndpoint` to the dispatcher**
+- [x] **Step 3: Add `SendToEndpoint` to the dispatcher**
 
 In `relay/internal/relay/dispatch.go`:
 
@@ -357,7 +362,7 @@ func (d *Dispatcher) SendToEndpoint(ctx context.Context, r store.Registration, p
 }
 ```
 
-- [ ] **Step 4: Add the handler to the API server**
+- [x] **Step 4: Add the handler to the API server**
 
 In `relay/internal/api/api.go`, register the route in `Handler()`:
 
@@ -452,7 +457,7 @@ func (s *Server) testLimiter(id string) *ratelimit.Limiter {
 
 In `New`, default `TestTTL` to 5 minutes and the limits when unset (mirror the existing `if opts.X <= 0` block). In `Cleanup`, call `s.testIP.Cleanup(idle)` and clean `s.testReg` like `pubLimiters`.
 
-- [ ] **Step 5: Add the flags**
+- [x] **Step 5: Add the flags**
 
 In `relay/cmd/relay/main.go` `Config`:
 
@@ -466,12 +471,12 @@ In `relay/cmd/relay/main.go` `Config`:
 
 Load them from `RELAY_TEST_IP_PER_MIN` (10), `RELAY_TEST_IP_BURST` (20), `RELAY_TEST_PER_MIN` (3), `RELAY_TEST_BURST` (5), `RELAY_TEST_TTL_SECONDS` (300), register the flags next to `reg-per-min`, and pass them to `api.Options`. Update `relay/README.md`'s env list with the five names.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `cd relay && go test ./internal/api/ ./internal/relay/ -run 'TestRegistrationSelfTest|TestDispatcherIdle' -v`
 Expected: PASS
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add relay/internal/relay/dispatch.go relay/internal/api/api.go relay/internal/api/api_test.go relay/cmd/relay/main.go relay/README.md
@@ -486,7 +491,7 @@ git commit -m "feat(relay): add the endpoint self-test endpoint"
 - Modify: `app/src/lib/store.ts` (DB version, `registrations` store, drop `CompanyRecord.relay`, test/push records)
 - Test: `app/src/lib/relay.test.ts` (store assertions live in `relay-sw.test.ts`; keep them there)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `app/src/lib/relay-sw.test.ts`:
 
@@ -511,12 +516,12 @@ describe('app-wide registration store', () => {
 
 The file already runs under `fake-indexeddb` (see its header); reuse its setup.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd app && npx vitest run src/lib/relay-sw.test.ts -t 'app-wide registration store'`
 Expected: FAIL — `putRegistration is not a function`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `app/src/lib/store.ts`, bump the version and create the store:
 
@@ -605,12 +610,12 @@ export async function clearPendingTest(baseUrl: string): Promise<void> {
 
 Remove `relay?: import('./relay').RelayRegistration;` (and its comment) from `CompanyRecord`.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cd app && npx vitest run src/lib/relay-sw.test.ts src/lib/protocol.test.ts`
 Expected: PASS (existing tests compile without `company.relay`; fix any test that sets it by dropping that field)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/src/lib/store.ts app/src/lib/relay-sw.test.ts
@@ -626,7 +631,7 @@ git commit -m "feat(app): store the relay registration app-wide"
 - Modify: `app/src/lib/relay-sw.ts` (`ensureRelayRegistration(companies)`, recovery)
 - Test: `app/src/lib/relay.test.ts`, `app/src/lib/relay-sw.test.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `app/src/lib/relay.test.ts`:
 
@@ -672,12 +677,12 @@ describe('app-wide registration', () => {
 
 Define the `company()` helper in the test file (it builds a `CompanyRecord` with one followed channel); reuse the existing `topicBindings` fixtures if present.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cd app && npx vitest run src/lib/relay.test.ts src/lib/relay-sw.test.ts`
 Expected: FAIL — `testRegistration is not a function`, `ensureRelayRegistration` arity mismatch
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `app/src/lib/relay.ts`, next to `relayHeartbeat`:
 
@@ -793,12 +798,12 @@ export async function handleTestPayload(
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cd app && npx vitest run src/lib/relay.test.ts src/lib/relay-sw.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/src/lib/relay.ts app/src/lib/relay-sw.ts app/src/lib/relay.test.ts app/src/lib/relay-sw.test.ts
@@ -813,7 +818,7 @@ git commit -m "feat(app): register the union of topics and add the self-test cli
 - Create: `app/src/lib/notify.ts`
 - Test: `app/src/lib/notify.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 import { describe, it, expect, vi } from 'vitest';
@@ -850,12 +855,12 @@ describe('notification state machine', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd app && npx vitest run src/lib/notify.test.ts`
 Expected: FAIL — `Cannot find module './notify'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```ts
 /**
@@ -1002,12 +1007,12 @@ async function lastPushAtForTopics(registration: RelayRegistration): Promise<num
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd app && npx vitest run src/lib/notify.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/src/lib/notify.ts app/src/lib/notify.test.ts
@@ -1023,7 +1028,7 @@ git commit -m "feat(app): add the notification state machine and self-test runne
 - Modify: `app/src/sw.ts` (dispatch on `outcome.test`)
 - Test: `app/src/lib/relay-sw.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 it('records a test payload only when the pending nonce matches', async () => {
@@ -1038,12 +1043,12 @@ it('records a test payload only when the pending nonce matches', async () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd app && npx vitest run src/lib/relay-sw.test.ts -t 'test payload'`
 Expected: FAIL — the test payload is parsed as a wake-up and dropped
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `app/src/lib/relay-sw.ts`, extend `PushOutcome`:
 
@@ -1104,12 +1109,12 @@ In `app/src/sw.ts`, dispatch the test outcome before showing a notification:
       if (outcome.test) return; // silent record: the app shows the result
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd app && npx vitest run src/lib/relay-sw.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/src/lib/relay-sw.ts app/src/sw.ts app/src/lib/relay-sw.test.ts
@@ -1126,7 +1131,7 @@ git commit -m "feat(app): handle the self-test payload in the service worker"
 - Modify: `app/src/state.tsx` (actions)
 - Test: manual (the app has no component test runner; the state machine is unit-tested in Task 6)
 
-- [ ] **Step 1: Add the actions to `app/src/state.tsx`**
+- [x] **Step 1: Add the actions to `app/src/state.tsx`**
 
 ```ts
       async enableNotifications() {
@@ -1169,7 +1174,7 @@ Add to `AppActions`:
 
 Replace the old `enableNotifications(origin)` implementation (the per-company version) entirely.
 
-- [ ] **Step 2: Write the banner component**
+- [x] **Step 2: Write the banner component**
 
 ```tsx
 /**
@@ -1236,7 +1241,7 @@ export function NotificationBanner({
 
 Match the app's existing class names (`banner`, `btn btn-primary`) from `app/src/styles.css`; if the app uses different banner classes, reuse the existing alert classes instead.
 
-- [ ] **Step 3: Mount the banner in `Contacts.tsx`**
+- [x] **Step 3: Mount the banner in `Contacts.tsx`**
 
 ```tsx
       <div className="screen-pad" style={{ paddingTop: 8 }}>
@@ -1245,11 +1250,11 @@ Match the app's existing class names (`banner`, `btn btn-primary`) from `app/src
 
 Add `notification: NotificationState` and `actions` to the `Contacts` props (pass them from `App.tsx` like `companies`/`items`).
 
-- [ ] **Step 4: Drop the per-company chip in `Company.tsx`**
+- [x] **Step 4: Drop the per-company chip in `Company.tsx`**
 
 Remove the `Notifications` section and its chip from `SettingsSheet` (the app-wide banner replaces it). Keep the settings sheet's other rows.
 
-- [ ] **Step 5: Add the first-company screen in `AddCompany.tsx`**
+- [x] **Step 5: Add the first-company screen in `AddCompany.tsx`**
 
 Add the step to the union:
 
@@ -1348,12 +1353,12 @@ async function registrationCurrent(company: CompanyRecord): Promise<boolean> {
 }
 ```
 
-- [ ] **Step 6: Run the whole app suite**
+- [x] **Step 6: Run the whole app suite**
 
 Run: `cd app && npx vitest run && npx tsc --noEmit`
 Expected: PASS, no type errors
 
-- [ ] **Step 7: Verify manually against the local harness**
+- [x] **Step 7: Verify manually against the local harness**
 
 ```sh
 # terminal 1
@@ -1367,7 +1372,7 @@ curl -X POST http://127.0.0.1:18099/v1/registrations/<id>/test   # needs the man
 
 Expected: the "Turn on notifications" screen appears after channel selection; after allowing, progress then green; the relay log shows the self-test delivery.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add app/src/ui/NotificationBanner.tsx app/src/ui/Contacts.tsx app/src/ui/Company.tsx app/src/ui/AddCompany.tsx app/src/state.ts app/src/styles.css
@@ -1382,7 +1387,7 @@ git commit -m "feat(app): first-company turn-on screen and the notification bann
 - Modify: `relay/internal/e2e/e2e_test.go`
 - Test: `relay/internal/e2e/e2e_test.go`
 
-- [ ] **Step 1: Add the self-test to the existing end-to-end test**
+- [x] **Step 1: Add the self-test to the existing end-to-end test**
 
 After the replay-suppression assertion, register the fake push service's subscription (already registered in step 3 of the test) and call the test endpoint with its management token:
 
@@ -1429,12 +1434,12 @@ After the replay-suppression assertion, register the fake push service's subscri
 
 Capture `registrationID`/`managementToken` from the registration response in step 3 (extend the existing decode there).
 
-- [ ] **Step 2: Run the test to verify it passes**
+- [x] **Step 2: Run the test to verify it passes**
 
 Run: `cd relay && go test -count=1 -run TestEndToEndDemoRepository ./internal/e2e/ -v`
 Expected: PASS
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add relay/internal/e2e/e2e_test.go
@@ -1445,22 +1450,22 @@ git commit -m "test(relay): cover the self-test in the end-to-end path"
 
 ### Task 10: Full verification
 
-- [ ] **Step 1: Run every Go suite**
+- [x] **Step 1: Run every Go suite**
 
 Run: `cd relay && go vet ./... && go test ./...`
 Expected: PASS
 
-- [ ] **Step 2: Run the app suite and type check**
+- [x] **Step 2: Run the app suite and type check**
 
 Run: `cd app && npx tsc --noEmit && npx vitest run`
 Expected: PASS
 
-- [ ] **Step 3: Run the make targets**
+- [x] **Step 3: Run the make targets**
 
 Run: `make relay-test relay-e2e app-test`
 Expected: PASS
 
-- [ ] **Step 4: Commit any fixes**
+- [x] **Step 4: Commit any fixes**
 
 ```bash
 git add -A

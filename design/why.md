@@ -206,11 +206,12 @@ phishing wave everywhere.
   added later as a separate, clearly-labeled feature.
 - **A universal replacement for transactional email *into* the company**
   (order confirmations to internal systems, invoices, etc.).
-- **Push / notification layer** — optional wake-up only, WIP (§4.10). A
-  notification is a wake-up signal, never content; the relay transport
-  shape is specified in
-  [`../relay/SPECIFICATION.md`](../relay/SPECIFICATION.md) (FCM +
-  UnifiedPush/WebPush), implementation pending.
+- **Push / notification layer** — optional wake-up only (§4.10). A
+  notification is a wake-up signal, never content; the relay is implemented
+  and deployed ([`../relay/SPECIFICATION.md`](../relay/SPECIFICATION.md),
+  FCM + UnifiedPush/WebPush), with the endpoint leg (PWA WebPush,
+  de-Googled Android via ntfy) shipped and the native Android FCM client
+  pending.
 - **Email bridge** (per-order virtual addresses, SPF/DKIM/DMARC, mailbox
   discard) — a Phase 3 concept, not part of the protocol.
 - **Company directory** — an open question, not a v1 feature.
@@ -363,15 +364,15 @@ dominated by the origin and path, not the token.
 This is the one place PII legitimately exists (delivery address, invoice) —
 transient, expiring, discardable.
 
-### 4.10 Push as optional wake-up, not a dependency (WIP)
+### 4.10 Push as optional wake-up, not a dependency
 
 The protocol and app must work fully on de-Googled devices, so push is
 optional and never carries content: a notification is at most a channel
 identifier + a "new messages" counter — a wake-up signal only. The
 transport is plug-in (FCM, UnifiedPush/WebPush, background fetch, or
-nothing) and WIP. The **neutral notification relay** for small companies
-is specified in
-[`../relay/SPECIFICATION.md`](../relay/SPECIFICATION.md): two legs — FCM
+nothing). The **neutral notification relay** for small companies is
+implemented and deployed
+([`../relay/SPECIFICATION.md`](../relay/SPECIFICATION.md)): two legs — FCM
 topics (registry-free) and UnifiedPush/WebPush endpoints (per-instance
 registry), the latter with two subscription sources (PWA `PushManager`;
 de-Googled Android via a UnifiedPush distributor, ntfy today). WebSub's
@@ -382,9 +383,11 @@ device↔company mapping to the provider; on the endpoint leg the relay
 holds that mapping, while an ntfy server behind UnifiedPush endpoints
 sees only random capability URLs and RFC 8291 ciphertext.
 
-**This is a specified-but-unimplemented area of the design.** The relay
-component spec decides the transport shape; implementation and client
-integration remain WIP.
+**Status:** the relay and the endpoint leg are implemented; the endpoint leg
+(PWA WebPush and de-Googled Android via ntfy) is verified end to end, and
+the relay's FCM leg is implemented while the native Android FCM client
+remains pending. The component spec decides the transport shape; its open
+questions are listed in the roadmap (§3, "Push transport").
 
 ### 4.11 Authors role: authoring separated from publishing
 
@@ -587,7 +590,7 @@ codes, no trust dialogs.
 | Item/message schema | **Per-item signed JSON files** (one TUF target per item; JSON Feed item fields without the document) | **Adopted** — each item is a small, self-contained file at `channels/<channel>/<id>.json`, hash-pinned by the channel role metadata (the index). No feed document, no `_sig` extension, no generic-reader compatibility (deliberately given up — Keryx is a broadcast snapshot, not a feed for generic readers). |
 | Signatures | **EdDSA (RFC 8032)** — raw over **securesystemslib canonical JSON (OLPC)**, the TUF canonicalization | **Adopted** — no signature envelope (JWS-style wrappers add algorithm negotiation and headers that nothing here consumes). One canonicalization for TUF metadata and item signing. Ed25519 over ECDSA: deterministic nonces, no RNG-failure key leaks, ~2–4× faster verification, 64-byte signatures, non-malleable, audited constant-time implementations. |
 | Domain binding | DNSSEC/DANE (RFC 6698), TLS certs | Optional hardening; a Phase-2 optional anchor (zone-published root key) is DNSSEC-required by design. |
-| Wake-up / push | **WebSub** (W3C) | **Rejected** — per-subscriber callback URLs are per-user state at the hub (the linkage this protocol eliminates). Wake-up is transport-agnostic; the relay uses FCM topics + UnifiedPush/WebPush endpoints ([relay spec](../relay/SPECIFICATION.md)), WIP. |
+| Wake-up / push | **WebSub** (W3C) | **Rejected** — per-subscriber callback URLs are per-user state at the hub (the linkage this protocol eliminates). Wake-up is transport-agnostic; the relay uses FCM topics + UnifiedPush/WebPush endpoints ([relay spec](../relay/SPECIFICATION.md)), implemented and deployed for the endpoint leg, with the native Android FCM client pending. |
 | Signed public broadcast | Nostr; ActivityPub | Inspiring but rejected: Nostr treats a key as a permanent identity — no rotation, revocation, delegation, or threshold chain — and relays provide no freshness proof; ActivityPub is social and two-way. Reasoning in §8. |
 | Auditability | Key Transparency / CT-style logs (RFC 9162 style) | Later phase (optional). |
 

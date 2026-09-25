@@ -461,7 +461,7 @@ type KeyStore interface {
     Remove(ctx context.Context, id string) error
 }
 type KeyInfo struct { ID, Name, Role string; Key *metadata.Key }
-func Export(ctx, KeyStore, ExportParams) ([]byte, error)   // role-tagged, encrypted (age)
+func Export(ctx, KeyStore, ExportParams) ([]byte, error)   // role-tagged, encrypted (scrypt + AES-256-GCM)
 func Import(ctx, KeyStore, []byte) error
 type ErrMissingKey struct { Role, KeyID string }           // typed; CLI renders the hint
 
@@ -531,8 +531,12 @@ func QR(url string, size int) ([]byte, error)
 
 ## 7. Phased delivery (implementation order)
 
+All three phases are implemented — see [`../sdk/README.md`](../sdk/README.md)
+for the command reference and [`../ROADMAP.md`](../ROADMAP.md) §1 for status.
+This section records the order they were built in.
+
 1. **Foundation** — `sdk/` module scaffold; `keys` (ed25519, keyid,
-   age-encrypted file store, export/import, `ErrMissingKey`); `repo`
+   passphrase-encrypted file store, export/import, `ErrMissingKey`); `repo`
    (interface + DirRepo, atomic swap); `tuf` (init/build/sign/verify via
    go-tuf v2, custom accessors); `feed` (types, OLPC sign/verify,
    attachment hashes);
@@ -556,22 +560,21 @@ there, no impl), the web app itself, push, email bridge.
 
 ---
 
-## 8. Open questions (to settle during Phase 1)
+## 8. Decisions (settled during Phase 1)
 
 1. **Module path**: `github.com/v1b3coder/keryx/sdk` — stable import path is
    what matters for the web app; rename-friendly (wire stays codename-neutral
    per [spec/core.md §1.1](../spec/core.md)).
-2. **Encrypted keystore**: `age` (passphrase, audited) as the file format —
-   alternatives: OS keychain backend behind the same interface (Phase 2).
-3. **S3-compatible client**: minio-go (light, covers R2/B2/MinIO) vs
-   aws-sdk-go-v2 (heavier, first-party). Leaning minio-go; both behind
+2. **Encrypted keystore**: scrypt + AES-256-GCM with a passphrase
+   (`--passphrase`/`$KERYX_PASSPHRASE`), not age; the OS keychain remains a
+   Phase 2 option behind the same `KeyStore` interface.
+3. **S3-compatible client**: minio-go (light, covers R2/B2/MinIO), behind
    `Deployer`.
-4. **Empty-channel feed**: a channel with zero items is allowed (empty
-   `items: []`)? Spec doesn't forbid it; needed for `channel add` + publish
-   later. Confirm.
-5. **`--no-channel-sig` in default mode**: publish signing items with the
-   channel key is optional per spec ([spec/feeds.md §1.2](../spec/feeds.md));
-   we default to *sign* (portability, zero cost) but keep the flag.
-6. **Ceremony transport**: git (default), USB/air-gap (bundle), or
-   `pub pull` from the deployed base — the SDK is transport-agnostic; the
-   doc assumes git for the common case. Confirm.
+4. **Empty-channel feed**: allowed — `channel add` writes the channel role
+   metadata with zero targets; the first `publish` adds items.
+5. **Channel-key item signature**: `publish` always adds it (portability; not
+   load-bearing in authored channels, the authorizing signature in simple mode)
+   — no flag.
+6. **Ceremony transport**: the `--stage <dir>` bundle for the strict
+   two-step handoff (USB/air-gap or any file transport); `repo/` + `anchor/`
+   remain the only shared state.
