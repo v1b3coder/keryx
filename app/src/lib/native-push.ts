@@ -1,12 +1,12 @@
 /**
  * The native (Android) push plugin bridge. The UnifiedPush probe and the
- * connector registration are real; FCM is mocked to false until the FCM phase
- * (see KeryxPushPlugin.java).
+ * connector registration are real, and FCM is the real Google Play services
+ * probe (see KeryxPushPlugin.java).
  */
 import { registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 
 export interface NativePushSupport {
-  /** Google services present (MOCK: always false until the FCM phase). */
+  /** Google services present (the real probe). */
   fcm: boolean;
   /** Installed UnifiedPush distributors (ntfy today). */
   unifiedPush: { available: boolean; distributors: string[] };
@@ -29,6 +29,8 @@ export interface KeryxPushPlugin {
   register(options: { vapid: string }): Promise<NativeEndpoint>;
   unregister(): Promise<void>;
   getEndpoint(): Promise<{ endpoint: string | null; p256dh: string | null; auth: string | null }>;
+  setTopics(options: { topics: string[] }): Promise<{ topics: string[] }>;
+  getTopics(): Promise<{ topics: string[] }>;
   setVerifyState(options: { state: { topics: unknown } }): Promise<void>;
   setRegistration(options: { registration: NativeRegistration | null }): Promise<void>;
   showNotification(options: { title: string; body: string; tag?: string }): Promise<void>;

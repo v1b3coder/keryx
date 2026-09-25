@@ -41,7 +41,7 @@ import {
   type NotificationState,
   type SelfTestResult,
 } from './lib/notify';
-import { nativePushSource } from './lib/push';
+import { nativePushSource, ensurePushWakeups, pushSupport } from './lib/push';
 import { KeryxPush } from './lib/native-push';
 import { pushVerifyState } from './lib/verify-state';
 import { initDebugBuild } from './lib/build';
@@ -229,12 +229,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let listener: PluginListenerHandle | undefined;
     void (async () => {
       setSubscriptionSource(nativePushSource);
-      const vapid = vapidPublicKey();
-      if (vapid) {
-        try {
-          await KeryxPush.register({ vapid });
-        } catch {
-          // the probe keeps the no-transport state; polling remains the backstop
+      const support = await pushSupport();
+      if (!support.fcm) {
+        // the UnifiedPush connector is the endpoint leg's source; FCM needs none
+        const vapid = vapidPublicKey();
+        if (vapid) {
+          try {
+            await KeryxPush.register({ vapid });
+          } catch {
+            // the probe keeps the no-transport state; polling remains the backstop
+          }
         }
       }
       listener = await KeryxPush.addListener('push', ({ payload }) => {
@@ -260,7 +264,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           });
         }
       }
-      await ensureRelayRegistration(await getAllCompanies());
+      await ensurePushWakeups(await getAllCompanies());
       await pushVerifyState();
       await catchUpOnWakeups();
     })();
@@ -323,7 +327,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         );
         await putCompany({ ...company, channels });
         // keep the relay registration's followed-topic union in step (§5.3)
-        await ensureRelayRegistration(await getAllCompanies());
+        await ensurePushWakeups(await getAllCompanies());
         await pushVerifyState();
         setCompanies(await getAllCompanies());
       },
@@ -398,7 +402,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         itemsRef.current = itemsRef.current.filter((i) => i.origin !== origin);
         setCompanies(await getAllCompanies());
         // drop the relay registration when no followed topic remains (§5.3)
-        await ensureRelayRegistration(await getAllCompanies());
+        await ensurePushWakeups(await getAllCompanies());
         await pushVerifyState();
       },
       async saveCompany(company, newItems) {

@@ -11,11 +11,9 @@ import { parseJoinUrl, type JoinPayload } from '../lib/payload';
 import { buildPairingOffer, createCompanyFromOffer, type PairingOffer } from '../lib/pair';
 import { scanQr } from '../lib/scan';
 import { syncCompany } from '../lib/sync';
-import { getAllCompanies, getItems, deleteItems, type CompanyRecord } from '../lib/store';
-import { relayBaseUrl } from '../lib/relay';
-import { ensureRelayRegistration, topicBindings } from '../lib/relay-sw';
+import { getItems, deleteItems } from '../lib/store';
 import { permissionState, type SelfTestResult } from '../lib/notify';
-import { openNtfyInstallPage } from '../lib/push';
+import { openNtfyInstallPage, wakeupsCurrent } from '../lib/push';
 import { CompanyLogo } from './CompanyLogo';
 import { useApp } from '../state';
 
@@ -150,7 +148,7 @@ export function AddCompany({
     // current skips the screen and self-tests silently: no prompt is possible
     if (!firstCompany) {
       const permission = permissionState();
-      if (permission === 'granted' && (await registrationCurrent(company))) {
+      if (permission === 'granted' && (await wakeupsCurrent(company))) {
         await actions.runNotificationSelfTest();
         onDone(company.origin);
         return;
@@ -566,8 +564,9 @@ function NotificationsScreen({
       ) : phase === 'failed' ? (
         <div className="alert alert-danger" style={{ marginBottom: 16 }}>
           <p>
-            Notifications are off. Allow them in your browser or system settings,
-            then try again.
+            {notification.leg === 'topic'
+              ? 'Notifications could not be set up. Try again.'
+              : 'Notifications are off. Allow them in your browser or system settings, then try again.'}
           </p>
         </div>
       ) : null}
@@ -590,14 +589,4 @@ function NotificationsScreen({
       )}
     </div>
   );
-}
-
-/** Whether this company's topics are already registered on the relay. */
-async function registrationCurrent(company: CompanyRecord): Promise<boolean> {
-  const base = relayBaseUrl();
-  if (!base) return false;
-  const relay = await ensureRelayRegistration(await getAllCompanies());
-  if (!relay) return false;
-  const topics = Object.keys(topicBindings(company));
-  return topics.every((t) => t in relay.topics);
 }

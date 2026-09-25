@@ -432,6 +432,30 @@ export async function testRegistration(
   return { nonce: body.nonce, expiresAt: body.expires_at };
 }
 
+/** POST /v1/fcm/test — start one topic-leg self-test (§5.3.1). */
+export async function startFcmTest(
+  baseUrl: string,
+): Promise<{ testId: string; topic: string; nonce: string; expiresAt: string }> {
+  const res = await relayFetch(baseUrl, '/v1/fcm/test', { method: 'POST' });
+  if (!res.ok) throw new Error(`relay fcm test: HTTP ${res.status}`);
+  const body = (await res.json()) as {
+    test_id?: string;
+    topic?: string;
+    nonce?: string;
+    expires_at?: string;
+  };
+  if (!body.test_id || !body.topic || !body.nonce || !body.expires_at) {
+    throw new Error('relay fcm test: malformed response');
+  }
+  return { testId: body.test_id, topic: body.topic, nonce: body.nonce, expiresAt: body.expires_at };
+}
+
+/** POST /v1/fcm/test/{test_id}/ready — the client subscribed; publish (§5.3.1). */
+export async function fcmTestReady(baseUrl: string, testId: string): Promise<void> {
+  const res = await relayFetch(baseUrl, `/v1/fcm/test/${testId}/ready`, { method: 'POST' });
+  if (!res.ok) throw new Error(`relay fcm test ready: HTTP ${res.status}`);
+}
+
 /** DELETE /v1/registrations/{id} — remove the registration (uninstall). */
 export async function deleteRegistration(
   baseUrl: string,

@@ -255,12 +255,17 @@ function testPayloadOf(data: string | ArrayBuffer | Uint8Array): { v: number; te
 export async function handleTestPayload(payload: unknown): Promise<boolean> {
   const p = payload as { v?: number; test?: boolean; nonce?: string };
   if (p?.v !== 1 || p.test !== true || typeof p.nonce !== 'string') return false;
-  const registrations = await getRegistrations();
-  for (const reg of registrations) {
-    const pending = await pendingTest(reg.baseUrl);
+  // one install has one transport, so the pending test lives under the relay
+  // base URL either way; the endpoint-leg registrations are also checked so a
+  // stale registration cannot shadow it
+  const bases = new Set((await getRegistrations()).map((reg) => reg.baseUrl));
+  const base = relayBaseUrl();
+  if (base) bases.add(base);
+  for (const candidate of bases) {
+    const pending = await pendingTest(candidate);
     if (!pending || pending.nonce !== p.nonce) continue;
     if (Date.now() > pending.expiresAt) {
-      await clearPendingTest(reg.baseUrl);
+      await clearPendingTest(candidate);
       return false;
     }
     await putPendingTest({ ...pending, receivedAt: Date.now() });

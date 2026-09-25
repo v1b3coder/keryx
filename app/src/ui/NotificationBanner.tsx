@@ -78,7 +78,9 @@ export function NotificationBanner({
       ? 'Notifications are off. Allow them in your browser or system settings, then check again.'
       : state.leg === 'registration'
         ? 'Notifications could not be registered. Try again.'
-        : 'The test notification did not arrive. Try again.';
+        : state.leg === 'topic'
+          ? 'The test wake-up was not sent. Try again.'
+          : 'The test notification did not arrive. Try again.';
   return (
     <div className="banner banner-danger">
       <span>{message}</span>

@@ -16,7 +16,10 @@
 import { Capacitor } from '@capacitor/core';
 import { Browser } from '@capacitor/browser';
 import { nativePushSupport, KeryxPush, type NativePushSupport } from './native-push';
-import type { SubscriptionSource } from './relay-sw';
+import { ensureFcmTopics, fcmTopicsSynced } from './fcm';
+import { ensureRelayRegistration, topicBindings, type SubscriptionSource } from './relay-sw';
+import { relayBaseUrl } from './relay';
+import { getAllCompanies, type CompanyRecord } from './store';
 
 export type PushTransport = 'webpush' | 'fcm' | 'unifiedpush' | 'none';
 
@@ -58,6 +61,48 @@ export async function currentPushTransport(): Promise<PushTransport> {
 export async function openNtfyInstallPage(): Promise<void> {
   if (Capacitor.isNativePlatform()) await Browser.open({ url: NTFY_INSTALL_URL });
   else window.open(NTFY_INSTALL_URL, '_blank', 'noopener,noreferrer');
+}
+
+/**
+ * Ensure this install's wake-up transport follows the topic union
+ * (design/notifications.md). FCM subscribes the native SDK; the endpoint leg
+ * keeps one relay registration. An FCM failure falls back to UnifiedPush
+ * before giving up.
+ */
+export async function ensurePushWakeups(companies: CompanyRecord[]): Promise<void> {
+  if ((await pushSupport()).fcm) {
+    if ((await ensureFcmTopics(companies)) !== undefined) {
+      await dropEndpointRegistration();
+      return;
+    }
+    // the FCM topic subscribe failed: fall back to UnifiedPush
+  }
+  await ensureRelayRegistration(companies);
+}
+
+/** Whether this install's wake-ups are set up for the given company. */
+export async function wakeupsCurrent(company: CompanyRecord): Promise<boolean> {
+  if ((await pushSupport()).fcm) return fcmTopicsSynced(await getAllCompanies());
+  const base = relayBaseUrl();
+  if (!base) return false;
+  const relay = await ensureRelayRegistration(await getAllCompanies());
+  if (!relay) return false;
+  return Object.keys(topicBindings(company)).every((t) => t in relay.topics);
+}
+
+/**
+ * Drop a leftover endpoint-leg registration when this install uses FCM: one
+ * install has exactly one wake-up transport (design/notifications.md), and a
+ * stale registration would make the relay fan out to both.
+ */
+async function dropEndpointRegistration(): Promise<void> {
+  await ensureRelayRegistration([]);
+  try {
+    await KeryxPush.setRegistration({ registration: null });
+    await KeryxPush.unregister();
+  } catch {
+    // the connector may not be registered at all
+  }
 }
 
 /**

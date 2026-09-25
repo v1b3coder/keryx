@@ -5,7 +5,12 @@ import { nativePushSupport, KeryxPush } from './native-push';
 
 vi.mock('./native-push', () => ({
   nativePushSupport: vi.fn(),
-  KeryxPush: { getNotificationPermission: vi.fn(), requestNotificationPermission: vi.fn() },
+  KeryxPush: {
+    getNotificationPermission: vi.fn(),
+    requestNotificationPermission: vi.fn(),
+    setTopics: vi.fn(),
+    getTopics: vi.fn(),
+  },
 }));
 import {
   putCompany,
@@ -19,6 +24,30 @@ import {
 } from './store';
 import { topicBindings } from './relay-sw';
 import type { TargetsDoc } from './tuf';
+
+const origin = 'http://127.0.0.1/x';
+
+function company(): CompanyRecord {
+  return {
+    origin,
+    joinUrl: '',
+    identity: {},
+    pinnedRoot: { signed: { version: 1, expires: '2099-01-01T00:00:00Z' }, signatures: [] } as never,
+    pinnedRootVersion: 1,
+    targets: {
+      signed: { _type: 'targets', version: 1, expires: '2099-01-01T00:00:00Z', targets: {}, delegations: { keys: {}, roles: [] } },
+      signatures: [],
+    } as unknown as TargetsDoc,
+    targetsVersion: 1,
+    seen: { targets: 1, roles: {} },
+    channels: [{ name: 'security', displayName: 'Security', followed: true }],
+    privateFeeds: [],
+    status: 'active',
+    joinedAt: 0,
+    lastSyncAt: null,
+    prefs: { languages: [], tags: [], loadRemoteMedia: true },
+  };
+}
 
 function stubPermission(permission: NotificationPermission) {
   vi.stubGlobal('Notification', { permission, requestPermission: () => Promise.resolve(permission) });
@@ -89,29 +118,6 @@ describe('notification state machine: Android transports', () => {
 });
 
 describe('notification state machine: in-flight self-test', () => {
-  const origin = 'http://127.0.0.1/x';
-  function company(): CompanyRecord {
-    return {
-      origin,
-      joinUrl: '',
-      identity: {},
-      pinnedRoot: { signed: { version: 1, expires: '2099-01-01T00:00:00Z' }, signatures: [] } as never,
-      pinnedRootVersion: 1,
-      targets: {
-        signed: { _type: 'targets', version: 1, expires: '2099-01-01T00:00:00Z', targets: {}, delegations: { keys: {}, roles: [] } },
-        signatures: [],
-      } as unknown as TargetsDoc,
-      targetsVersion: 1,
-      seen: { targets: 1, roles: {} },
-      channels: [{ name: 'security', displayName: 'Security', followed: true }],
-      privateFeeds: [],
-      status: 'active',
-      joinedAt: 0,
-      lastSyncAt: null,
-      prefs: { languages: [], tags: [], loadRemoteMedia: true },
-    };
-  }
-
   it('reports pending while the test nonce is still awaited, then ok when it arrives', async () => {
     stubPermission('granted');
     vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
@@ -179,6 +185,61 @@ describe('notification state machine: in-flight self-test', () => {
     await clearPendingTest('https://relay.example');
     await deleteRegistrationRecord('https://relay.example');
     await deleteCompany(c.origin);
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('notification state machine: FCM topic leg', () => {
+  it('reports unregistered while the topic set is out of sync', async () => {
+    vi.stubGlobal('androidBridge', {});
+    vi.mocked(nativePushSupport).mockResolvedValue({
+      fcm: true,
+      unifiedPush: { available: false, distributors: [] },
+    });
+    vi.mocked(KeryxPush.getNotificationPermission).mockResolvedValue({ granted: true });
+    vi.mocked(KeryxPush.getTopics).mockResolvedValue({ topics: [] });
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    const c = company();
+    await putCompany(c);
+    expect((await notificationState()).kind).toBe('unregistered');
+    vi.mocked(KeryxPush.getTopics).mockResolvedValue({ topics: Object.keys(topicBindings(c)) });
+    expect((await notificationState()).kind).toBe('ok');
+    await deleteCompany(origin);
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('dispatches the self-test to the topic leg', async () => {
+    vi.stubGlobal('androidBridge', {});
+    vi.mocked(nativePushSupport).mockResolvedValue({
+      fcm: true,
+      unifiedPush: { available: false, distributors: [] },
+    });
+    vi.mocked(KeryxPush.getNotificationPermission).mockResolvedValue({ granted: true });
+    vi.mocked(KeryxPush.setTopics).mockResolvedValue({ topics: [] });
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (String(url).endsWith('/v1/fcm/test')) {
+        return new Response(
+          JSON.stringify({
+            test_id: 'id',
+            topic: 'topic',
+            nonce: 'n',
+            expires_at: new Date(Date.now() + 60_000).toISOString(),
+          }),
+          { status: 202 },
+        );
+      }
+      // the ready call publishes: record the nonce as received
+      const pending = await pendingTest('https://relay.example');
+      if (pending) await putPendingTest({ ...pending, receivedAt: Date.now() });
+      return new Response(null, { status: 204 });
+    });
+    const result = await runSelfTest([company()]);
+    expect(result.endpoint).toBe('delivered');
+    expect(result.leg).toBe('topic');
+    await clearPendingTest('https://relay.example');
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });

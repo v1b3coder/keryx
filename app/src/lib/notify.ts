@@ -21,6 +21,7 @@ import { relayBaseUrl, testRegistration, vapidPublicKey, RelayGone } from './rel
 import { currentPushTransport } from './push';
 import { KeryxPush } from './native-push';
 import { ensureRelayRegistration, topicBindings, unionTopics } from './relay-sw';
+import { fcmTopicsSynced, runFcmSelfTest } from './fcm';
 import type { RelayRegistration } from './relay';
 
 export type NotificationStateKind =
@@ -39,7 +40,7 @@ export type NotificationStateKind =
 export interface NotificationState {
   kind: NotificationStateKind;
   /** the failing leg when kind === 'failed' */
-  leg?: 'endpoint' | 'registration';
+  leg?: 'endpoint' | 'registration' | 'topic';
   /** the last successful self-test (epoch ms) */
   testedAt?: number;
 }
@@ -82,8 +83,16 @@ export async function notificationState(): Promise<NotificationState> {
       : { kind: 'unsupported' };
   }
   if (transport === 'fcm') {
-    // the FCM phase: the native notification permission and topic subscribe
-    return { kind: 'default' };
+    // The topic leg has no relay registration: the native permission is the
+    // source of truth and the native topic set is the local registration.
+    if (!(await nativeNotificationGranted())) return { kind: 'default' };
+    const companies = await getAllCompanies();
+    if (!(await fcmTopicsSynced(companies))) return { kind: 'unregistered' };
+    const base = relayBaseUrl();
+    const pending = base ? await pendingTest(base) : undefined;
+    if (pending?.receivedAt) return { kind: 'ok', testedAt: pending.receivedAt };
+    if (pending && Date.now() <= pending.expiresAt) return { kind: 'pending' };
+    return { kind: 'ok' };
   }
   if (transport === 'unifiedpush') {
     // Android: the native permission is the source of truth (POST_NOTIFICATIONS);
@@ -132,17 +141,26 @@ export interface SelfTestResult {
   /** the last successful self-test (epoch ms) */
   testedAt?: number;
   /** the failing leg when endpoint === 'failed' */
-  leg: 'endpoint' | 'registration';
+  leg: 'endpoint' | 'registration' | 'topic';
 }
 
 /**
- * Run the relay self-test (§5.3.1): ensure the registration, ask the relay
- * for a test, then wait up to ~10 s for the service worker to record the
- * matching nonce. Never a wake-up. A slow push service is not a failure: on
- * timeout the pending nonce is kept (until its capability expires), so a late
- * delivery still counts and upgrades the state to ok.
+ * Run the relay self-test (§5.3.1) on this install's transport: the FCM
+ * topic leg or the endpoint leg.
  */
 export async function runSelfTest(companies: CompanyRecord[]): Promise<SelfTestResult> {
+  if ((await currentPushTransport()) === 'fcm') return runFcmSelfTest(companies);
+  return runEndpointSelfTest(companies);
+}
+
+/**
+ * Run the endpoint-leg relay self-test (§5.3.1): ensure the registration,
+ * ask the relay for a test, then wait up to ~10 s for the service worker to
+ * record the matching nonce. Never a wake-up. A slow push service is not a
+ * failure: on timeout the pending nonce is kept (until its capability
+ * expires), so a late delivery still counts and upgrades the state to ok.
+ */
+async function runEndpointSelfTest(companies: CompanyRecord[]): Promise<SelfTestResult> {
   const base = relayBaseUrl();
   if (!base) return { endpoint: 'failed', leg: 'registration' };
   let relay = await ensureRelayRegistration(companies);
