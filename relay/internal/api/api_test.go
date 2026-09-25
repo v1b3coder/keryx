@@ -4,12 +4,19 @@ import (
 	"bytes"
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -527,5 +534,203 @@ func TestRegistrationSelfTest(t *testing.T) {
 	rec = do(t, h, http.MethodPost, "/v1/registrations/"+created.ID+"/test", "", map[string]string{"Authorization": "Bearer wrong"})
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("wrong token = %d", rec.Code)
+	}
+}
+
+// rewriteTransport sends every request to one test server: the FCM leg's OAuth2
+// token call and its publish call both go there.
+type rewriteTransport struct{ target *url.URL }
+
+func (rt rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.URL.Scheme = rt.target.Scheme
+	req.URL.Host = rt.target.Host
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+// fakeFCMServer answers the OAuth2 token call and the FCM publish call, and
+// records every published message.
+func fakeFCMServer(t *testing.T, published *[]map[string]any) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			json.NewEncoder(w).Encode(map[string]any{"access_token": "t", "expires_in": 3600})
+			return
+		}
+		var msg map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+			t.Errorf("decode FCM body: %v", err)
+		}
+		*published = append(*published, msg)
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"name":"projects/keryx-test/messages/1"}`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// fakeFCM builds an FCM leg whose token_uri and publish endpoint both point
+// at the test server.
+func fakeFCM(t *testing.T, srv *httptest.Server) *push.FCM {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sa := map[string]string{
+		"type":         "service_account",
+		"project_id":   "keryx-test",
+		"client_email": "relay@keryx-test.iam.gserviceaccount.com",
+		"private_key":  string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})),
+		"token_uri":    srv.URL + "/token",
+	}
+	raw, _ := json.Marshal(sa)
+	path := filepath.Join(t.TempDir(), "sa.json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fcm, err := push.NewFCM(path, &http.Client{Transport: rewriteTransport{target: target}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fcm
+}
+
+// fcmTestServer builds an API server whose dispatcher has the given FCM leg.
+func fcmTestServer(t *testing.T, fcm *push.FCM, ttl time.Duration) (*Server, *store.Store) {
+	t.Helper()
+	st, err := store.Open(":memory:", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	policy := netpolicy.New()
+	policy.AllowPrivate = true
+	policy.AllowHTTP = true
+	d := relay.New(st, fcm, nil, relay.Options{FastPathMax: 1, Logger: discardLogger()})
+	companies := companytuf.New(st, nil, companytuf.Options{Logger: discardLogger()})
+	srv := New(st, d, companies, Options{
+		Policy:  policy,
+		TestTTL: ttl,
+		Logger:  discardLogger(),
+	})
+	return srv, st
+}
+
+func TestFCMTestHandshake(t *testing.T) {
+	var published []map[string]any
+	fcmSrv := fakeFCMServer(t, &published)
+	srv, _ := fcmTestServer(t, fakeFCM(t, fcmSrv), time.Minute)
+	h := srv.Handler()
+
+	rec := do(t, h, "POST", "/v1/fcm/test", "", nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create = %d: %s", rec.Code, rec.Body)
+	}
+	var created struct {
+		TestID    string `json:"test_id"`
+		Topic     string `json:"topic"`
+		Nonce     string `json:"nonce"`
+		ExpiresAt string `json:"expires_at"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{"test_id": created.TestID, "topic": created.Topic, "nonce": created.Nonce} {
+		if len(value) != 43 {
+			t.Fatalf("%s = %q: want 43 chars", name, value)
+		}
+	}
+	if created.ExpiresAt == "" {
+		t.Fatal("no expires_at")
+	}
+
+	rec = do(t, h, "POST", "/v1/fcm/test/"+created.TestID+"/ready", "", nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("ready = %d: %s", rec.Code, rec.Body)
+	}
+	if len(published) != 1 {
+		t.Fatalf("published = %d, want 1", len(published))
+	}
+	message, _ := published[0]["message"].(map[string]any)
+	if message["topic"] != created.Topic {
+		t.Fatalf("message = %+v: wrong topic", message)
+	}
+	raw, _ := message["data"].(map[string]any)["test"].(string)
+	var payload struct {
+		V     int    `json:"v"`
+		Test  bool   `json:"test"`
+		Nonce string `json:"nonce"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.V != 1 || !payload.Test || payload.Nonce != created.Nonce {
+		t.Fatalf("payload = %+v, want nonce %q", payload, created.Nonce)
+	}
+}
+
+func TestFCMTestUnknownCapability(t *testing.T) {
+	var published []map[string]any
+	fcmSrv := fakeFCMServer(t, &published)
+	srv, _ := fcmTestServer(t, fakeFCM(t, fcmSrv), time.Minute)
+	h := srv.Handler()
+	rec := do(t, h, "POST", "/v1/fcm/test/"+strings.Repeat("A", 43)+"/ready", "", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("ready = %d: %s", rec.Code, rec.Body)
+	}
+	if len(published) != 0 {
+		t.Fatalf("published = %d, want 0", len(published))
+	}
+}
+
+func TestFCMTestExpiredCapability(t *testing.T) {
+	var published []map[string]any
+	fcmSrv := fakeFCMServer(t, &published)
+	srv, _ := fcmTestServer(t, fakeFCM(t, fcmSrv), time.Nanosecond)
+	h := srv.Handler()
+	rec := do(t, h, "POST", "/v1/fcm/test", "", nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create = %d: %s", rec.Code, rec.Body)
+	}
+	var created struct {
+		TestID string `json:"test_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	rec = do(t, h, "POST", "/v1/fcm/test/"+created.TestID+"/ready", "", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("ready = %d: %s", rec.Code, rec.Body)
+	}
+	if len(published) != 0 {
+		t.Fatalf("published = %d, want 0", len(published))
+	}
+}
+
+func TestFCMTestLegDisabled(t *testing.T) {
+	srv, _ := fcmTestServer(t, nil, time.Minute)
+	h := srv.Handler()
+	rec := do(t, h, "POST", "/v1/fcm/test", "", nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create = %d: %s", rec.Code, rec.Body)
+	}
+	var created struct {
+		TestID string `json:"test_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	rec = do(t, h, "POST", "/v1/fcm/test/"+created.TestID+"/ready", "", nil)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("ready = %d: %s", rec.Code, rec.Body)
 	}
 }

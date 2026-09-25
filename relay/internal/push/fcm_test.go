@@ -237,3 +237,42 @@ func TestFCMRetriesTransient(t *testing.T) {
 		t.Fatalf("calls = %d, want 3", calls.Load())
 	}
 }
+
+func TestFCMSendTestPayloadKey(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"name":"projects/p/messages/1"}`)
+	}))
+	defer srv.Close()
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"access_token": "t", "expires_in": 3600})
+	}))
+	defer tokenSrv.Close()
+	f, err := NewFCM(writeServiceAccount(t, "proj-x"), srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.tokenURI = tokenSrv.URL
+	f.endpoint = srv.URL
+	if err := f.SendTest(context.Background(), "n-b-a", []byte(`{"v":1,"test":true,"nonce":"n"}`)); err != nil {
+		t.Fatal(err)
+	}
+	message, ok := got["message"].(map[string]any)
+	if !ok {
+		t.Fatalf("body = %+v: no message", got)
+	}
+	data, ok := message["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("message = %+v: no data", message)
+	}
+	if _, ok := data["test"]; !ok {
+		t.Fatalf("data = %+v: no test key", data)
+	}
+	if _, ok := data["wakeup"]; ok {
+		t.Fatalf("data = %+v: the test leaked into wakeup", data)
+	}
+}

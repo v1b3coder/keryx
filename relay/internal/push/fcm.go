@@ -167,6 +167,19 @@ func (c *FCM) fetchToken(ctx context.Context) (string, time.Time, error) {
 // ErrCredentials for 401/403 (operator alarm), and a plain error for other
 // failures.
 func (c *FCM) Send(ctx context.Context, topic string, wakeup []byte) error {
+	return c.send(ctx, topic, "wakeup", wakeup)
+}
+
+// SendTest publishes the §4.3 self-test payload to an FCM topic under
+// message.data.test (§5.3.1, §6.1). It is never a wake-up.
+func (c *FCM) SendTest(ctx context.Context, topic string, payload []byte) error {
+	return c.send(ctx, topic, "test", payload)
+}
+
+// send posts one data-only message; dataKey is "wakeup" for a wake-up and
+// "test" for a self-test. Everything else — OAuth2, retries, error
+// classification, the Android/iOS delivery hints — is shared.
+func (c *FCM) send(ctx context.Context, topic, dataKey string, payload []byte) error {
 	token, err := c.AccessToken(ctx)
 	if err != nil {
 		return err
@@ -174,7 +187,7 @@ func (c *FCM) Send(ctx context.Context, topic string, wakeup []byte) error {
 	body, err := json.Marshal(map[string]any{
 		"message": map[string]any{
 			"topic": topic,
-			"data":  map[string]string{"wakeup": string(wakeup)},
+			"data":  map[string]string{dataKey: string(payload)},
 			"android": map[string]any{
 				"priority": "normal",
 			},

@@ -24,6 +24,9 @@ var ErrQueueFull = errors.New("dispatch queue saturated")
 // ErrEndpointLegDisabled reports that no endpoint leg is configured.
 var ErrEndpointLegDisabled = errors.New("endpoint leg disabled")
 
+// ErrTopicLegDisabled reports that no FCM topic leg is configured.
+var ErrTopicLegDisabled = errors.New("topic leg disabled")
+
 // WebPushResult is the endpoint leg accounting for one dispatch (§5.1).
 type WebPushResult struct {
 	Attempted int
@@ -360,6 +363,21 @@ func (d *Dispatcher) SendToEndpoint(ctx context.Context, r store.Registration, p
 		return ErrEndpointLegDisabled
 	}
 	return d.webpush.Send(ctx, r.Endpoint, r.P256DH, r.Auth, payload)
+}
+
+// SendToTopic delivers one payload to one FCM topic (the §5.3.1 topic-leg
+// self-test). It is outside the dispatch queue, the replay cache and the
+// publish budget: a test is never a wake-up.
+func (d *Dispatcher) SendToTopic(ctx context.Context, topic string, payload []byte) error {
+	if d.fcm == nil {
+		return ErrTopicLegDisabled
+	}
+	// An empty topic is an accepted publish (§6.1): FCM reports it as
+	// dispatched, so the test counts as sent.
+	if err := d.fcm.SendTest(ctx, topic, payload); err != nil && !errors.Is(err, push.ErrEmptyTopic) {
+		return err
+	}
+	return nil
 }
 
 // Idle reports whether no dispatch is queued, running, or waiting to be

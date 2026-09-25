@@ -15,14 +15,26 @@ type TestPayload struct {
 	Nonce string `json:"nonce"`
 }
 
-// NewTestPayload returns a fresh nonce (32 random bytes, base64url) and the
-// canonical §4.3 payload that carries it.
-func NewTestPayload() (nonce string, payload []byte) {
+// NewTestCapability returns a fresh 43-char base64url capability from 32
+// random bytes (§5.3.1): the relay-generated test topic, the test_id and the
+// test nonce all use this shape.
+func NewTestCapability() string {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		panic("crypto/rand failed: " + err.Error())
 	}
-	nonce = base64.RawURLEncoding.EncodeToString(raw)
-	payload, _ = json.Marshal(TestPayload{V: 1, Test: true, Nonce: nonce})
-	return nonce, payload
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// TestPayloadBytes returns the canonical §4.3 payload that carries nonce.
+func TestPayloadBytes(nonce string) []byte {
+	payload, _ := json.Marshal(TestPayload{V: 1, Test: true, Nonce: nonce})
+	return payload
+}
+
+// NewTestPayload returns a fresh nonce (32 random bytes, base64url) and the
+// canonical §4.3 payload that carries it.
+func NewTestPayload() (nonce string, payload []byte) {
+	nonce = NewTestCapability()
+	return nonce, TestPayloadBytes(nonce)
 }

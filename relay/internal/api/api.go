@@ -83,6 +83,9 @@ type Server struct {
 	testMu      sync.Mutex
 	testReg     map[string]*ratelimit.Limiter
 
+	fcmMu    sync.Mutex
+	fcmTests map[string]fcmTest
+
 	pubMu       sync.Mutex
 	pubLimiters map[string]*ratelimit.Limiter
 
@@ -165,6 +168,7 @@ func New(st *store.Store, d *relay.Dispatcher, companies *companytuf.Manager, op
 		probeGlobal:    ratelimit.New(opts.GlobalProbePerMin, opts.GlobalProbeBurst),
 		testIP:         ratelimit.New(opts.TestIPPerMin, opts.TestIPBurst),
 		testReg:        map[string]*ratelimit.Limiter{},
+		fcmTests:       map[string]fcmTest{},
 		pubLimiters:    map[string]*ratelimit.Limiter{},
 		pushOrigins:    defaultPushOrigins(),
 		pushOriginsAny: opts.PushOriginsAny,
@@ -189,6 +193,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/registrations/{id}", s.handleRegistrationDelete)
 	mux.HandleFunc("POST /v1/registrations/{id}/heartbeat", s.handleRegistrationHeartbeat)
 	mux.HandleFunc("POST /v1/registrations/{id}/test", s.handleRegistrationTest)
+	mux.HandleFunc("POST /v1/fcm/test", s.handleFCMTest)
+	mux.HandleFunc("POST /v1/fcm/test/{test_id}/ready", s.handleFCMTestReady)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	if s.opts.Debug {
 		mux.HandleFunc("POST /debug/v1/publish", s.handleDebugPublish)
@@ -630,6 +636,18 @@ func (s *Server) handleRegistrationHeartbeat(w http.ResponseWriter, r *http.Requ
 	}
 }
 
+// fcmTest is one pending §5.3.1 topic-leg self-test. The relay keeps the
+// topic and nonce in memory only and never durably; it never learns the
+// device's FCM token (§9).
+type fcmTest struct {
+	topic     string
+	nonce     string
+	expiresAt time.Time
+}
+
+// fcmTestMax bounds the in-memory capability map.
+const fcmTestMax = 4096
+
 // handleRegistrationTest delivers the §4.3 self-test payload through the
 // ordinary endpoint path (§5.3.1). It never touches replay state, the registry
 // or sequence state: a test is never a wake-up.
@@ -677,6 +695,77 @@ func (s *Server) handleRegistrationTest(w http.ResponseWriter, r *http.Request) 
 		"nonce":      nonce,
 		"expires_at": time.Now().UTC().Add(s.opts.TestTTL).Format(time.RFC3339),
 	})
+}
+
+// handleFCMTest starts one topic-leg self-test (§5.3.1): the relay generates
+// a short-lived topic and nonce, keeps them in memory only, and never learns
+// the device's FCM token.
+func (s *Server) handleFCMTest(w http.ResponseWriter, r *http.Request) {
+	if !s.testIP.Allow(s.remoteIP(r)) {
+		writeError(w, http.StatusTooManyRequests, "self-test rate limit exceeded")
+		return
+	}
+	expires := time.Now().UTC().Add(s.opts.TestTTL)
+	s.fcmMu.Lock()
+	s.purgeFCMTestsLocked(time.Now())
+	if len(s.fcmTests) >= fcmTestMax {
+		s.fcmMu.Unlock()
+		writeError(w, http.StatusTooManyRequests, "self-test capacity exhausted")
+		return
+	}
+	testID := wakeup.NewTestCapability()
+	test := fcmTest{
+		topic:     wakeup.NewTestCapability(),
+		nonce:     wakeup.NewTestCapability(),
+		expiresAt: expires,
+	}
+	s.fcmTests[testID] = test
+	s.fcmMu.Unlock()
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"test_id":    testID,
+		"topic":      test.topic,
+		"nonce":      test.nonce,
+		"expires_at": expires.Format(time.RFC3339),
+	})
+}
+
+// handleFCMTestReady publishes the pending test's §4.3 payload to its topic
+// (§5.3.1). test_id is the unguessable capability that authorizes the call.
+// The relay publishes once: FCM fanout is not instantaneous, so the client's
+// neutral "sent — not confirmed yet" state and its next test cover a slow
+// propagation, not repeated publishes.
+func (s *Server) handleFCMTestReady(w http.ResponseWriter, r *http.Request) {
+	if !s.testIP.Allow(s.remoteIP(r)) {
+		writeError(w, http.StatusTooManyRequests, "self-test rate limit exceeded")
+		return
+	}
+	now := time.Now()
+	s.fcmMu.Lock()
+	s.purgeFCMTestsLocked(now)
+	test, ok := s.fcmTests[r.PathValue("test_id")]
+	s.fcmMu.Unlock()
+	if !ok || now.After(test.expiresAt) {
+		writeError(w, http.StatusNotFound, "test not found")
+		return
+	}
+	switch err := s.dispatcher.SendToTopic(r.Context(), test.topic, wakeup.TestPayloadBytes(test.nonce)); {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, relay.ErrTopicLegDisabled):
+		writeError(w, http.StatusServiceUnavailable, "topic leg disabled")
+	default:
+		s.logger.Warn("self-test publish failed", "err", err)
+		writeError(w, http.StatusServiceUnavailable, "provider unavailable")
+	}
+}
+
+// purgeFCMTestsLocked drops expired capabilities. The caller holds fcmMu.
+func (s *Server) purgeFCMTestsLocked(now time.Time) {
+	for id, test := range s.fcmTests {
+		if now.After(test.expiresAt) {
+			delete(s.fcmTests, id)
+		}
+	}
 }
 
 // testLimiter returns the per-registration self-test bucket.
