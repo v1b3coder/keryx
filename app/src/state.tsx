@@ -107,7 +107,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
   /** Re-read the app-wide state; a landed self-test turns on the green tail. */
   const refreshNotificationState = useCallback(async () => {
     const next = await notificationState();
-    if (next.kind === 'ok' && (await testLandedThisSession())) setFreshTestAt(Date.now());
+    if (next.kind === 'ok' && (await testLandedThisSession())) {
+      setFreshTestAt(Date.now());
+      setNotification(next);
+      return;
+    }
+    // a self-test still in flight is never a failure: keep the neutral state
+    // until the test reports its own outcome
+    if (
+      sessionTestPending.current &&
+      (next.kind === 'unregistered' || next.kind === 'no-subscription' || next.kind === 'failed')
+    ) {
+      setNotification({ kind: 'pending' });
+      return;
+    }
     setNotification(next);
   }, [testLandedThisSession]);
 
@@ -192,6 +205,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [syncCompanyNow]);
 
+  /**
+   * One native payload (the UnifiedPush connector or the FCM handler): verify,
+   * announce and catch up. Shared by the live listener and the queue drain.
+   */
+  const processNativePayload = useCallback(
+    async (payload: string) => {
+      const outcome = await handlePush(payload);
+      if (outcome.accepted && !outcome.test) {
+        await KeryxPush.showNotification({
+          title: outcome.title ?? 'Keryx',
+          body: outcome.body ?? 'New update available',
+          tag: outcome.topic ? `keryx-${outcome.topic}` : undefined,
+        });
+      }
+      await pushVerifyState();
+      if (outcome.accepted) await catchUpOnWakeups();
+    },
+    [catchUpOnWakeups],
+  );
+
+  /**
+   * Drain the native queue (Android). A wake-up or self-test that arrives
+   * while the page is paused is only queued natively, so it is processed here
+   * when the app returns to the foreground — a late nonce then upgrades the
+   * state to green without a restart.
+   */
+  const drainNativeMessages = useCallback(async () => {
+    for (const payload of (await KeryxPush.drainMessages()).messages) {
+      await processNativePayload(payload);
+    }
+  }, [processNativePayload]);
+
   useEffect(() => {
     initDebugBuild();
     void (async () => {
@@ -215,11 +260,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       void refreshNotificationState();
       void runRelayCheck();
       void drainPendingRecoveries();
+      void drainNativeMessages();
       void catchUpOnWakeups();
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [refreshNotificationState, runRelayCheck, drainPendingRecoveries, catchUpOnWakeups]);
+  }, [
+    refreshNotificationState,
+    runRelayCheck,
+    drainPendingRecoveries,
+    drainNativeMessages,
+    catchUpOnWakeups,
+  ]);
 
   // Android wake-ups arrive through the UnifiedPush connector: install the
   // native subscription source, register on every start, drain the native queue
@@ -242,28 +294,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
       listener = await KeryxPush.addListener('push', ({ payload }) => {
-        void handlePush(payload).then(async (outcome) => {
-          if (outcome.accepted && !outcome.test) {
-            await KeryxPush.showNotification({
-              title: outcome.title ?? 'Keryx',
-              body: outcome.body ?? 'New update available',
-              tag: outcome.topic ? `keryx-${outcome.topic}` : undefined,
-            });
-          }
-          await pushVerifyState();
-          if (outcome.accepted) await catchUpOnWakeups();
-        });
+        void processNativePayload(payload);
       });
-      for (const payload of (await KeryxPush.drainMessages()).messages) {
-        const outcome = await handlePush(payload);
-        if (outcome.accepted && !outcome.test) {
-          void KeryxPush.showNotification({
-            title: outcome.title ?? 'Keryx',
-            body: outcome.body ?? 'New update available',
-            tag: outcome.topic ? `keryx-${outcome.topic}` : undefined,
-          });
-        }
-      }
+      await drainNativeMessages();
       await ensurePushWakeups(await getAllCompanies());
       await pushVerifyState();
       await catchUpOnWakeups();
@@ -272,7 +305,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       void listener?.remove();
       setSubscriptionSource(null);
     };
-  }, [catchUpOnWakeups]);
+  }, [processNativePayload, drainNativeMessages, catchUpOnWakeups]);
 
   // while a self-test is in flight, re-read the app-wide state so a late
   // nonce upgrades it to green without user action
@@ -347,6 +380,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         }
         sessionTestPending.current = true;
+        setNotification({ kind: 'pending' });
         const result = await runSelfTest(await getAllCompanies());
         await pushVerifyState();
         if (result.endpoint === 'failed') {
@@ -363,6 +397,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       },
       async runNotificationSelfTest() {
         sessionTestPending.current = true;
+        setNotification({ kind: 'pending' });
         const result = await runSelfTest(await getAllCompanies());
         await pushVerifyState();
         if (result.endpoint === 'failed') {

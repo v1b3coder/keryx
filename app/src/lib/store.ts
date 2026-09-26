@@ -363,6 +363,8 @@ export interface PendingTest {
   baseUrl: string;
   nonce: string;
   expiresAt: number;
+  /** the topic-leg test topic the native SDK is subscribed to while it is pending */
+  topic?: string;
   receivedAt?: number;
 }
 
@@ -375,7 +377,13 @@ export async function pendingTest(baseUrl: string): Promise<PendingTest | undefi
   const db = await openAppDb();
   const rec = (await db.get('relay', `test\u0000${baseUrl}`)) as (PendingTest & { key: string }) | undefined;
   if (!rec) return undefined;
-  return { baseUrl: rec.baseUrl, nonce: rec.nonce, expiresAt: rec.expiresAt, receivedAt: rec.receivedAt };
+  return {
+    baseUrl: rec.baseUrl,
+    nonce: rec.nonce,
+    topic: rec.topic,
+    expiresAt: rec.expiresAt,
+    receivedAt: rec.receivedAt,
+  };
 }
 
 export async function clearPendingTest(baseUrl: string): Promise<void> {

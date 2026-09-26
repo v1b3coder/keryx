@@ -86,12 +86,15 @@ export async function notificationState(): Promise<NotificationState> {
     // The topic leg has no relay registration: the native permission is the
     // source of truth and the native topic set is the local registration.
     if (!(await nativeNotificationGranted())) return { kind: 'default' };
-    const companies = await getAllCompanies();
-    if (!(await fcmTopicsSynced(companies))) return { kind: 'unregistered' };
+    // An in-flight test is checked before the topic set: the subscribed test
+    // topic is expected until its capability expires, and a late nonce still
+    // upgrades the state to green instead of being masked by a stale topic set.
     const base = relayBaseUrl();
     const pending = base ? await pendingTest(base) : undefined;
     if (pending?.receivedAt) return { kind: 'ok', testedAt: pending.receivedAt };
     if (pending && Date.now() <= pending.expiresAt) return { kind: 'pending' };
+    const companies = await getAllCompanies();
+    if (!(await fcmTopicsSynced(companies))) return { kind: 'unregistered' };
     return { kind: 'ok' };
   }
   if (transport === 'unifiedpush') {

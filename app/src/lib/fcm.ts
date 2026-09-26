@@ -37,6 +37,12 @@ export async function ensureFcmTopics(companies: CompanyRecord[]): Promise<strin
 /** Whether the native SDK's topic set matches the union. */
 export async function fcmTopicsSynced(companies: CompanyRecord[]): Promise<boolean> {
   const wanted = union(companies);
+  // A subscribed test topic is expected while its capability is valid: after a
+  // slow delivery the leftover test topic must not turn the state red.
+  const base = relayBaseUrl();
+  const pending = base ? await pendingTest(base) : undefined;
+  if (pending?.topic && Date.now() <= pending.expiresAt) wanted.push(pending.topic);
+  wanted.sort();
   try {
     const { topics } = await KeryxPush.getTopics();
     const current = [...topics].sort();
@@ -67,7 +73,12 @@ export async function runFcmSelfTest(
   }
   try {
     await KeryxPush.setTopics({ topics: [...topics, test.topic] });
-    await putPendingTest({ baseUrl: base, nonce: test.nonce, expiresAt: Date.parse(test.expiresAt) });
+    await putPendingTest({
+      baseUrl: base,
+      nonce: test.nonce,
+      topic: test.topic,
+      expiresAt: Date.parse(test.expiresAt),
+    });
     await fcmTestReady(base, test.testId);
   } catch {
     await KeryxPush.setTopics({ topics }).catch(() => undefined);

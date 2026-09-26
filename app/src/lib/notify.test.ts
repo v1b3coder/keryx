@@ -244,3 +244,35 @@ describe('notification state machine: FCM topic leg', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('notification state machine: slow topic-leg self-test', () => {
+  it('keeps a pending topic-leg test neutral and upgrades it when the nonce lands', async () => {
+    vi.stubGlobal('androidBridge', {});
+    vi.mocked(nativePushSupport).mockResolvedValue({
+      fcm: true,
+      unifiedPush: { available: false, distributors: [] },
+    });
+    vi.mocked(KeryxPush.getNotificationPermission).mockResolvedValue({ granted: true });
+    // the native set still holds the test topic and does not match the union
+    vi.mocked(KeryxPush.getTopics).mockResolvedValue({ topics: ['stale-topic'] });
+    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    await putCompany(company());
+    await putPendingTest({
+      baseUrl: 'https://relay.example',
+      nonce: 'A'.repeat(43),
+      topic: 'test-topic',
+      expiresAt: Date.now() + 60_000,
+    });
+    // in flight: neutral, never the red "re-subscribe" state
+    expect((await notificationState()).kind).toBe('pending');
+    const pending = await pendingTest('https://relay.example');
+    await putPendingTest({ ...pending!, receivedAt: Date.now() });
+    const ok = await notificationState();
+    expect(ok.kind).toBe('ok');
+    expect(ok.testedAt).toBeGreaterThan(0);
+    await clearPendingTest('https://relay.example');
+    await deleteCompany(origin);
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+});

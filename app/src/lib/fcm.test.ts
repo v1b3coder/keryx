@@ -4,7 +4,7 @@ import { ensureFcmTopics, fcmTopicsSynced, runFcmSelfTest } from './fcm';
 import { KeryxPush } from './native-push';
 import { fcmTestReady, startFcmTest } from './relay';
 import { unionTopics } from './relay-sw';
-import { pendingTest, putPendingTest, type CompanyRecord } from './store';
+import { clearPendingTest, pendingTest, putPendingTest, type CompanyRecord } from './store';
 import type { TargetsDoc } from './tuf';
 
 vi.mock('./native-push', () => ({
@@ -72,6 +72,19 @@ describe('FCM topic sync', () => {
     expect(await fcmTopicsSynced([c])).toBe(true);
     vi.mocked(KeryxPush.getTopics).mockResolvedValue({ topics: [] });
     expect(await fcmTopicsSynced([c])).toBe(false);
+  });
+
+  it('accepts the subscribed test topic while its capability is valid', async () => {
+    const c = company('http://a.example/x');
+    vi.mocked(KeryxPush.getTopics).mockResolvedValue({ topics: [...unionOf(c), 'test-topic'] });
+    await putPendingTest({
+      baseUrl: 'https://relay.example',
+      nonce: 'n',
+      topic: 'test-topic',
+      expiresAt: Date.now() + 60_000,
+    });
+    expect(await fcmTopicsSynced([c])).toBe(true);
+    await clearPendingTest('https://relay.example');
   });
 });
 
