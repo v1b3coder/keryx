@@ -12,7 +12,7 @@ import { buildPairingOffer, createCompanyFromOffer, type PairingOffer } from '..
 import { scanQr } from '../lib/scan';
 import { syncCompany } from '../lib/sync';
 import { getItems, deleteItems } from '../lib/store';
-import { permissionState, type SelfTestResult } from '../lib/notify';
+import { permissionState, nativeNotificationGranted, type SelfTestResult } from '../lib/notify';
 import { openNtfyInstallPage, wakeupsCurrent } from '../lib/push';
 import { CompanyLogo } from './CompanyLogo';
 import { useApp } from '../state';
@@ -147,8 +147,13 @@ export function AddCompany({
     // a later company with permission already granted and the registration
     // current skips the screen and self-tests silently: no prompt is possible
     if (!firstCompany) {
-      const permission = permissionState();
-      if (permission === 'granted' && (await wakeupsCurrent(company))) {
+      // the transport-aware "permission already granted": the native
+      // permission on Android, the browser permission on the web
+      const permissionOk =
+        Capacitor.getPlatform() === 'android'
+          ? await nativeNotificationGranted()
+          : permissionState() === 'granted';
+      if (permissionOk && (await wakeupsCurrent(company))) {
         await actions.runNotificationSelfTest();
         onDone(company.origin);
         return;
