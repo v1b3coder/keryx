@@ -49,13 +49,16 @@ await build({
   logLevel: 'warning',
 });
 
-// The PWA manifest link: Expo's web index.html does not add one.
+// The PWA manifest link: Expo's web index.html does not add one. The href
+// follows the deploy base (`experiments.baseUrl` in app.json).
+const base = JSON.parse(readFileSync(join(appDir, 'app.json'), 'utf8')).expo.experiments?.baseUrl ?? '/';
+const href = `${base.replace(/\/$/, '')}/manifest.json`;
 const indexPath = join(distDir, 'index.html');
 const html = readFileSync(indexPath, 'utf8');
 if (!html.includes('rel="manifest"')) {
   writeFileSync(
     indexPath,
-    html.replace('</head>', '  <link rel="manifest" href="/manifest.json">\n</head>'),
+    html.replace('</head>', `  <link rel="manifest" href="${href}">\n</head>`),
   );
 }
 

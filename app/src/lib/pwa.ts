@@ -7,10 +7,15 @@
  */
 export function registerServiceWorker(): void {
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
-  window.addEventListener('load', () => {
+  // The service worker sits next to the page, under the deploy base path
+  // (`experiments.baseUrl` in app.json).
+  const base = new URL(document.baseURI);
+  if (!base.pathname.endsWith('/')) base.pathname += '/';
+  const swPath = new URL('sw.js', base).pathname;
+  const start = () => {
     void (async () => {
       try {
-        const registration = await navigator.serviceWorker.register('/sw.js', {
+        const registration = await navigator.serviceWorker.register(swPath, {
           updateViaCache: 'none',
         });
         // reload once when a new worker takes control, but never on the first
@@ -31,5 +36,7 @@ export function registerServiceWorker(): void {
         // offline caching is a bonus — the app works without it
       }
     })();
-  });
+  };
+  if (document.readyState === 'complete') start();
+  else window.addEventListener('load', start);
 }
