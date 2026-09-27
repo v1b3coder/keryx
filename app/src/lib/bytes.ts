@@ -24,6 +24,31 @@ export function bytesToHex(bytes: Uint8Array): string {
 }
 
 const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+const B64_STANDARD = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/** Standard base64 with padding (RFC 4648 §4), portable. A data: URL needs this
+ * alphabet, not the URL-safe one. */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i];
+    const b1 = bytes[i + 1];
+    const b2 = bytes[i + 2];
+    out += B64_STANDARD[b0 >> 2];
+    out += B64_STANDARD[((b0 & 3) << 4) | ((b1 ?? 0) >> 4)];
+    if (b1 === undefined) {
+      out += '==';
+      break;
+    }
+    out += B64_STANDARD[((b1 & 15) << 2) | ((b2 ?? 0) >> 6)];
+    if (b2 === undefined) {
+      out += '=';
+      break;
+    }
+    out += B64_STANDARD[b2 & 63];
+  }
+  return out;
+}
 
 /** base64url without padding (RFC 4648 §5), portable (no btoa/atob). */
 export function bytesToBase64url(bytes: Uint8Array): string {

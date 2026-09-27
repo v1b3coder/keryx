@@ -8,13 +8,13 @@
  */
 
 import { getMedia, putMedia } from './store';
-import { bytesToBase64url, sha256Hex } from './bytes';
+import { bytesToBase64, sha256Hex } from './bytes';
 import { logoDisplayable, readLimitedBody, mimeOf } from './media-shared';
 
 export { logoDisplayable, readLimitedBody };
 
 function dataUrlFor(bytes: ArrayBuffer, mime: string): string {
-  return `data:${mime};base64,${bytesToBase64url(new Uint8Array(bytes))}`;
+  return `data:${mime};base64,${bytesToBase64(new Uint8Array(bytes))}`;
 }
 
 /**

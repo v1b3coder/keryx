@@ -207,6 +207,7 @@ export function CompanyView({
           <FeedArticle
             company={company}
             stored={stored}
+            loadRemoteMedia={company.prefs.loadRemoteMedia}
             onLinkTap={(url) => setPendingLink({ url, item: stored.item })}
           />
         )}
@@ -232,10 +233,13 @@ export function CompanyView({
 function FeedArticle({
   company,
   stored,
+  loadRemoteMedia,
   onLinkTap,
 }: {
   company: CompanyRecord;
   stored: StoredItem;
+  /** honor the remote-media privacy preference (spec/feeds.md §1.4) */
+  loadRemoteMedia: boolean;
   onLinkTap: (url: string) => void;
 }) {
   const c = usePalette();
@@ -248,6 +252,7 @@ function FeedArticle({
     const url = item.image;
     setImg(null);
     if (!url) return;
+    if (!url.startsWith('data:') && !loadRemoteMedia) return; // remote media disabled
     // a linked image is hash-pinned by image_sha256 (spec/feeds.md §1.1)
     void loadImage(url, stored.origin, item.image_sha256).then((loaded) => {
       if (alive) setImg(loaded);
@@ -255,7 +260,7 @@ function FeedArticle({
     return () => {
       alive = false;
     };
-  }, [item.image, item.image_sha256, stored.origin]);
+  }, [item.image, item.image_sha256, stored.origin, loadRemoteMedia]);
 
   const published = item.date_published ?? '';
   const date = published ? formatDate(published) : '';
