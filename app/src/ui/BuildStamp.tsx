@@ -10,7 +10,7 @@ import { spacing } from '../theme';
 export function BuildStamp() {
   return (
     <View style={styles.wrap}>
-      <Mono>build {appVersion()}</Mono>
+      <Mono>Build {appVersion()}</Mono>
     </View>
   );
 }

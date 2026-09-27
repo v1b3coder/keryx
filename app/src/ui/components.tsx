@@ -79,12 +79,15 @@ export function Button({
   variant = 'primary',
   disabled,
   busy,
+  accessibilityLabel,
 }: {
   title: string;
   onPress: () => void;
   variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
   disabled?: boolean;
   busy?: boolean;
+  /** the spoken name when the title is a glyph (‹ ⟳ ⚙ ＋) */
+  accessibilityLabel?: string;
 }) {
   const c = usePalette();
   const bg =
@@ -93,6 +96,7 @@ export function Button({
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? title}
       disabled={disabled || busy}
       onPress={onPress}
       style={({ pressed }) => [
@@ -160,11 +164,23 @@ export function Row({
   );
 }
 
-export function Chip({ label, on, onPress }: { label: string; on?: boolean; onPress?: () => void }) {
+export function Chip({
+  label,
+  on,
+  onPress,
+  accessibilityLabel,
+}: {
+  label: string;
+  on?: boolean;
+  onPress?: () => void;
+  accessibilityLabel?: string;
+}) {
   const c = usePalette();
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityState={{ selected: !!on }}
       onPress={onPress}
       style={[
         styles.chip,
@@ -176,10 +192,15 @@ export function Chip({ label, on, onPress }: { label: string; on?: boolean; onPr
   );
 }
 
-export function Toggle({ on }: { on: boolean }) {
+export function Toggle({ on, accessibilityLabel }: { on: boolean; accessibilityLabel?: string }) {
   const c = usePalette();
   return (
-    <View style={[styles.toggle, { backgroundColor: on ? c.accent : c.surface2, borderColor: on ? c.accent : c.border }]}>
+    <View
+      accessibilityRole="switch"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={{ checked: on }}
+      style={[styles.toggle, { backgroundColor: on ? c.accent : c.surface2, borderColor: on ? c.accent : c.border }]}
+    >
       <View style={[styles.knob, on ? styles.knobOn : null, { backgroundColor: on ? c.onAccent : c.text2 }]} />
     </View>
   );

@@ -34,7 +34,7 @@ export function Contacts({
     <Screen>
       <View style={styles.header}>
         <Title style={{ flex: 1 }}>Messages</Title>
-        <Button title="Add" onPress={onAdd} />
+        <Button title="Add" accessibilityLabel="Add company" onPress={onAdd} />
       </View>
       <ScrollView contentContainerStyle={styles.list}>
         <NotificationBanner
@@ -57,6 +57,7 @@ export function Contacts({
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Button
                   title={company.targets.signed.custom?.company_name ?? company.origin}
+                  accessibilityLabel={`Open ${company.targets.signed.custom?.company_name ?? company.origin}`}
                   variant="ghost"
                   onPress={() => onOpen(company.origin)}
                 />

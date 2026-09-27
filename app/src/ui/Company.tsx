@@ -5,7 +5,7 @@
  * spec/core.md §2, §4.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Image, Modal, ScrollView, StyleSheet, Text, View, type ViewToken } from 'react-native';
+import { ActivityIndicator, Alert as RNAlert, FlatList, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View, type ViewToken } from 'react-native';
 import type { ChannelState, CompanyRecord, StoredItem } from '../lib/store';
 import { formatDate, formatDateTime, matchesFilter } from '../lib/format';
 import { loadImage } from '../lib/media';
@@ -139,7 +139,7 @@ export function CompanyView({
   return (
     <Screen>
       <View style={styles.appbar}>
-        {companies.length > 1 ? <Button title="‹" variant="ghost" onPress={onBack} /> : null}
+        {companies.length > 1 ? <Button title="‹" accessibilityLabel="Back" variant="ghost" onPress={onBack} /> : null}
         <CompanyLogo
           url={company.targets.signed.custom?.logo}
           origin={company.origin}
@@ -150,9 +150,17 @@ export function CompanyView({
           <Body>{company.targets.signed.custom?.company_name ?? company.origin}</Body>
           <Mono numberOfLines={1}>{company.origin}</Mono>
         </View>
-        <Button title="⟳" variant="ghost" busy={syncing} onPress={() => void actions.syncCompanyNow(company.origin)} />
-        <Button title="⚙" variant="ghost" onPress={() => setShowSettings(true)} />
-        {companies.length === 1 ? <Button title="＋" variant="ghost" onPress={onAdd} /> : null}
+        <Button
+          title="⟳"
+          accessibilityLabel="Refresh"
+          variant="ghost"
+          busy={syncing}
+          onPress={() => void actions.syncCompanyNow(company.origin)}
+        />
+        <Button title="⚙" accessibilityLabel="Settings" variant="ghost" onPress={() => setShowSettings(true)} />
+        {companies.length === 1 ? (
+          <Button title="＋" accessibilityLabel="Add company" variant="ghost" onPress={onAdd} />
+        ) : null}
       </View>
 
       <View style={styles.bannerWrap}>
@@ -394,8 +402,23 @@ function SettingsSheet({
               title="Remove company"
               variant="danger"
               onPress={() => {
-                void actions.removeCompany(company.origin);
-                onClose();
+                // the destructive action deletes the company, its items and its
+                // cached media: never one tap away
+                RNAlert.alert(
+                  'Remove company',
+                  `Remove ${company.origin}? All saved messages are deleted from this device.`,
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                      text: 'Remove',
+                      style: 'destructive',
+                      onPress: () => {
+                        void actions.removeCompany(company.origin);
+                        onClose();
+                      },
+                    },
+                  ],
+                );
               }}
             />
             <BuildStamp />
@@ -413,8 +436,15 @@ function ChannelToggle({
   channel: ChannelState;
   onToggle: (followed: boolean) => void;
 }) {
+  const c = usePalette();
   return (
-    <View style={styles.channelRow}>
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityLabel={channel.displayName}
+      accessibilityState={{ checked: channel.followed }}
+      onPress={() => onToggle(!channel.followed)}
+      style={[styles.channelRow, { borderBottomColor: c.border }]}
+    >
       <View style={{ flex: 1, minWidth: 0 }}>
         <Body>
           {channel.displayName}
@@ -422,10 +452,8 @@ function ChannelToggle({
         </Body>
         {channel.description ? <Small muted>{channel.description}</Small> : null}
       </View>
-      <View onTouchEnd={() => onToggle(!channel.followed)}>
-        <Toggle on={channel.followed} />
-      </View>
-    </View>
+      <Toggle on={channel.followed} />
+    </Pressable>
   );
 }
 
@@ -462,5 +490,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing(1.5),
     paddingVertical: spacing(1.5),
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
 });
