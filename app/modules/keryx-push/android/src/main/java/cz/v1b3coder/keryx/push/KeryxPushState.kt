@@ -45,8 +45,22 @@ internal object KeryxPushState {
   fun prefs(context: Context): SharedPreferences =
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+  /**
+   * Run a block on the serialized IO executor and wait for its result: the
+   * `setTopics` read-diff-apply-write cycle must not interleave with another.
+   */
   fun <T> execute(block: () -> T): T {
     return io.submit(block).get()
+  }
+
+  /**
+   * Hand a block to the serialized IO executor without waiting. Background work
+   * (the heartbeat ack) must never block the FCM/UnifiedPush callback thread,
+   * which is shared and single-threaded per transport: a slow POST there would
+   * delay the notice and every following wake-up.
+   */
+  fun executeAsync(block: () -> Unit) {
+    io.execute(block)
   }
 
   // --- queue -----------------------------------------------------------------
@@ -147,7 +161,7 @@ internal object KeryxPushState {
       return
     }
     if (baseUrl.isEmpty() || id.isEmpty() || token.isEmpty()) return
-    io.execute {
+    executeAsync {
       var conn: HttpURLConnection? = null
       try {
         conn = URL("$baseUrl/v1/registrations/$id/heartbeat").openConnection() as HttpURLConnection
