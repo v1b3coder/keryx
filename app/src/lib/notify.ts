@@ -37,8 +37,8 @@ export type NotificationStateKind =
 
 export interface NotificationState {
   kind: NotificationStateKind;
-  /** the failing leg when kind === 'failed' */
-  leg?: 'endpoint' | 'registration';
+  /** the failing leg when kind === 'failed' (topic is native-only) */
+  leg?: 'endpoint' | 'registration' | 'topic';
   /** the last successful self-test (epoch ms) */
   testedAt?: number;
 }
@@ -108,8 +108,8 @@ export interface SelfTestResult {
   endpoint: 'delivered' | 'pending' | 'failed';
   /** the last successful self-test (epoch ms) */
   testedAt?: number;
-  /** the failing leg when endpoint === 'failed' */
-  leg: 'endpoint' | 'registration';
+  /** the failing leg when endpoint === 'failed' (topic is native-only) */
+  leg: 'endpoint' | 'registration' | 'topic';
 }
 
 /** Run the relay self-test (§5.3.1) on this install's transport. */

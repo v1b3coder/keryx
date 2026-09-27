@@ -3,25 +3,33 @@
  * one install has exactly one wake-up transport.
  *
  * - web / PWA: the browser's PushManager — the endpoint leg (§6.2),
- * - iOS/Android (Expo): the app's local notifications; the relay's remote
- *   wake-up legs (WebPush endpoints / FCM topics) need a native module and
- *   are a follow-up, so polling is the backstop for now.
+ * - Android with Google services: FCM topics — the topic leg (§6.1),
+ * - de-Googled Android: a UnifiedPush distributor (ntfy today) — the same
+ *   endpoint leg as the browser, over the distributor's connection (§6.3),
+ * - iOS (and Android without either): Expo local notifications only; polling
+ *   is the backstop.
  *
  * The choice is a capability probe, not a user setting.
  */
 
-export type PushTransport = 'webpush' | 'expo' | 'none';
+export type PushTransport = 'webpush' | 'fcm' | 'unifiedpush' | 'expo' | 'none';
 
 export interface PushSupport {
   /** the browser PushManager (web/PWA) */
   webpush: boolean;
-  /** Expo local notifications (iOS/Android) */
+  /** Google services present (the FCM topic leg) */
+  fcm: boolean;
+  /** installed UnifiedPush distributors (ntfy today) */
+  unifiedPush: { available: boolean; distributors: string[] };
+  /** Expo local notifications (iOS, or Android without a native leg) */
   expo: boolean;
 }
 
 /** Pick the transport for a probed device. */
 export function pushTransport(support: PushSupport): PushTransport {
   if (support.webpush) return 'webpush';
+  if (support.fcm) return 'fcm';
+  if (support.unifiedPush.available) return 'unifiedpush';
   if (support.expo) return 'expo';
   return 'none';
 }

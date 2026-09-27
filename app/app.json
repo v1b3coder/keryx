@@ -14,6 +14,7 @@
     },
     "ios": {
       "bundleIdentifier": "cz.v1b3coder.keryx",
+      "buildNumber": "6",
       "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "Scan the company QR code to subscribe to its messages.",
@@ -25,6 +26,7 @@
     },
     "android": {
       "package": "cz.v1b3coder.keryx",
+      "versionCode": 600,
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.POST_NOTIFICATIONS"

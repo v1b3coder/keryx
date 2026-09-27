@@ -1,0 +1,6 @@
+{
+  "platforms": ["android"],
+  "android": {
+    "modules": ["cz.v1b3coder.keryx.push.KeryxPushModule"]
+  }
+}

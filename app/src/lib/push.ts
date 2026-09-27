@@ -19,7 +19,7 @@ export async function pushSupport(): Promise<PushSupport> {
     typeof navigator !== 'undefined' &&
     'serviceWorker' in navigator &&
     'PushManager' in window;
-  return { webpush, expo: false };
+  return { webpush, fcm: false, unifiedPush: { available: false, distributors: [] }, expo: false };
 }
 
 /** The transport this install should use right now. */

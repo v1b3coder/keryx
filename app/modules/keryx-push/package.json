@@ -1,0 +1,9 @@
+{
+  "name": "keryx-push",
+  "version": "0.6.0",
+  "main": "index.ts",
+  "private": true,
+  "peerDependencies": {
+    "expo": "*"
+  }
+}
