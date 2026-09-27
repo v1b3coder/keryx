@@ -11,6 +11,13 @@ import { pushTransport, type PushSupport, type PushTransport } from './push-shar
 export type { PushSupport, PushTransport } from './push-shared';
 export { pushTransport };
 
+/**
+ * The ntfy install page (native-only UI). The web target never shows it — a
+ * browser without PushManager is `unsupported`, not `no-transport` — but the
+ * export must exist for the platform-neutral type surface.
+ */
+export const NTFY_INSTALL_URL = 'https://ntfy.sh/#subscribe-phone';
+
 /** Probe the transports available on this target. */
 export async function pushSupport(): Promise<PushSupport> {
   const webpush =

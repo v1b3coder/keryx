@@ -16,17 +16,28 @@ import { pushTransport, type PushSupport, type PushTransport } from './push-shar
 export type { PushSupport, PushTransport } from './push-shared';
 export { pushTransport };
 
+/**
+ * The ntfy install page: F-Droid and Google Play builds, plus direct APKs. A
+ * de-Googled phone has no other way to receive wake-ups.
+ */
+export const NTFY_INSTALL_URL = 'https://ntfy.sh/#subscribe-phone';
+
 /** Probe the transports available on this target. */
 export async function pushSupport(): Promise<PushSupport> {
   if (Platform.OS !== 'android') {
     return { webpush: false, fcm: false, unifiedPush: { available: false, distributors: [] }, expo: true };
   }
+  if (!KeryxPush) {
+    // a build without the native module (or Expo Go) has no relay leg: the
+    // Android no-transport state must stay visible, not be masked as working
+    return { webpush: false, fcm: false, unifiedPush: { available: false, distributors: [] }, expo: false };
+  }
   try {
     const native = await nativePushSupport();
     return { webpush: false, fcm: native.fcm, unifiedPush: native.unifiedPush, expo: false };
   } catch {
-    // a broken probe must not leave the app without a state; polling remains
-    return { webpush: false, fcm: false, unifiedPush: { available: false, distributors: [] }, expo: true };
+    // a broken probe must not claim wake-ups work; polling remains the backstop
+    return { webpush: false, fcm: false, unifiedPush: { available: false, distributors: [] }, expo: false };
   }
 }
 
@@ -52,26 +63,26 @@ function native(): KeryxPushNativeModule | null {
  * before giving up. Expo-only installs have no relay leg.
  */
 export async function ensurePushWakeups(companies: CompanyRecord[]): Promise<void> {
-  const transport = await currentPushTransport();
-  if (transport === 'fcm') {
+  const support = await pushSupport();
+  if (support.fcm) {
     if ((await ensureFcmTopics(companies)) !== undefined) {
       await dropEndpointRegistration();
       return;
     }
     // the FCM topic subscribe failed: fall back to UnifiedPush
   }
-  if (transport === 'unifiedpush') {
+  if (support.unifiedPush.available) {
     await ensureRelayRegistration(companies);
   }
 }
 
 /** Whether this install's wake-ups are set up for the given company. */
 export async function wakeupsCurrent(company: CompanyRecord): Promise<boolean> {
-  const transport = await currentPushTransport();
-  if (transport === 'fcm') return fcmTopicsSynced(await getAllCompanies());
+  const support = await pushSupport();
+  if (support.fcm) return fcmTopicsSynced(await getAllCompanies());
   // the native build can show local notices; polling remains the backstop
-  if (transport === 'expo') return true;
-  if (transport !== 'unifiedpush') return false;
+  if (pushTransport(support) === 'expo') return true;
+  if (!support.unifiedPush.available) return false;
   const base = relayBaseUrl();
   if (!base) return false;
   const relay = await ensureRelayRegistration(await getAllCompanies());
