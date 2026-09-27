@@ -167,7 +167,7 @@ export async function deleteCompany(origin: string): Promise<void> {
     if (item?.origin === origin) await removeKey(key);
   }
   for (const key of await keysWithPrefix(MEDIA_PREFIX)) {
-    const media = await readJson<CachedMedia>(key);
+    const media = await readJson<StoredMedia>(key);
     if (media?.origin === origin) await removeKey(key);
   }
 }
@@ -262,7 +262,12 @@ interface StoredMedia {
 export async function getMedia(url: string): Promise<CachedMedia | undefined> {
   const rec = await readJson<StoredMedia>(MEDIA_PREFIX + url);
   if (!rec) return undefined;
-  return { ...rec, bytes: toArrayBuffer(base64urlToBytes(rec.bytes)) };
+  try {
+    return { ...rec, bytes: toArrayBuffer(base64urlToBytes(rec.bytes)) };
+  } catch {
+    // a corrupt cache entry is a cache miss, never a crash: the caller refetches
+    return undefined;
+  }
 }
 
 export async function putMedia(entry: CachedMedia): Promise<void> {
@@ -394,7 +399,12 @@ export async function putPendingTest(t: PendingTest): Promise<void> {
 }
 
 export async function pendingTest(baseUrl: string): Promise<PendingTest | undefined> {
-  return getRelayState<PendingTest>(`test\u0000${baseUrl}`);
+  const rec = await getRelayState<PendingTest & { key?: string }>(`test\u0000${baseUrl}`);
+  if (!rec) return undefined;
+  // the stored record carries the relay-state key; the API returns the pending
+  // test itself (the web store strips it too)
+  const { key: _key, ...test } = rec;
+  return test;
 }
 
 export async function clearPendingTest(baseUrl: string): Promise<void> {
