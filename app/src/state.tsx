@@ -41,7 +41,7 @@ import {
   type NotificationState,
   type SelfTestResult,
 } from './lib/notify';
-import { ensurePushWakeups, pushSupport } from './lib/push';
+import { currentPushTransport, ensurePushWakeups, pushSupport } from './lib/push';
 import { KeryxPush, nativePushSource } from './lib/native-push';
 import { pushVerifyState } from './lib/verify-state';
 import { initDebugBuild } from './lib/build';
@@ -95,12 +95,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // same green tail, while a test from before a reload is never shown
   const sessionTestPending = useRef(false);
 
-  /** Whether this session's in-flight self-test landed at the worker. */
+  /**
+   * Whether this session's in-flight self-test landed. A relay self-test lands
+   * as a recorded nonce in the worker; the native local-notice self-test (iOS)
+   * has no worker leg at all, so its own delivery is the whole confirmation.
+   */
   const testLandedThisSession = useCallback(async (): Promise<boolean> => {
     if (!sessionTestPending.current) return false;
+    sessionTestPending.current = false;
+    if ((await currentPushTransport()) === 'expo') return true;
     const base = relayBaseUrl();
     const pending = base ? await pendingTest(base) : undefined;
-    sessionTestPending.current = false;
     return Boolean(pending?.receivedAt);
   }, []);
 
@@ -268,18 +273,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (document.visibilityState !== 'visible') return;
       onForeground();
     };
-    if (Platform.OS === 'web' && typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', onVisibility);
+    // Web: visibilitychange. iOS/Android: AppState (the browser event does not
+    // exist there). react-native-web backs AppState with visibilitychange, so
+    // registering both would run the whole foreground work twice per return.
+    if (Platform.OS === 'web') {
+      if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility);
+      return () => {
+        if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility);
+      };
     }
     const appState = AppState.addEventListener('change', (state) => {
       if (state === 'active') onForeground();
     });
-    return () => {
-      if (Platform.OS === 'web' && typeof document !== 'undefined') {
-        document.removeEventListener('visibilitychange', onVisibility);
-      }
-      appState.remove();
-    };
+    return () => appState.remove();
   }, [
     refreshNotificationState,
     runRelayCheck,

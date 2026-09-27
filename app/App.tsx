@@ -7,7 +7,7 @@
  * target is the installable PWA (Expo web + the custom service worker).
  */
 import { useEffect, useState } from 'react';
-import { Platform, View } from 'react-native';
+import { BackHandler, Platform, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import * as Linking from 'expo-linking';
@@ -16,6 +16,7 @@ import { AddCompany } from './src/ui/AddCompany';
 import { Contacts } from './src/ui/Contacts';
 import { CompanyView } from './src/ui/Company';
 import { Body, Button, Screen, Spinner, Title } from './src/ui/components';
+import { BuildStamp } from './src/ui/BuildStamp';
 import { getAllItems, getCompany, getItems, type CompanyRecord, type StoredItem } from './src/lib/store';
 import { joinUrlFromDeepLink } from './src/lib/payload';
 import { spacing } from './src/theme';
@@ -48,6 +49,27 @@ function Root() {
   useEffect(() => {
     if (Platform.OS === 'web') registerServiceWorker();
   }, []);
+
+  // Android hardware back: the app's routing is component state, so without this
+  // the gesture would exit the app from any screen instead of going back one
+  // step (the Capacitor WebView used browser history for the same effect).
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (view.t === 'add') {
+        if (view.repairOrigin) setView({ t: 'company', origin: view.repairOrigin });
+        else if (view.from === 'contacts' || companies.length > 1) setView({ t: 'contacts' });
+        else setView({ t: 'start' });
+        return true;
+      }
+      if (view.t === 'company' && companies.length > 1) {
+        setView({ t: 'contacts' });
+        return true;
+      }
+      return false; // start: let the system handle it (exit)
+    });
+    return () => sub.remove();
+  }, [view, companies.length]);
 
   // Contacts shows unread counts; refresh them whenever the list is shown
   // or the company set changes (e.g. after a sync or Remove company).
@@ -83,18 +105,32 @@ function Root() {
   }, [loaded, companies]);
 
   // A deep link (`?domain=&p=`) starts pairing immediately, then drops the
-  // params so a reload does not re-trigger pairing.
+  // params so a reload does not re-trigger pairing. Both the initial URL (cold
+  // start) and later `url` events (a link tapped while the app runs) are handled.
   useEffect(() => {
-    const initial = Linking.getInitialURL();
-    void initial.then((url) => {
-      if (!url) return;
-      const parsed = new URL(url);
+    const open = (url: string) => {
+      let parsed: URL;
+      try {
+        parsed = new URL(url);
+      } catch {
+        return;
+      }
       const domain = parsed.searchParams.get('domain');
       if (!domain) return;
       const join = joinUrlFromDeepLink(domain, parsed.searchParams.get('p'));
       if (!join) return;
       setView({ t: 'add', from: 'start', deepLink: join });
+      // the web keeps the query string in the address bar: strip it so a reload
+      // does not start pairing again
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.history.replaceState(null, '', window.location.pathname + window.location.hash);
+      }
+    };
+    void Linking.getInitialURL().then((url) => {
+      if (url) open(url);
     });
+    const sub = Linking.addEventListener('url', ({ url }) => open(url));
+    return () => sub.remove();
   }, []);
 
   if (!loaded) {
@@ -157,6 +193,7 @@ function Root() {
           This build checks for new messages while it is open; timely wake-ups need
           notifications on.
         </Body>
+        <BuildStamp />
       </View>
     </Screen>
   );
