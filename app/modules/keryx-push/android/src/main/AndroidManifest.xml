@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- The FCM topic leg: Google's SDK delivers §4 envelopes here on
+             devices with Google Play services. The priority beats
+             expo-notifications' own handler (priority -1), which stays as the
+             fallback for local notices. -->
+        <service
+            android:name=".KeryxFcmService"
+            android:exported="false">
+            <intent-filter android:priority="100">
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- The UnifiedPush connector service: the distributor delivers §4
+             envelopes here on de-Googled devices. -->
+        <service
+            android:name=".KeryxUnifiedPushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
+            </intent-filter>
+        </service>
+    </application>
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+        Android 11+ package visibility: the transport probe must be able to
+        discover installed UnifiedPush distributors (ntfy).
+    -->
+    <queries>
+        <intent>
+            <action android:name="org.unifiedpush.android.distributor.REGISTER" />
+        </intent>
+    </queries>
+</manifest>
