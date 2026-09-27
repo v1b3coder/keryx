@@ -5,16 +5,16 @@
  */
 import { useEffect, useState } from 'react';
 import * as Clipboard from 'expo-clipboard';
-import { Platform, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { parseJoinUrl, type JoinPayload } from '../lib/payload';
 import { buildPairingOffer, createCompanyFromOffer, type PairingOffer } from '../lib/pair';
 import { syncCompany } from '../lib/sync';
 import { getItems, deleteItems } from '../lib/store';
 import { nativeNotificationGranted, permissionState, type SelfTestResult } from '../lib/notify';
-import { wakeupsCurrent } from '../lib/push';
+import { wakeupsCurrent, openExternal, NTFY_INSTALL_URL } from '../lib/push';
 import { CompanyLogo } from './CompanyLogo';
 import { useApp } from '../state';
-import { Alert, Body, Button, Card, Chip, Mono, Screen, Small, Spinner, Title, Toggle } from './components';
+import { Alert, Body, Button, Card, Mono, Screen, Small, Spinner, Title, Toggle } from './components';
 import { ScanScreen } from './ScanScreen';
 import { radius, spacing, type, usePalette } from '../theme';
 
@@ -197,7 +197,22 @@ export function AddCompany({
   }
 
   if (step.t === 'consent') {
-    return <ConsentScreen offer={step.offer} onSubscribe={subscribe} onBack={() => setStep({ t: 'input' })} />;
+    return (
+      <ConsentScreen
+        offer={step.offer}
+        onSubscribe={subscribe}
+        // Back returns to the origin confirmation, not the paste/scan input: the
+        // user confirms what they already fetched instead of starting over
+        onBack={() =>
+          setStep({
+            t: 'confirm',
+            origin: step.offer.origin,
+            joinUrl: step.offer.joinUrl,
+            payload: parseJoinUrl(step.offer.joinUrl).payload,
+          })
+        }
+      />
+    );
   }
 
   if (step.t === 'notifications') {
@@ -261,13 +276,20 @@ function ConsentScreen({
         <Small muted>Tap to subscribe to each channel. You can change this later.</Small>
 
         {offer.channels.map((ch) => (
-          <View key={ch.name} style={[styles.row, { borderBottomColor: c.border }]}>
+          <Pressable
+            key={ch.name}
+            accessibilityRole="switch"
+            accessibilityLabel={ch.displayName}
+            accessibilityState={{ checked: selected.has(ch.name) }}
+            onPress={() => toggle(ch.name)}
+            style={[styles.row, { borderBottomColor: c.border }]}
+          >
             <View style={{ flex: 1, minWidth: 0 }}>
               <Body>{ch.displayName}</Body>
               {ch.description ? <Small muted>{ch.description}</Small> : null}
             </View>
-            <Chip label={selected.has(ch.name) ? 'On' : 'Off'} on={selected.has(ch.name)} onPress={() => toggle(ch.name)} />
-          </View>
+            <Toggle on={selected.has(ch.name)} />
+          </Pressable>
         ))}
 
         {offer.privateFeeds.length > 0 ? (
@@ -314,6 +336,10 @@ function ConsentScreen({
  * The first-company "Turn on notifications" screen: the only prompt surface,
  * with no skip. On iOS/Android the native permission dialog is the tap; on the
  * web the button tap is the user gesture the browser requires.
+ *
+ * The app-wide state gates the screen first: an install with no wake-up
+ * transport gets the ntfy guidance instead of a prompt it cannot satisfy, and
+ * the probe still running shows a neutral spinner.
  */
 function NotificationsScreen({
   onEnable,
@@ -324,7 +350,7 @@ function NotificationsScreen({
 }) {
   const c = usePalette();
   const [phase, setPhase] = useState<'idle' | 'busy' | 'pending' | 'failed' | 'green'>('idle');
-  const { notification } = useApp();
+  const { notification, actions } = useApp();
 
   useEffect(() => {
     if (phase !== 'pending') return;
@@ -337,6 +363,38 @@ function NotificationsScreen({
     const t = setTimeout(onDone, 2000);
     return () => clearTimeout(t);
   }, [phase, onDone]);
+
+  if (notification.kind === 'checking') {
+    return (
+      <Screen>
+        <View style={styles.pad}>
+          <Title>Notifications</Title>
+          <Spinner label="Checking notifications…" />
+        </View>
+      </Screen>
+    );
+  }
+
+  if (notification.kind === 'no-transport') {
+    return (
+      <Screen>
+        <View style={styles.pad}>
+          <Title>Notifications need ntfy</Title>
+          <Body muted>
+            This phone has no Google services, so Keryx uses ntfy — a free, open-source push app — to
+            deliver timely updates.
+          </Body>
+          <Small muted>Install ntfy, then let it run so wake-ups are not delayed.</Small>
+          <Button title="Install ntfy" onPress={() => void openExternal(NTFY_INSTALL_URL)} />
+          <Button
+            title="Check again"
+            variant="secondary"
+            onPress={() => void actions.checkNotifications()}
+          />
+        </View>
+      </Screen>
+    );
+  }
 
   return (
     <Screen>
@@ -366,7 +424,7 @@ function NotificationsScreen({
         ) : phase === 'failed' ? (
           <Alert danger>
             <Body>
-              {notification.leg === 'endpoint' && Platform.OS !== 'web'
+              {notification.leg === 'topic'
                 ? 'Notifications could not be set up. Try again.'
                 : 'Notifications are off. Allow them in your system settings, then try again.'}
             </Body>
