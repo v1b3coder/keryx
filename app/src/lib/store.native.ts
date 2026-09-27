@@ -104,8 +104,22 @@ const MEDIA_PREFIX = 'media:';
 const RELAY_PREFIX = 'relay:';
 const REG_PREFIX = 'registration:';
 
+/**
+ * SQLite stores TEXT as a C string: a NUL byte terminates it, so a key like
+ * `item:<origin>\0public:<channel>\0<id>` would silently collapse to
+ * `item:<origin>` and every item would overwrite the previous one. Escape the NUL
+ * separators before they reach the store (and unescape on the way out).
+ */
+const KEY_ESCAPE = '\u241f';
+function encodeKey(key: string): string {
+  return key.split('\u0000').join(KEY_ESCAPE);
+}
+function decodeKey(key: string): string {
+  return key.split(KEY_ESCAPE).join('\u0000');
+}
+
 async function readJson<T>(key: string): Promise<T | undefined> {
-  const raw = await Storage.getItemAsync(key);
+  const raw = await Storage.getItemAsync(encodeKey(key));
   if (raw === null) return undefined;
   try {
     return JSON.parse(raw) as T;
@@ -115,12 +129,17 @@ async function readJson<T>(key: string): Promise<T | undefined> {
 }
 
 async function writeJson(key: string, value: unknown): Promise<void> {
-  await Storage.setItemAsync(key, JSON.stringify(value));
+  await Storage.setItemAsync(encodeKey(key), JSON.stringify(value));
+}
+
+async function removeKey(key: string): Promise<void> {
+  await Storage.removeItemAsync(encodeKey(key));
 }
 
 async function keysWithPrefix(prefix: string): Promise<string[]> {
+  const encoded = encodeKey(prefix);
   const keys = await Storage.getAllKeysAsync();
-  return keys.filter((k) => k.startsWith(prefix));
+  return keys.filter((k) => k.startsWith(encoded)).map(decodeKey);
 }
 
 // --- companies ---
@@ -142,14 +161,14 @@ export async function putCompany(company: CompanyRecord): Promise<void> {
 }
 
 export async function deleteCompany(origin: string): Promise<void> {
-  await Storage.removeItemAsync(COMPANY_PREFIX + origin);
+  await removeKey(COMPANY_PREFIX + origin);
   for (const key of await keysWithPrefix(ITEM_PREFIX)) {
     const item = await readJson<StoredItem>(key);
-    if (item?.origin === origin) await Storage.removeItemAsync(key);
+    if (item?.origin === origin) await removeKey(key);
   }
   for (const key of await keysWithPrefix(MEDIA_PREFIX)) {
     const media = await readJson<CachedMedia>(key);
-    if (media?.origin === origin) await Storage.removeItemAsync(key);
+    if (media?.origin === origin) await removeKey(key);
   }
 }
 
@@ -170,7 +189,7 @@ export async function putRegistration(reg: RelayRegistration): Promise<void> {
 }
 
 export async function deleteRegistrationRecord(baseUrl: string): Promise<void> {
-  await Storage.removeItemAsync(REG_PREFIX + baseUrl);
+  await removeKey(REG_PREFIX + baseUrl);
 }
 
 // --- items ---
@@ -189,8 +208,14 @@ export function privateFeedKey(url: string): string {
 
 export async function getAllItems(): Promise<StoredItem[]> {
   const keys = await keysWithPrefix(ITEM_PREFIX);
-  const list = await Promise.all(keys.map((k) => readJson<StoredItem>(k)));
-  return list.filter((i): i is StoredItem => !!i);
+  const entries = await Promise.all(
+    keys.map(async (key) => ({ key, item: await readJson<StoredItem>(key) })),
+  );
+  // A key must match the item's own id: a legacy key truncated at a NUL byte
+  // (written before the key escaping existed) would otherwise surface a duplicate.
+  return entries
+    .filter((e): e is { key: string; item: StoredItem } => !!e.item && e.key === ITEM_PREFIX + e.item.id)
+    .map((e) => e.item);
 }
 
 export async function getItems(origin: string): Promise<StoredItem[]> {
@@ -206,7 +231,7 @@ export async function putItems(items: StoredItem[]): Promise<void> {
 }
 
 export async function deleteItems(ids: string[]): Promise<void> {
-  for (const id of ids) await Storage.removeItemAsync(ITEM_PREFIX + id);
+  for (const id of ids) await removeKey(ITEM_PREFIX + id);
 }
 
 export async function markRead(origin: string, feedKey: string, itemId: string, read: boolean): Promise<void> {
@@ -250,7 +275,7 @@ export async function putMedia(entry: CachedMedia): Promise<void> {
 export async function deleteMediaFor(origin: string): Promise<void> {
   for (const key of await keysWithPrefix(MEDIA_PREFIX)) {
     const media = await readJson<StoredMedia>(key);
-    if (media?.origin === origin) await Storage.removeItemAsync(key);
+    if (media?.origin === origin) await removeKey(key);
   }
 }
 
@@ -351,7 +376,7 @@ export async function pendingRecoveries(): Promise<PendingRecovery[]> {
 }
 
 export async function clearPendingRecovery(origin: string): Promise<void> {
-  await Storage.removeItemAsync(RELAY_PREFIX + `recovery-pending\u0000${origin}`);
+  await removeKey(RELAY_PREFIX + `recovery-pending\u0000${origin}`);
 }
 
 /** The pending self-test the service worker matches by nonce (§5.3.1). */
@@ -373,7 +398,7 @@ export async function pendingTest(baseUrl: string): Promise<PendingTest | undefi
 }
 
 export async function clearPendingTest(baseUrl: string): Promise<void> {
-  await Storage.removeItemAsync(RELAY_PREFIX + `test\u0000${baseUrl}`);
+  await removeKey(RELAY_PREFIX + `test\u0000${baseUrl}`);
 }
 
 export function makeCompany(
