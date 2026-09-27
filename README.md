@@ -129,8 +129,9 @@ security reviewers → `design/threats.md`; everyone else → `design/why.md`.
 - `sdk/` — reference **publisher SDK + `pub` CLI** (Go, go-tuf v2 +
   OLPC + Ed25519): the full publisher lifecycle (keys, channels, authors,
   private feeds, ceremonies, join/QR, deploy); see `sdk/README.md`
-- `app/` — reference demo **web client** (Vite + React + TS): PWA +
-  Capacitor Android/iOS; see `app/README.md`
+- `app/` — reference demo **client** (Expo SDK 57 / React Native + TS):
+  one codebase for iOS, Android and the installable web/PWA (Expo web);
+  see `app/README.md`
 - `examples/` — small showcase consumers of the publisher SDK, each a
   separate module (own `go.mod`, `replace` to `../sdk`); `examples/sdk-artifact`
   generates a minimal signed artifact
@@ -145,7 +146,7 @@ Run a local demo (a fresh, independent artifact signed for localhost):
 ```
 make demo DEMO_REPO=/tmp/keryx-demo DEMO_KEYS_DIR=/tmp/keryx-demo-keys DEMO_BASE=http://localhost:8000
 make serve-demo DEMO_REPO=/tmp/keryx-demo   # serve it at http://localhost:8000 (CORS-enabled)
-make app-dev                                # web client at http://localhost:5173
+make app-dev                                # Expo dev server (iOS/Android/web)
 ```
 
 Then paste the join URL from `/tmp/keryx-demo/join.txt` into the client (or
@@ -155,5 +156,5 @@ it renders). The homepage also has a generic join link without a payload.
 Regenerate the published demo with `make demo` (release keys required, see the
 Demo section), or verify it with `make demo-verify`.
 
-See `make help` for the full task list (builds, tests, the relay and the Android
-APK).
+See `make help` for the full task list (builds, tests, the relay and the Expo
+apps).

@@ -1,7 +1,8 @@
 # Keryx — common build and verification tasks.
 #
 # Layout: sdk/ (publisher SDK + pub CLI), relay/ (notification relay),
-# demo-tool/ (SDK-backed demo site generator), app/ (PWA / Capacitor client).
+# demo-tool/ (SDK-backed demo site generator), app/ (Expo client:
+# iOS + Android + web/PWA).
 #
 # Run `make` (or `make help`) for the target list.
 
@@ -120,17 +121,17 @@ $(APP_DEPS_STAMP): $(APP_DIR)/package-lock.json
 	cd $(APP_DIR) && $(NPM) install
 	@touch $(APP_DEPS_STAMP)
 
-.PHONY: app-install app-dev app-build app-build-pages app-test app-test-sdk app-icons apk
+.PHONY: app-install app-dev app-build app-build-pages app-test app-test-sdk app-icons app-android app-ios
 app-install: $(APP_DEPS_STAMP) ## Install the app dependencies (npm install)
 
-app-dev: $(APP_DEPS_STAMP) ## Run the app dev server (Vite)
-	cd $(APP_DIR) && $(NPM) run dev
+app-dev: $(APP_DEPS_STAMP) ## Run the app dev server (Expo)
+	cd $(APP_DIR) && $(NPM) start
 
-app-build: $(APP_DEPS_STAMP) ## Build the PWA into app/dist
-	cd $(APP_DIR) && $(NPM) run build
+app-build: $(APP_DEPS_STAMP) ## Build the web/PWA export into app/dist (plus the service worker)
+	cd $(APP_DIR) && $(NPM) run build:web && $(NPM) run build:sw
 
-app-build-pages: $(APP_DEPS_STAMP) ## Build the PWA for a GitHub Pages project site
-	cd $(APP_DIR) && VITE_BASE=/keryx/ $(NPM) run build
+app-build-pages: app-build ## Build the web/PWA export for a GitHub Pages project site
+	# the /keryx/ base is baked into app.json (experiments.baseUrl)
 
 app-test: $(DEMO_REPO)/join.txt $(APP_DEPS_STAMP) ## Run the protocol tests against the generated demo
 	cd $(APP_DIR) && KERYX_DEMO_DIR=$(abspath $(DEMO_REPO)) KERYX_KEYSTORE=$(abspath $(DEMO_KEYS_DIR)) $(NPM) test
@@ -141,8 +142,11 @@ app-test-sdk: demo-sdk $(APP_DEPS_STAMP) ## Run the protocol tests against an SD
 app-icons: $(APP_DEPS_STAMP) ## Regenerate the PWA icons
 	cd $(APP_DIR) && $(NPM) run icons
 
-apk: $(APP_DEPS_STAMP) ## Build the Android debug APK (needs the Android SDK)
-	cd $(APP_DIR) && $(NPM) run cap:android
+app-android: $(APP_DEPS_STAMP) ## Build and run the Android app locally (needs the Android SDK)
+	cd $(APP_DIR) && $(NPM) run android
+
+app-ios: $(APP_DEPS_STAMP) ## Build and run the iOS app locally (needs macOS + Xcode)
+	cd $(APP_DIR) && $(NPM) run ios
 
 # Generate the demo on first use; `make demo` regenerates explicitly.
 $(DEMO_REPO)/join.txt:

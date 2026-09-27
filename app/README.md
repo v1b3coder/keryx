@@ -1,12 +1,12 @@
 # Keryx — app (reference client)
 
 Reference **client** for the Keryx protocol (see `../spec/`, `../design/` and
-the publisher demo in `../demo`). One codebase, four targets:
+the publisher demo in `../demo`). One Expo codebase, three targets:
 
-- **Web** — plain Vite + React + TypeScript app
-- **PWA** — installable, offline-capable (service worker via vite-plugin-pwa)
-- **Android** — Capacitor native shell (`android/`, WebView + MLKit QR scanner)
-- **iOS** — Capacitor native shell (`ios/`, WebView + MLKit QR scanner)
+- **iOS** — Expo (React Native) native app, built with EAS Build
+- **Android** — Expo (React Native) native app, built with EAS Build
+- **Web / PWA** — Expo web export, installable and offline-capable (custom
+  service worker)
 
 It implements the client flow end to end (spec/clients.md §1): QR/paste join
 URL → confirm the origin (the only human step, plain ASCII, nothing else on
@@ -25,11 +25,11 @@ PII, no per-user state anywhere.
 ```bash
 make demo DEMO_REPO=/tmp/keryx-demo DEMO_KEYS_DIR=/tmp/keryx-demo-keys DEMO_BASE=http://localhost:8000
 make serve-demo DEMO_REPO=/tmp/keryx-demo   # serve it at http://localhost:8000 (CORS-enabled)
-make app-dev                                # web client (Vite prints the port)
+make app-dev                                # Expo dev server (iOS/Android/web)
 ```
 
-Then open the printed URL, tap **Add a company**, and paste the join URL from
-`/tmp/keryx-demo/join.txt` (or open the demo join link —
+Then open the printed URL (or the web export), tap **Add a company**, and
+paste the join URL from `/tmp/keryx-demo/join.txt` (or open the demo join link —
 `/tmp/keryx-demo/join/?p=…` — and scan the QR code it renders). The flow:
 confirm the origin
 `localhost:8000` → choose channels (suggested ones preselected, you tap to
@@ -37,32 +37,30 @@ subscribe) → subscribe → verified inbox.
 
 > The demo artifact signs metadata for `http://localhost:8000` (a
 > local-dev exception: the app allows HTTP for private feeds on loopback and
-> RFC 1918 private addresses; Android permits cleartext only for this demo
-> host via `network_security_config.xml`). A real deployment uses the
-> company's HTTPS origin.
+> RFC 1918 private addresses in debug builds only). A real deployment uses
+> the company's HTTPS origin.
 
 ## Deployment
 
-`main` builds and publishes to GitHub Pages automatically
-(`.github/workflows/deploy-pages.yml`): https://v1b3coder.github.io/keryx/
-
-The Pages build is a project site, so the workflow sets `VITE_BASE=/keryx/`
-(see `vite.config.ts`); `start_url`, `scope`, icon and asset URLs are relative
-or base-relative. Local dev and the Capacitor builds use the default `/`,
-so the same source works unmodified for Android/iOS. The manifest + service
-worker come from vite-plugin-pwa
-(`autoUpdate`, workbox precache of the whole `dist/`).
+The web/PWA target is an Expo web export (`npx expo export --platform web`)
+with the custom service worker from `scripts/build-sw.mjs`; the `/keryx/` base
+for the GitHub Pages project site is baked into `app.json`
+(`experiments.baseUrl`). The native targets are built with **EAS Build**
+(`eas build -p ios|android`), see `eas.json`; the iOS build needs the
+maintainer's Apple account, Android gets an EAS-managed keystore. The PWA
+manifest and icons live in `public/`.
 
 ## Scripts
 
 | Script | Purpose |
 |---|---|
-| `npm run dev` | Vite dev server (HMR) |
+| `npm start` | Expo dev server (Metro; iOS/Android/web) |
 | `npm run test` | Vitest protocol + relay tests against the real `../demo` artifacts |
-| `npm run build` | Production build + PWA service worker (`dist/`) |
+| `npm run build:web` | Expo web export into `dist/` |
+| `npm run build:sw` | Bundle `src/sw.ts` into `dist/sw.js` (workbox precache) |
 | `npm run icons` | Regenerate PWA icons (`public/icons/`) |
-| `npm run cap:sync` | Build + sync web assets into `android/` and `ios/` |
-| `npm run cap:android` | Build + sync + assemble Android debug APK |
+| `npm run android` | Build and run the Android app locally |
+| `npm run ios` | Build and run the iOS app locally (macOS + Xcode) |
 
 ## What's implemented (vs. the spec)
 
@@ -171,18 +169,16 @@ worker come from vite-plugin-pwa
   permission, one push subscription, one relay record holding the union of every
   followed company's topics (see
   [`../design/notifications.md`](../design/notifications.md)). Configure
-  `VITE_RELAY_URL` and `VITE_VAPID_PUBLIC` at build time to enable it;
-  without them the app runs exactly as before (polling is the backstop).
+  `EXPO_PUBLIC_RELAY_URL` and `EXPO_PUBLIC_VAPID_PUBLIC` at build time to
+  enable it; without them the app runs exactly as before (polling is the
+  backstop).
 
-**Android transport:** the Android shell probes the wake-up transport at startup
-and on `visibilitychange` (FCM > UnifiedPush > none). The FCM probe is the real
-`GoogleApiAvailability` check; when Google services are present the shell subscribes
-the Firebase SDK to the union of every followed company's topics (relay spec §6.1,
-registry-free and anonymous — the relay never learns the device's FCM token). A
-de-Googled device registers with the ntfy UnifiedPush distributor, which delivers
-the same §4 envelope through the connector service; the native worker verifies it
-against a mirrored verification state, acks, shows the generic notice and queues it
-for the JS layer. See
+**iOS/Android transport:** the Expo build shows local notices (Expo
+notifications) and checks for new messages on the foreground/polling path. The
+relay's remote wake-up legs (the FCM topic leg and the UnifiedPush/ntfy
+endpoint leg) need a native module and are a documented follow-up — the previous
+Capacitor shell's Java implementation (`KeryxPushPlugin`, `KeryxFcmService`,
+`KeryxPushService`) is the reference for it. See
 [`../design/notifications.md`](../design/notifications.md) "Transport selection".
 
 ## Relay wake-ups (optional)
@@ -191,14 +187,15 @@ A production build uses the **staging relay by default**
 (`DEFAULT_RELAY_URL`/`DEFAULT_VAPID_PUBLIC` in `src/lib/relay.ts`:
 `https://keryx-relay.fly.dev` plus the public half of its
 `RELAY_VAPID_PRIVATE`), so the published PWA receives wake-ups with no build
-configuration. `VITE_RELAY_URL` and `VITE_VAPID_PUBLIC` override that — the
-local harness build does. Dev and test builds without the variables run without a
-relay (polling is the backstop).
+configuration. `EXPO_PUBLIC_RELAY_URL` and `EXPO_PUBLIC_VAPID_PUBLIC`
+override that — the local harness build does. Dev and test builds without the
+variables run without a relay (polling is the backstop).
 
-The app then derives the same topic as the relay, registers the installation's
-WebPush subscription, and the service worker verifies each wake-up against the
-topic's exact scope before reconciling content. Local builds that should reach the
-staging relay need `http://localhost:4173` in the relay's `RELAY_CORS_ORIGINS`.
+The web app then derives the same topic as the relay, registers the
+installation's WebPush subscription, and the service worker verifies each wake-up
+against the topic's exact scope before reconciling content. Local builds that
+should reach the staging relay need `http://localhost:4173` in the relay's
+`RELAY_CORS_ORIGINS`.
 
 ### Notification states and the self-test
 
@@ -225,9 +222,7 @@ self-test silently.
 | Granted, no subscription | `getSubscription() === null` | red bar + "Turn on" |
 | Registered, relay says gone | heartbeat `404`/`401` | red bar + "Re-subscribe" |
 | Registered, test failed | self-test per-leg result | red bar + the failing leg |
-| Android, FCM topic set out of sync | native `getTopics` ≠ the followed union | red bar + "Re-subscribe" |
-| Android, topic test not confirmed | topic-leg self-test result | neutral "sent — not confirmed yet" |
-| Android, no transport | no Google services and no UnifiedPush distributor | red bar + "Install ntfy" |
+| iOS/Android, no remote wake-up leg yet | the Expo build has local notices only | neutral note; polling continues |
 
 After a denial no browser shows the prompt again, so "Check again" re-reads
 the permission and subscription state instead of re-prompting; the wording is
@@ -235,13 +230,13 @@ generic ("allow notifications in your browser or system settings") plus one help
 URL. The state is re-checked on `visibilitychange` and after every sync, so the
 bar clears itself once the user unblocks notifications.
 
-"Check notifications" runs the relay's self-test (§5.3.1): one test delivery per
-leg, reported per leg — browser wake-up delivered/not delivered (the PWA's service
-worker or the UnifiedPush connector) and native wake-up sent/not sent (the FCM
-handler; device receipt is unobservable). The in-flight state is never red: a green
+"Check notifications" runs the relay's self-test (§5.3.1) on the web: one test
+delivery, reported per leg — browser wake-up delivered/not delivered (the
+PWA's service worker). On iOS/Android the self-test is one local notice plus the
+native permission. The in-flight state is never red: a green
 "Notifications are working" appears on success and auto-dismisses into no bar — it is
 the enable flow's tail, shown only in the session that ran it, never after a reload.
-A slow topic leg shows neutral "sent — not confirmed yet" and upgrades to green if
+A slow leg shows neutral "still on its way" and upgrades to green if
 it arrives later in the same session. Red appears only on a definitive failure, with
 the failing leg and "Try again". It replaces a "no wake-up for N days" heuristic,
 which would false-positive on companies that publish rarely.
@@ -262,13 +257,22 @@ The full live path (a real browser push subscription and a real notification)
 was also run with `relay/cmd/relay-harness`: it serves a resealed copy of
 `../keryx-demo` over local HTTPS, exposes `/test/info` + `/test/publish`, and
 the browser's service worker verified the relay's wake-up and showed the notice.
-Build the app with `VITE_RELAY_URL` and `VITE_VAPID_PUBLIC` to repeat it.
+Build the app with `EXPO_PUBLIC_RELAY_URL` and `EXPO_PUBLIC_VAPID_PUBLIC` to
+repeat it.
 
 ## Architecture
 
 ```
+App.tsx             root: routing (start / add / contacts / company)
+src/state.tsx       app state + sync orchestration
+src/theme.ts        design tokens (light/dark, type scale, spacing)
+src/ui/             screens: components, AddCompany (input → confirm →
+                    consent → notifications), Contacts, Company (full-article
+                    feed + settings sheet), ScanScreen, SanitizedHtml
+                    (+ .native WebView), LinkConfirm, CompanyLogo,
+                    NotificationBanner, BuildStamp
 src/lib/            protocol core (framework-free, unit-tested)
-  bytes.ts          hex / base64url / sha256
+  bytes.ts          hex / base64url (portable) / sha256
   ed.ts             Ed25519 verification (noble)
   olpc.ts           OLPC canonical JSON (TUF metadata)
   pattern.ts        URL pattern (origin-exact, segment wildcard) + TUF path glob
@@ -282,14 +286,19 @@ src/lib/            protocol core (framework-free, unit-tested)
   sync.ts           sync engine (metadata chain → channel roles → hash-pinned
                     items → private feeds → verify → store)
   pair.ts           pairing flow (TOFU + consent summary + subscribe)
-  store.ts          IndexedDB (companies, verified items, media) + prefs
-  media.ts          image loading with image/attachment/logo hash checks
+  store.ts          web IndexedDB store (companies, verified items, media)
+  store.native.ts   the same store over expo-sqlite/kv-store (iOS/Android)
+  media.ts          web image loading (object URLs) + hash checks
+  media.native.ts   native image loading (data URLs) + hash checks
+  media-shared.ts   the shared media rules (pins, size limit)
   format.ts         date/domain helpers + local filtering (language + tags)
-  scan.ts           QR scan: Capacitor MLKit (native) / BarcodeDetector or
-                    jsQR (web)
-src/state.tsx       app state + sync orchestration
-src/ui/             screens: AddCompany (input → confirm → consent), Contacts,
-                    Company (full-article feed + settings sheet), SanitizedHtml
+  env.ts            build config: EXPO_PUBLIC_* (relay URL, VAPID, commit)
+  pwa.ts            the web service-worker registration
+  push.ts           web push transport (PushManager + relay registration)
+  push.native.ts    iOS/Android push transport (Expo notifications)
+  push-shared.ts    the shared transport selection
+  notify.ts         web notification state machine + relay self-test
+  notify.native.ts  iOS/Android notification state + local self-test
 src/lib/protocol.test.ts  tests against the real ../demo artifacts
 src/lib/relay.ts       relay protocol: topic/scope derivation, wake-up parse +
                        Ed25519 threshold verification, registration client
@@ -297,7 +306,8 @@ src/lib/relay-sw.ts    service-worker wake-up handling: replay, recovery
                        cooldown, content reconciliation, topic bindings
 src/lib/relay.test.ts  topic derivation + the relay-emitted wake-up fixture
 src/lib/relay-sw.test.ts  handlePush against fake-indexeddb
-src/sw.ts              custom service worker (workbox precache + push)
+src/sw.ts              custom web service worker (workbox precache + push)
+scripts/build-sw.mjs   the web export's precache manifest + sw bundle
 ```
 
 ## Protocol tests
@@ -321,14 +331,18 @@ that the app consumes SDK-generated content.
 
 ## Native
 
-- `android/`, `ios/` are generated by Capacitor (`npx cap add android|ios`)
-  and wrapped by `npm run cap:sync` after each web build.
-- QR scanning: `@capacitor-mlkit/barcode-scanning` (native, on-device model —
-  no Play Services dependency) with BarcodeDetector/jsQR fallback (web).
-  Camera permission is declared in `AndroidManifest.xml` and
-  `ios/App/App/Info.plist`.
-- Build the APK: `npm run cap:android` (requires Android SDK; the iOS build
-  requires macOS + Xcode).
+- `eas.json` defines the EAS build profiles; `npx expo prebuild` (or EAS
+  Build) generates `android/`/`ios/` from `app.json` (CNG), so they are not
+  committed.
+- QR scanning: `expo-camera` (`CameraView` + `onBarcodeScanned`, on-device
+  barcode detection; the camera permission is declared in `app.json`).
+- Build the native apps: `eas build -p ios` / `eas build -p android` (the iOS
+  build needs the maintainer's Apple account; Android gets an EAS-managed
+  keystore). Local `npm run ios`/`npm run android` need Xcode/Android SDK.
+- Push: the web/PWA keeps the browser PushManager + relay registration. On
+  iOS/Android the app uses Expo notifications for permission and local
+  notices; the relay's remote wake-up legs (FCM topics / UnifiedPush) need a
+  native module and are a documented follow-up, so polling is the backstop.
 
 ## Design
 
