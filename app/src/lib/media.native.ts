@@ -1,30 +1,26 @@
 /**
- * Media loading with integrity checks: `image_sha256` / `attachments[].sha256`
- * (spec/feeds.md §1.1) and `custom.logo_sha256` (spec/repository.md §2).
- * Bytes are cached in IndexedDB; a mismatch makes the resource unavailable
- * (placeholder) — the item itself stays valid.
+ * Media loading with integrity checks for iOS/Android (React Native):
+ * `image_sha256` / `attachments[].sha256` (spec/feeds.md §1.1) and
+ * `custom.logo_sha256` (spec/repository.md §2). Bytes are cached in the
+ * native store; a mismatch makes the resource unavailable (placeholder) —
+ * the item itself stays valid. Images render from a data URL so no
+ * unverified byte is ever handed to the image loader.
  */
 
 import { getMedia, putMedia } from './store';
-import { sha256Hex } from './bytes';
+import { bytesToBase64url, sha256Hex } from './bytes';
 import { logoDisplayable, readLimitedBody, mimeOf } from './media-shared';
 
 export { logoDisplayable, readLimitedBody };
 
-const objectUrlCache = new Map<string, string>();
-
-function objectUrlFor(url: string, bytes: ArrayBuffer, mime: string): string {
-  let existing = objectUrlCache.get(url);
-  if (existing) return existing;
-  existing = URL.createObjectURL(new Blob([bytes], { type: mime || 'image/*' }));
-  objectUrlCache.set(url, existing);
-  return existing;
+function dataUrlFor(bytes: ArrayBuffer, mime: string): string {
+  return `data:${mime};base64,${bytesToBase64url(new Uint8Array(bytes))}`;
 }
 
 /**
- * Load an image URL, optionally verifying its SHA-256. Returns an object URL
- * for rendering, or null when the resource is unavailable (fetch error or
- * hash mismatch — never rendered).
+ * Load an image URL, optionally verifying its SHA-256. Returns a data URL for
+ * rendering, or null when the resource is unavailable (fetch error or hash
+ * mismatch — never rendered).
  */
 export async function loadImage(url: string, origin: string, expectedSha?: unknown): Promise<string | null> {
   // a present non-string pin can never verify — unavailable, never rendered
@@ -33,7 +29,7 @@ export async function loadImage(url: string, origin: string, expectedSha?: unkno
   const cached = await getMedia(url);
   if (cached) {
     if (want && sha256Hex(new Uint8Array(cached.bytes)) !== want) return null;
-    return objectUrlFor(url, cached.bytes, cached.mime);
+    return dataUrlFor(cached.bytes, cached.mime);
   }
   let res: Response;
   try {
@@ -46,5 +42,5 @@ export async function loadImage(url: string, origin: string, expectedSha?: unkno
   if (want && sha256Hex(new Uint8Array(bytes)) !== want) return null;
   const mime = mimeOf(url, res.headers.get('content-type'));
   await putMedia({ url, origin, bytes, mime, at: Date.now() });
-  return objectUrlFor(url, bytes, mime);
+  return dataUrlFor(bytes, mime);
 }

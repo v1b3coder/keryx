@@ -23,21 +23,41 @@ export function bytesToHex(bytes: Uint8Array): string {
   return s;
 }
 
-/** base64url without padding (RFC 4648 §5). */
+const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+/** base64url without padding (RFC 4648 §5), portable (no btoa/atob). */
 export function bytesToBase64url(bytes: Uint8Array): string {
-  let s = '';
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i];
+    const b1 = bytes[i + 1];
+    const b2 = bytes[i + 2];
+    out += B64_ALPHABET[b0 >> 2];
+    out += B64_ALPHABET[((b0 & 3) << 4) | ((b1 ?? 0) >> 4)];
+    if (b1 === undefined) break;
+    out += B64_ALPHABET[((b1 & 15) << 2) | ((b2 ?? 0) >> 6)];
+    if (b2 === undefined) break;
+    out += B64_ALPHABET[b2 & 63];
+  }
+  return out;
 }
 
 export function base64urlToBytes(s: string): Uint8Array {
   if (!/^[A-Za-z0-9_-]*$/.test(s) || s.length % 4 === 1) {
     throw new Error('invalid base64url string');
   }
-  const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
-  const bin = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  const out = new Uint8Array(Math.floor((s.length * 6) / 8));
+  let bits = 0;
+  let value = 0;
+  let j = 0;
+  for (const ch of s) {
+    value = (value << 6) | B64_ALPHABET.indexOf(ch);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out[j++] = (value >> bits) & 0xff;
+    }
+  }
   return out;
 }
 

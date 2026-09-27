@@ -4,7 +4,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
+import { AppState, Platform } from 'react-native';
 import {
   getAllCompanies,
   getAllItems,
@@ -27,10 +27,8 @@ import {
   checkRelayRegistration,
   ensureRelayRegistration,
   FOREGROUND_CHECK_INTERVAL_MS,
-  handlePush,
   heartbeatRelay,
   RECOVERY_COOLDOWN_MS,
-  setSubscriptionSource,
 } from './lib/relay-sw';
 import { relayBaseUrl, vapidPublicKey } from './lib/relay';
 import {
@@ -41,8 +39,7 @@ import {
   type NotificationState,
   type SelfTestResult,
 } from './lib/notify';
-import { nativePushSource, ensurePushWakeups, pushSupport } from './lib/push';
-import { KeryxPush } from './lib/native-push';
+import { ensurePushWakeups } from './lib/push';
 import { pushVerifyState } from './lib/verify-state';
 import { initDebugBuild } from './lib/build';
 import { safeFetch } from './lib/urlpolicy';
@@ -205,38 +202,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [syncCompanyNow]);
 
-  /**
-   * One native payload (the UnifiedPush connector or the FCM handler): verify,
-   * announce and catch up. Shared by the live listener and the queue drain.
-   */
-  const processNativePayload = useCallback(
-    async (payload: string) => {
-      const outcome = await handlePush(payload);
-      if (outcome.accepted && !outcome.test) {
-        await KeryxPush.showNotification({
-          title: outcome.title ?? 'Keryx',
-          body: outcome.body ?? 'New update available',
-          tag: outcome.topic ? `keryx-${outcome.topic}` : undefined,
-        });
-      }
-      await pushVerifyState();
-      if (outcome.accepted) await catchUpOnWakeups();
-    },
-    [catchUpOnWakeups],
-  );
-
-  /**
-   * Drain the native queue (Android). A wake-up or self-test that arrives
-   * while the page is paused is only queued natively, so it is processed here
-   * when the app returns to the foreground — a late nonce then upgrades the
-   * state to green without a restart.
-   */
-  const drainNativeMessages = useCallback(async () => {
-    for (const payload of (await KeryxPush.drainMessages()).messages) {
-      await processNativePayload(payload);
-    }
-  }, [processNativePayload]);
-
   useEffect(() => {
     initDebugBuild();
     void (async () => {
@@ -254,58 +219,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
     void runRelayCheck();
     // the banner re-checks when the app returns to the foreground, so an
     // in-flight test that landed in the background upgrades to green, and the
-    // page drains any wake-up the worker recorded
-    const onVisible = () => {
-      if (document.visibilityState !== 'visible') return;
+    // page drains any wake-up the worker recorded. Web: visibilitychange;
+    // iOS/Android: AppState (the browser event does not exist there).
+    const onForeground = () => {
       void refreshNotificationState();
       void runRelayCheck();
       void drainPendingRecoveries();
-      void drainNativeMessages();
       void catchUpOnWakeups();
     };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      onForeground();
+    };
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility);
+    }
+    const appState = AppState.addEventListener('change', (state) => {
+      if (state === 'active') onForeground();
+    });
+    return () => {
+      if (Platform.OS === 'web' && typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility);
+      }
+      appState.remove();
+    };
   }, [
     refreshNotificationState,
     runRelayCheck,
     drainPendingRecoveries,
-    drainNativeMessages,
     catchUpOnWakeups,
   ]);
-
-  // Android wake-ups arrive through the UnifiedPush connector: install the
-  // native subscription source, register on every start, drain the native queue
-  // and re-verify each payload with the full TUF state (the worker only gates)
-  useEffect(() => {
-    if (Capacitor.getPlatform() !== 'android') return;
-    let listener: PluginListenerHandle | undefined;
-    void (async () => {
-      setSubscriptionSource(nativePushSource);
-      const support = await pushSupport();
-      if (!support.fcm) {
-        // the UnifiedPush connector is the endpoint leg's source; FCM needs none
-        const vapid = vapidPublicKey();
-        if (vapid) {
-          try {
-            await KeryxPush.register({ vapid });
-          } catch {
-            // the probe keeps the no-transport state; polling remains the backstop
-          }
-        }
-      }
-      listener = await KeryxPush.addListener('push', ({ payload }) => {
-        void processNativePayload(payload);
-      });
-      await drainNativeMessages();
-      await ensurePushWakeups(await getAllCompanies());
-      await pushVerifyState();
-      await catchUpOnWakeups();
-    })();
-    return () => {
-      void listener?.remove();
-      setSubscriptionSource(null);
-    };
-  }, [processNativePayload, drainNativeMessages, catchUpOnWakeups]);
 
   // while a self-test is in flight, re-read the app-wide state so a late
   // nonce upgrades it to green without user action
@@ -318,6 +261,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // the service worker tells us when a wake-up was accepted: the page owns
   // the content sync (and its recovery), so sync and re-read the store
   useEffect(() => {
+    if (Platform.OS !== 'web') return;
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
     const onMessage = (event: MessageEvent) => {
       if ((event.data as { type?: string } | null)?.type !== 'keryx-sync') return;
@@ -359,14 +303,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
           c.name === channel ? { ...c, followed, isNew: false } : c,
         );
         await putCompany({ ...company, channels });
-        // keep the relay registration's followed-topic union in step (§5.3)
-        await ensurePushWakeups(await getAllCompanies());
+        // The native verify mirror is the notice gate and must never lag the
+        // store: it is pushed before the transport work below, which can hang or
+        // fail, so a wake-up for a just-unfollowed channel is already dropped.
         await pushVerifyState();
         setCompanies(await getAllCompanies());
+        // keep the relay registration's followed-topic union in step (§5.3)
+        await ensurePushWakeups(await getAllCompanies());
       },
       async enableNotifications() {
-        if (Capacitor.getPlatform() === 'android') {
-          // the native permission is the source of truth (POST_NOTIFICATIONS);
+        if (Platform.OS !== 'web') {
+          // the native permission is the source of truth (iOS/Android);
           // the WebView's Notification API is not usable
           if (!(await requestNativeNotificationPermission())) {
             setNotification(await notificationState());
@@ -436,9 +383,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await deleteCompany(origin);
         itemsRef.current = itemsRef.current.filter((i) => i.origin !== origin);
         setCompanies(await getAllCompanies());
+        // the mirror must drop the removed company's topics before the transport
+        // work below, which can hang or fail
+        await pushVerifyState();
         // drop the relay registration when no followed topic remains (§5.3)
         await ensurePushWakeups(await getAllCompanies());
-        await pushVerifyState();
       },
       async saveCompany(company, newItems) {
         await putCompany(company);

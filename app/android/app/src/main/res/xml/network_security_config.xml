@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!--
-  Release builds: the Keryx protocol is HTTPS-only. Cleartext HTTP is not
-  permitted anywhere, so an http:// join URL or feed can never be fetched.
--->
-<network-security-config>
-    <base-config cleartextTrafficPermitted="false" />
-</network-security-config>

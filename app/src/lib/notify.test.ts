@@ -1,17 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { notificationState, runSelfTest } from './notify';
-import { nativePushSupport, KeryxPush } from './native-push';
-
-vi.mock('./native-push', () => ({
-  nativePushSupport: vi.fn(),
-  KeryxPush: {
-    getNotificationPermission: vi.fn(),
-    requestNotificationPermission: vi.fn(),
-    setTopics: vi.fn(),
-    getTopics: vi.fn(),
-  },
-}));
 import {
   putCompany,
   putRegistration,
@@ -55,7 +44,7 @@ function stubPermission(permission: NotificationPermission) {
   vi.stubGlobal('window', { isSecureContext: true, PushManager: class {} });
 }
 
-describe('notification state machine', () => {
+describe('notification state machine (web/PWA)', () => {
   it('reports unsupported when the browser has no push manager', async () => {
     vi.stubGlobal('Notification', undefined);
     expect((await notificationState()).kind).toBe('unsupported');
@@ -72,45 +61,8 @@ describe('notification state machine', () => {
 
   it('reports no-subscription when permission is granted and nothing is registered', async () => {
     stubPermission('granted');
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
-    expect((await notificationState()).kind).toBe('no-subscription');
-    vi.unstubAllEnvs();
-    vi.unstubAllGlobals();
-  });
-});
-
-describe('notification state machine: Android transports', () => {
-  it('asks for ntfy when there is no Google services and no distributor', async () => {
-    vi.stubGlobal('androidBridge', {});
-    vi.mocked(nativePushSupport).mockResolvedValue({
-      fcm: false,
-      unifiedPush: { available: false, distributors: [] },
-    });
-    expect((await notificationState()).kind).toBe('no-transport');
-    vi.unstubAllGlobals();
-  });
-
-  it('reports default when a distributor is installed but the native permission is off', async () => {
-    vi.stubGlobal('androidBridge', {});
-    vi.mocked(nativePushSupport).mockResolvedValue({
-      fcm: false,
-      unifiedPush: { available: true, distributors: ['io.heckel.ntfy'] },
-    });
-    vi.mocked(KeryxPush.getNotificationPermission).mockResolvedValue({ granted: false });
-    expect((await notificationState()).kind).toBe('default');
-    vi.unstubAllGlobals();
-  });
-
-  it('runs the ordinary registration flow when ntfy is ready and permitted', async () => {
-    vi.stubGlobal('androidBridge', {});
-    vi.mocked(nativePushSupport).mockResolvedValue({
-      fcm: false,
-      unifiedPush: { available: true, distributors: ['io.heckel.ntfy'] },
-    });
-    vi.mocked(KeryxPush.getNotificationPermission).mockResolvedValue({ granted: true });
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    vi.stubEnv('EXPO_PUBLIC_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('EXPO_PUBLIC_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     expect((await notificationState()).kind).toBe('no-subscription');
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
@@ -120,8 +72,8 @@ describe('notification state machine: Android transports', () => {
 describe('notification state machine: in-flight self-test', () => {
   it('reports pending while the test nonce is still awaited, then ok when it arrives', async () => {
     stubPermission('granted');
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    vi.stubEnv('EXPO_PUBLIC_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('EXPO_PUBLIC_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     const c = company();
     await putCompany(c);
     const topics = topicBindings(c);
@@ -143,8 +95,8 @@ describe('notification state machine: in-flight self-test', () => {
   });
 
   it('treats a missing registration like a dead endpoint', async () => {
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    vi.stubEnv('EXPO_PUBLIC_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('EXPO_PUBLIC_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     const c = company();
     await putCompany(c);
     await putRegistration({ baseUrl: 'https://relay.example', id: 'old', managementToken: 'old-token', topics: topicBindings(c) });
@@ -185,93 +137,6 @@ describe('notification state machine: in-flight self-test', () => {
     await clearPendingTest('https://relay.example');
     await deleteRegistrationRecord('https://relay.example');
     await deleteCompany(c.origin);
-    vi.unstubAllEnvs();
-    vi.unstubAllGlobals();
-  });
-});
-
-describe('notification state machine: FCM topic leg', () => {
-  it('reports unregistered while the topic set is out of sync', async () => {
-    vi.stubGlobal('androidBridge', {});
-    vi.mocked(nativePushSupport).mockResolvedValue({
-      fcm: true,
-      unifiedPush: { available: false, distributors: [] },
-    });
-    vi.mocked(KeryxPush.getNotificationPermission).mockResolvedValue({ granted: true });
-    vi.mocked(KeryxPush.getTopics).mockResolvedValue({ topics: [] });
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    const c = company();
-    await putCompany(c);
-    expect((await notificationState()).kind).toBe('unregistered');
-    vi.mocked(KeryxPush.getTopics).mockResolvedValue({ topics: Object.keys(topicBindings(c)) });
-    expect((await notificationState()).kind).toBe('ok');
-    await deleteCompany(origin);
-    vi.unstubAllEnvs();
-    vi.unstubAllGlobals();
-  });
-
-  it('dispatches the self-test to the topic leg', async () => {
-    vi.stubGlobal('androidBridge', {});
-    vi.mocked(nativePushSupport).mockResolvedValue({
-      fcm: true,
-      unifiedPush: { available: false, distributors: [] },
-    });
-    vi.mocked(KeryxPush.getNotificationPermission).mockResolvedValue({ granted: true });
-    vi.mocked(KeryxPush.setTopics).mockResolvedValue({ topics: [] });
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    vi.stubGlobal('fetch', async (url: string) => {
-      if (String(url).endsWith('/v1/fcm/test')) {
-        return new Response(
-          JSON.stringify({
-            test_id: 'id',
-            topic: 'topic',
-            nonce: 'n',
-            expires_at: new Date(Date.now() + 60_000).toISOString(),
-          }),
-          { status: 202 },
-        );
-      }
-      // the ready call publishes: record the nonce as received
-      const pending = await pendingTest('https://relay.example');
-      if (pending) await putPendingTest({ ...pending, receivedAt: Date.now() });
-      return new Response(null, { status: 204 });
-    });
-    const result = await runSelfTest([company()]);
-    expect(result.endpoint).toBe('delivered');
-    expect(result.leg).toBe('topic');
-    await clearPendingTest('https://relay.example');
-    vi.unstubAllEnvs();
-    vi.unstubAllGlobals();
-  });
-});
-
-describe('notification state machine: slow topic-leg self-test', () => {
-  it('keeps a pending topic-leg test neutral and upgrades it when the nonce lands', async () => {
-    vi.stubGlobal('androidBridge', {});
-    vi.mocked(nativePushSupport).mockResolvedValue({
-      fcm: true,
-      unifiedPush: { available: false, distributors: [] },
-    });
-    vi.mocked(KeryxPush.getNotificationPermission).mockResolvedValue({ granted: true });
-    // the native set still holds the test topic and does not match the union
-    vi.mocked(KeryxPush.getTopics).mockResolvedValue({ topics: ['stale-topic'] });
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    await putCompany(company());
-    await putPendingTest({
-      baseUrl: 'https://relay.example',
-      nonce: 'A'.repeat(43),
-      topic: 'test-topic',
-      expiresAt: Date.now() + 60_000,
-    });
-    // in flight: neutral, never the red "re-subscribe" state
-    expect((await notificationState()).kind).toBe('pending');
-    const pending = await pendingTest('https://relay.example');
-    await putPendingTest({ ...pending!, receivedAt: Date.now() });
-    const ok = await notificationState();
-    expect(ok.kind).toBe('ok');
-    expect(ok.testedAt).toBeGreaterThan(0);
-    await clearPendingTest('https://relay.example');
-    await deleteCompany(origin);
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });

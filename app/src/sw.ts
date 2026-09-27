@@ -3,11 +3,16 @@
  * Custom service worker: workbox precache (offline app shell) plus the relay
  * wake-up handler (relay/SPECIFICATION.md §4.2). The browser decrypts the
  * RFC 8291 payload, so the `push` event data is the plaintext §4 envelope.
+ *
+ * The precache manifest is injected by scripts/build-sw.mjs after the Expo web
+ * export (the Vite workbox plugin's equivalent).
  */
 import { precacheAndRoute } from 'workbox-precaching';
 import { handlePush } from './lib/relay-sw';
 
-declare const self: ServiceWorkerGlobalScope;
+declare const self: ServiceWorkerGlobalScope & {
+  __WB_MANIFEST: Array<{ url: string; revision: string | null }>;
+};
 
 declare global {
   // The Notifications API supports renotify (alert again when replacing a
@@ -19,7 +24,7 @@ declare global {
 
 // A new build must take over immediately: without this the old worker keeps
 // serving its precached bundle on installed (mobile) PWAs until every client is
-// closed. The page reloads once when the controller changes (src/main.tsx).
+// closed. The page reloads once when the controller changes (src/lib/pwa.ts).
 self.skipWaiting();
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 

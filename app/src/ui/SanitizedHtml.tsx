@@ -1,8 +1,9 @@
 /**
- * Sandboxed rich content: DOMPurify-sanitized HTML (no scripts, no forms,
- * no iframes/embeds — the "channel never asks for a password, seed, or code"
- * promise is structural), links intercepted with their real destination
- * domain shown, media hash-verified against `attachments[].sha256` when present.
+ * Sandboxed rich content on the web: DOMPurify-sanitized HTML (no scripts,
+ * no forms, no iframes/embeds — the "channel never asks for a password,
+ * seed, or code" promise is structural), links intercepted with their real
+ * destination domain shown, media hash-verified against
+ * `attachments[].sha256` when present.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -10,6 +11,7 @@ import DOMPurify from 'dompurify';
 import { domainOf } from '../lib/format';
 import { loadImage } from '../lib/media';
 import type { FeedItem } from '../lib/item';
+import { LinkConfirm } from './LinkConfirm';
 
 const ALLOWED_TAGS = [
   'p', 'br', 'strong', 'em', 'b', 'i', 'u', 's', 'sub', 'sup', 'a', 'ul', 'ol', 'li',
@@ -107,28 +109,4 @@ export function SanitizedHtml({
   );
 }
 
-/** Open a link after showing its real destination (no auto-open). */
-export function LinkConfirm({ url, onConfirm, onCancel }: { url: string; onConfirm: () => void; onCancel: () => void }) {
-  const domain = domainOf(url);
-  return (
-    <div className="sheet-backdrop" onClick={onCancel}>
-      <div className="sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="t-section" style={{ marginBottom: 4 }}>
-          Open external link?
-        </div>
-        <p className="t-small" style={{ marginTop: 0, wordBreak: 'break-all' }}>
-          This link goes to <span className="t-mono">{domain}</span>. It is not part of
-          the company's signed message.
-        </p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
-          <button className="btn btn-primary" onClick={onConfirm}>
-            Open {domain}
-          </button>
-          <button className="btn btn-secondary" onClick={onCancel}>
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+export { LinkConfirm };

@@ -1,0 +1,70 @@
+{
+  "expo": {
+    "name": "Keryx",
+    "slug": "keryx",
+    "version": "0.6.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "scheme": "keryx",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "bundleIdentifier": "cz.v1b3coder.keryx",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Scan the company QR code to subscribe to its messages.",
+        "UIBackgroundModes": [
+          "remote-notification"
+        ],
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "cz.v1b3coder.keryx",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.POST_NOTIFICATIONS"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0000ee"
+      },
+      "googleServicesFile": "./google-services.json"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Scan the company QR code to subscribe to its messages.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#0000ee",
+          "defaultChannel": "keryx-wakeup"
+        }
+      ]
+    ],
+    "experiments": {
+      "baseUrl": "/keryx/"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "2b6af5f5-2eb2-4346-a78b-dba9b2c066bc"
+      }
+    },
+    "owner": "slush0"
+  }
+}

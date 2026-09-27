@@ -3,13 +3,14 @@
  * single company the app opens it directly). Each card: logo, name, the
  * join origin as a persistent secondary line, unread count.
  */
-
-import { Plus } from '@phosphor-icons/react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { CompanyRecord, StoredItem } from '../lib/store';
 import type { AppActions } from '../state';
 import type { NotificationState } from '../lib/notify';
 import { CompanyLogo } from './CompanyLogo';
 import { NotificationBanner } from './NotificationBanner';
+import { Body, Button, Mono, Screen, Small, Title } from './components';
+import { spacing, type, usePalette } from '../theme';
 
 export function Contacts({
   companies,
@@ -28,19 +29,14 @@ export function Contacts({
   onOpen: (origin: string) => void;
   onAdd: () => void;
 }) {
+  const c = usePalette();
   return (
-    <div className="screen">
-      <div className="appbar">
-        <div className="appbar-inner">
-          <div className="t-section" style={{ flex: 1 }}>
-            Messages
-          </div>
-          <button className="iconbtn" onClick={onAdd} aria-label="Add company">
-            <Plus size={24} weight="bold" />
-          </button>
-        </div>
-      </div>
-      <div className="screen-pad" style={{ paddingTop: 8 }}>
+    <Screen>
+      <View style={styles.header}>
+        <Title style={{ flex: 1 }}>Messages</Title>
+        <Button title="Add" onPress={onAdd} />
+      </View>
+      <ScrollView contentContainerStyle={styles.list}>
         <NotificationBanner
           state={notification}
           freshTest={freshTest}
@@ -51,26 +47,63 @@ export function Contacts({
         {companies.map((company) => {
           const unread = items.filter((i) => i.origin === company.origin && !i.read).length;
           return (
-            <button key={company.origin} className="row" onClick={() => onOpen(company.origin)}>
+            <View key={company.origin} style={[styles.row, { borderBottomColor: c.border }]}>
               <CompanyLogo
                 url={company.targets.signed.custom?.logo}
                 origin={company.origin}
                 expectedSha={company.targets.signed.custom?.logo_sha256}
-                className="row-logo"
+                size={44}
               />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="t-body" style={{ fontWeight: 600 }}>
-                  {company.targets.signed.custom?.company_name ?? company.origin}
-                </div>
-                <div className="t-mono" style={{ fontSize: '0.75rem', color: 'var(--text-2)' }}>
-                  {company.origin}
-                </div>
-              </div>
-              {unread > 0 && <span className="unread">{unread > 99 ? '99+' : unread}</span>}
-            </button>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Button
+                  title={company.targets.signed.custom?.company_name ?? company.origin}
+                  variant="ghost"
+                  onPress={() => onOpen(company.origin)}
+                />
+                <Mono>{company.origin}</Mono>
+              </View>
+              {unread > 0 ? (
+                <View style={[styles.unread, { backgroundColor: c.accent }]}>
+                  <Text style={{ color: c.onAccent, fontSize: type.small, fontWeight: '700' }}>
+                    {unread > 99 ? '99+' : unread}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
           );
         })}
-      </div>
-    </div>
+        <Body muted style={styles.hint}>
+          Each card keeps the confirmed origin visible: that is the anchor the company name and logo
+          are shown against.
+        </Body>
+      </ScrollView>
+    </Screen>
   );
 }
+
+const styles = StyleSheet.create({
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing(1),
+    paddingHorizontal: spacing(2.5),
+    paddingVertical: spacing(1),
+  },
+  list: { paddingHorizontal: spacing(2.5), paddingBottom: spacing(4), gap: spacing(0.5) },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing(1.5),
+    paddingVertical: spacing(1.5),
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  unread: {
+    minWidth: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  hint: { marginTop: spacing(3) },
+});

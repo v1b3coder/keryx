@@ -1,56 +1,56 @@
 /**
- * Company logo with integrity check: `custom.logo_sha256` when present
- * (spec/repository.md §2) — on mismatch a neutral placeholder is shown and
- * nothing else is affected.
+ * Company logo: an inline data URL is self-authenticated by the metadata
+ * signature; a linked logo is hash-pinned by `logo_sha256` and shown only
+ * after the bytes verify. Anything else is a neutral placeholder — the company
+ * identity is never shown from unverified bytes (spec/repository.md §2).
  */
-
 import { useEffect, useState } from 'react';
-import { loadImage, logoDisplayable } from '../lib/media';
+import { Image, View, StyleSheet, Text } from 'react-native';
+import { loadImage } from '../lib/media';
+import { usePalette } from '../theme';
 
 export function CompanyLogo({
   url,
   origin,
   expectedSha,
-  size,
-  className,
+  size = 32,
 }: {
   url?: string;
   origin: string;
   expectedSha?: string;
   size?: number;
-  className?: string;
 }) {
+  const c = usePalette();
   const [src, setSrc] = useState<string | null>(null);
+
   useEffect(() => {
     let alive = true;
-    if (!url || !logoDisplayable(url, expectedSha)) {
-      // a linked logo without logo_sha256 is a metadata error: placeholder only
-      setSrc(null);
-      return;
-    }
-    void loadImage(url, origin, expectedSha).then((s) => {
-      if (alive) setSrc(s);
+    setSrc(null);
+    if (!url) return;
+    if (!url.startsWith('data:') && !expectedSha) return;
+    void loadImage(url, origin, expectedSha).then((loaded) => {
+      if (alive) setSrc(loaded);
     });
     return () => {
       alive = false;
     };
   }, [url, origin, expectedSha]);
 
-  if (!src) {
-    return (
-      <div
-        className={className ?? 'companybar-logo'}
-        style={{ width: size, height: size, borderRadius: size ? 12 : undefined }}
-        aria-hidden
-      />
-    );
-  }
+  const style = { width: size, height: size, borderRadius: size / 6 };
+  if (src) return <Image source={{ uri: src }} style={style} accessibilityIgnoresInvertColors />;
   return (
-    <img
-      className={className ?? 'companybar-logo'}
-      src={src}
-      alt=""
-      style={{ width: size, height: size, borderRadius: size ? 12 : undefined }}
-    />
+    <View style={[style, styles.placeholder, { backgroundColor: c.surface2, borderColor: c.border }]}>
+      <Text style={{ color: c.text2, fontSize: size / 2.5, fontWeight: '700' }}>
+        {(origin.replace(/^https?:\/\//, '')[0] ?? '?').toUpperCase()}
+      </Text>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  placeholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+});

@@ -179,7 +179,7 @@ describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
   });
 
   it('verifies a wake-up with the heartbeat as its only network call', async () => {
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('EXPO_PUBLIC_RELAY_URL', 'https://relay.example');
     const origin = newOrigin();
     await putCompany(company(origin));
     await putRegistration({
@@ -246,7 +246,7 @@ describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
       calls.push(String(url));
       return Promise.resolve(new Response(null, { status: 204 }));
     });
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('EXPO_PUBLIC_RELAY_URL', 'https://relay.example');
     const origin = newOrigin();
     await putCompany(company(origin));
     await putRegistration({
@@ -264,8 +264,8 @@ describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
   });
 
   it('leaves a gone registration to the page and does not recover on wake-up (§5.3)', async () => {
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    vi.stubEnv('EXPO_PUBLIC_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('EXPO_PUBLIC_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     const origin = newOrigin();
     await putCompany(company(origin));
     await putRegistration({
@@ -309,8 +309,8 @@ describe('handlePush (relay/SPECIFICATION.md §4.2)', () => {
   });
 
   it('does not recover on a heartbeat transport failure', async () => {
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    vi.stubEnv('EXPO_PUBLIC_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('EXPO_PUBLIC_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     const origin = newOrigin();
     await putCompany(company(origin));
     await putRegistration({
@@ -371,8 +371,8 @@ describe('wake-up envelope key separation', () => {
 
 describe('relay registration client (relay/SPECIFICATION.md §5.3)', () => {
   it('subscribes with the relay VAPID key and POSTs the registration', async () => {
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    vi.stubEnv('EXPO_PUBLIC_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('EXPO_PUBLIC_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     await deleteRegistrationRecord('https://relay.example');
     let captured: { url: string; body: string } | null = null;
     vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
@@ -396,8 +396,8 @@ describe('relay registration client (relay/SPECIFICATION.md §5.3)', () => {
   });
 
   it('recovers a gone registration with a fresh subscription and POST', async () => {
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    vi.stubEnv('EXPO_PUBLIC_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('EXPO_PUBLIC_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     await putRegistration({ baseUrl: 'https://relay.example', id: 'old', managementToken: 'old-token', topics: {} });
     let unsubscribed = false;
     vi.stubGlobal('navigator', {
@@ -437,8 +437,8 @@ describe('relay registration client (relay/SPECIFICATION.md §5.3)', () => {
   });
 
   it('never destroys a working subscription on a transport failure', async () => {
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    vi.stubEnv('EXPO_PUBLIC_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('EXPO_PUBLIC_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     await putRegistration({ baseUrl: 'https://relay.example', id: 'old', managementToken: 'old-token', topics: {} });
     let unsubscribed = false;
     vi.stubGlobal('navigator', {
@@ -466,8 +466,8 @@ describe('relay registration client (relay/SPECIFICATION.md §5.3)', () => {
   });
 
   it('obtains a fresh subscription when the endpoint is dead', async () => {
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    vi.stubEnv('EXPO_PUBLIC_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('EXPO_PUBLIC_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     await putRegistration({ baseUrl: 'https://relay.example', id: 'old', managementToken: 'old-token', topics: {} });
     let unsubscribed = false;
     vi.stubGlobal('navigator', {
@@ -501,8 +501,8 @@ describe('relay registration client (relay/SPECIFICATION.md §5.3)', () => {
   });
 
   it('checks the registration on foreground and recovers a gone one (§5.3)', async () => {
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    vi.stubEnv('EXPO_PUBLIC_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('EXPO_PUBLIC_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     const requests: string[] = [];
     vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
       requests.push(`${init.method} ${url}`);
@@ -535,8 +535,8 @@ describe('relay registration client (relay/SPECIFICATION.md §5.3)', () => {
   });
 
   it('recovers on foreground when the relay says gone (§5.3)', async () => {
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    vi.stubEnv('EXPO_PUBLIC_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('EXPO_PUBLIC_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     const origin = newOrigin();
     await putCompany(company(origin));
     await putRegistration({
@@ -576,8 +576,8 @@ describe('relay registration client (relay/SPECIFICATION.md §5.3)', () => {
   });
 
   it('reports a failed recovery when the relay is unreachable', async () => {
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    vi.stubEnv('EXPO_PUBLIC_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('EXPO_PUBLIC_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     await putRegistration({ baseUrl: 'https://relay.example', id: 'reg-1', managementToken: 'tok-1', topics: {} });
     vi.stubGlobal('navigator', {
       serviceWorker: {
@@ -601,8 +601,8 @@ describe('relay registration client (relay/SPECIFICATION.md §5.3)', () => {
   });
 
   it('registers the union of every company topic on one relay', async () => {
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    vi.stubEnv('EXPO_PUBLIC_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('EXPO_PUBLIC_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     await deleteRegistrationRecord('https://relay.example');
     const requests: string[] = [];
     vi.stubGlobal('fetch', (url: string, init: RequestInit) => {

@@ -1,13 +1,20 @@
 /**
- * The build's short git commit, injected by CI (lib/build.ts). A one-line
- * footer stamp so a running install can be told apart from a stale one.
+ * The build stamp: the short commit and the app version, so a running install
+ * can be told apart from a stale one (build.ts).
  */
+import { StyleSheet, View } from 'react-native';
 import { appVersion } from '../lib/build';
+import { Mono } from './components';
+import { spacing } from '../theme';
 
 export function BuildStamp() {
   return (
-    <div className="t-small t-muted" style={{ textAlign: 'center', padding: '12px 0 4px' }}>
-      Build {appVersion()}
-    </div>
+    <View style={styles.wrap}>
+      <Mono>build {appVersion()}</Mono>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  wrap: { paddingVertical: spacing(1) },
+});

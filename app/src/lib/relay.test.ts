@@ -192,8 +192,8 @@ describe('topic bindings (§10)', () => {
 
 describe('self-test client (§5.3.1)', () => {
   it('posts the self-test and returns the nonce', async () => {
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example');
-    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    vi.stubEnv('EXPO_PUBLIC_RELAY_URL', 'https://relay.example');
+    vi.stubEnv('EXPO_PUBLIC_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     let captured: { url: string; init: RequestInit } | null = null;
     vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
       captured = { url, init };
@@ -238,8 +238,8 @@ describe('relay configuration', () => {
   });
 
   it('lets the build override the relay and its VAPID key', () => {
-    vi.stubEnv('VITE_RELAY_URL', 'https://relay.example/');
-    vi.stubEnv('VITE_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
+    vi.stubEnv('EXPO_PUBLIC_RELAY_URL', 'https://relay.example/');
+    vi.stubEnv('EXPO_PUBLIC_VAPID_PUBLIC', 'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs');
     expect(relayBaseUrl()).toBe('https://relay.example');
     expect(vapidPublicKey()).toBe(
       'BP8R9RtW5iPVjjmii5jkxGWAs7Q0XJ85DcFnV-tjjcEV_KGPWDC4LyU5ZQPP2XaGYoCOxAdfs4WqDa9HAF0h8gs',

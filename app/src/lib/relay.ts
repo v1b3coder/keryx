@@ -14,6 +14,7 @@ import { olpcCanonical } from './olpc';
 import { ed25519Verify } from './ed';
 import type { AuthorizedKey, TargetsDoc } from './tuf';
 import { extractAuthorization } from './tuf';
+import { relayUrlEnv, vapidEnv, isProductionBuild } from './env';
 
 const encoder = new TextEncoder();
 
@@ -302,26 +303,27 @@ export interface PushSubscriptionKeys {
 
 /**
  * The staging relay (relay/fly.toml, relay/README.md "Deploy to Fly.io"). A
- * production build that sets neither VITE_RELAY_URL nor VITE_VAPID_PUBLIC uses it,
- * so the published PWA receives wake-ups by default; dev and test builds without
- * the variables stay offline (polling is the backstop).
+ * production build that sets neither EXPO_PUBLIC_RELAY_URL nor
+ * EXPO_PUBLIC_VAPID_PUBLIC uses it, so the published PWA receives wake-ups
+ * by default; dev and test builds without the variables stay offline (polling is
+ * the backstop).
  */
 export const DEFAULT_RELAY_URL = 'https://keryx-relay.fly.dev';
 export const DEFAULT_VAPID_PUBLIC =
   'BOJ7j2UTkiGYAKjEs5SiMiKl7UdQAhcKogExGAvbdzX0HE5CX48NS9q9Yo_eOJEhaDfdVUoDf7_dne5ABqd5YYY';
 
-/** The relay base URL: the build's VITE_RELAY_URL or the staging relay. */
+/** The relay base URL: the build's EXPO_PUBLIC_RELAY_URL or the staging relay. */
 export function relayBaseUrl(): string | null {
-  const url = import.meta.env.VITE_RELAY_URL;
-  if (typeof url === 'string' && url) return url.replace(/\/+$/, '');
-  return import.meta.env.PROD ? DEFAULT_RELAY_URL : null;
+  const url = relayUrlEnv();
+  if (url) return url.replace(/\/+$/, '');
+  return isProductionBuild() ? DEFAULT_RELAY_URL : null;
 }
 
-/** The VAPID public key: the build's VITE_VAPID_PUBLIC or the staging relay's. */
+/** The VAPID public key: the build's EXPO_PUBLIC_VAPID_PUBLIC or the staging relay's. */
 export function vapidPublicKey(): string | null {
-  const key = import.meta.env.VITE_VAPID_PUBLIC;
-  if (typeof key === 'string' && key) return key;
-  return import.meta.env.PROD ? DEFAULT_VAPID_PUBLIC : null;
+  const key = vapidEnv();
+  if (key) return key;
+  return isProductionBuild() ? DEFAULT_VAPID_PUBLIC : null;
 }
 
 async function relayFetch(baseUrl: string, path: string, init: RequestInit): Promise<Response> {

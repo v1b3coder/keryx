@@ -1,13 +1,13 @@
 /**
- * The app-wide notification state machine and self-test
+ * The app-wide notification state machine and self-test for the web/PWA
  * (relay/SPECIFICATION.md §4.3, §5.3.1; design/notifications.md).
  *
  * The relay is centralized, so everything here is per install: one browser
- * permission, one push subscription, one relay record holding the union of every
- * followed company's topics. Nothing durable is per company.
+ * permission, one push subscription, one relay record holding the union of
+ * every followed company's topics. Nothing durable is per company.
+ * iOS/Android use notify.native.ts (Expo local notifications).
  */
 
-import { Capacitor } from '@capacitor/core';
 import {
   clearPendingTest,
   getAllCompanies,
@@ -19,9 +19,7 @@ import {
 } from './store';
 import { relayBaseUrl, testRegistration, vapidPublicKey, RelayGone } from './relay';
 import { currentPushTransport } from './push';
-import { KeryxPush } from './native-push';
 import { ensureRelayRegistration, topicBindings, unionTopics } from './relay-sw';
-import { fcmTopicsSynced, runFcmSelfTest } from './fcm';
 import type { RelayRegistration } from './relay';
 
 export type NotificationStateKind =
@@ -34,13 +32,13 @@ export type NotificationStateKind =
   | 'pending'
   | 'failed'
   | 'ok'
-  /** Android: no FCM and no UnifiedPush distributor — install ntfy */
+  /** native-only: iOS/Android local notices; polling is the backstop */
   | 'no-transport';
 
 export interface NotificationState {
   kind: NotificationStateKind;
   /** the failing leg when kind === 'failed' */
-  leg?: 'endpoint' | 'registration' | 'topic';
+  leg?: 'endpoint' | 'registration';
   /** the last successful self-test (epoch ms) */
   testedAt?: number;
 }
@@ -54,59 +52,26 @@ export function permissionState(): NotificationPermission | 'unsupported' {
   return Notification.permission;
 }
 
-/** The native notification permission (Android; POST_NOTIFICATIONS). */
+/**
+ * The native permission helpers exist only in notify.native.ts; on the web the
+ * browser's own permission is the source of truth.
+ */
 export async function nativeNotificationGranted(): Promise<boolean> {
-  try {
-    return (await KeryxPush.getNotificationPermission()).granted;
-  } catch {
-    return false;
-  }
+  return false;
 }
 
-/** Ask for the native notification permission (Android; POST_NOTIFICATIONS). */
 export async function requestNativeNotificationPermission(): Promise<boolean> {
-  try {
-    return (await KeryxPush.requestNotificationPermission()).granted;
-  } catch {
-    return false;
-  }
+  return false;
 }
 
 /** The current app-wide notification state (no network, no prompt). */
 export async function notificationState(): Promise<NotificationState> {
   const transport = await currentPushTransport();
-  if (transport === 'none') {
-    // an Android install can fix this by installing ntfy; a browser without
-    // PushManager cannot (polling is its backstop)
-    return Capacitor.getPlatform() === 'android'
-      ? { kind: 'no-transport' }
-      : { kind: 'unsupported' };
-  }
-  if (transport === 'fcm') {
-    // The topic leg has no relay registration: the native permission is the
-    // source of truth and the native topic set is the local registration.
-    if (!(await nativeNotificationGranted())) return { kind: 'default' };
-    // An in-flight test is checked before the topic set: the subscribed test
-    // topic is expected until its capability expires, and a late nonce still
-    // upgrades the state to green instead of being masked by a stale topic set.
-    const base = relayBaseUrl();
-    const pending = base ? await pendingTest(base) : undefined;
-    if (pending?.receivedAt) return { kind: 'ok', testedAt: pending.receivedAt };
-    if (pending && Date.now() <= pending.expiresAt) return { kind: 'pending' };
-    const companies = await getAllCompanies();
-    if (!(await fcmTopicsSynced(companies))) return { kind: 'unregistered' };
-    return { kind: 'ok' };
-  }
-  if (transport === 'unifiedpush') {
-    // Android: the native permission is the source of truth (POST_NOTIFICATIONS);
-    // the WebView's Notification API is not usable
-    if (!(await nativeNotificationGranted())) return { kind: 'default' };
-  } else {
-    const permission = permissionState();
-    if (permission === 'unsupported') return { kind: 'unsupported' };
-    if (permission === 'default') return { kind: 'default' };
-    if (permission === 'denied') return { kind: 'denied' };
-  }
+  if (transport !== 'webpush') return { kind: 'unsupported' };
+  const permission = permissionState();
+  if (permission === 'unsupported') return { kind: 'unsupported' };
+  if (permission === 'default') return { kind: 'default' };
+  if (permission === 'denied') return { kind: 'denied' };
   const base = relayBaseUrl();
   const vapid = vapidPublicKey();
   if (!base || !vapid) return { kind: 'unsupported' };
@@ -144,15 +109,11 @@ export interface SelfTestResult {
   /** the last successful self-test (epoch ms) */
   testedAt?: number;
   /** the failing leg when endpoint === 'failed' */
-  leg: 'endpoint' | 'registration' | 'topic';
+  leg: 'endpoint' | 'registration';
 }
 
-/**
- * Run the relay self-test (§5.3.1) on this install's transport: the FCM
- * topic leg or the endpoint leg.
- */
+/** Run the relay self-test (§5.3.1) on this install's transport. */
 export async function runSelfTest(companies: CompanyRecord[]): Promise<SelfTestResult> {
-  if ((await currentPushTransport()) === 'fcm') return runFcmSelfTest(companies);
   return runEndpointSelfTest(companies);
 }
 
