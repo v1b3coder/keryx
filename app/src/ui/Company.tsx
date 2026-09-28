@@ -5,7 +5,7 @@
  * spec/core.md §2, §4.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert as RNAlert, FlatList, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View, type ViewToken } from 'react-native';
+import { ActivityIndicator, Alert as RNAlert, FlatList, Image, Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, View, type ViewToken } from 'react-native';
 import type { ChannelState, CompanyRecord, StoredItem } from '../lib/store';
 import { formatDate, formatDateTime, matchesFilter } from '../lib/format';
 import { loadImage } from '../lib/media';
@@ -17,8 +17,8 @@ import { LinkConfirm } from './LinkConfirm';
 import { NotificationBanner } from './NotificationBanner';
 import { BuildStamp } from './BuildStamp';
 import { useApp } from '../state';
-import { Alert, Body, Button, Card, Chip, Mono, Screen, Small, Title, Toggle } from './components';
-import { spacing, type, usePalette } from '../theme';
+import { Alert, Body, Button, Card, Chip, IconButton, Mono, Screen, Small, Title, Toggle } from './components';
+import { radius, size, spacing, type, usePalette } from '../theme';
 
 /**
  * Open an attachment after verifying its `sha256` when present
@@ -138,29 +138,44 @@ export function CompanyView({
 
   return (
     <Screen>
-      <View style={styles.appbar}>
-        {companies.length > 1 ? <Button title="‹" accessibilityLabel="Back" variant="ghost" onPress={onBack} /> : null}
-        <CompanyLogo
-          url={company.targets.signed.custom?.logo}
-          origin={company.origin}
-          expectedSha={company.targets.signed.custom?.logo_sha256}
-          size={36}
-        />
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Body>{company.targets.signed.custom?.company_name ?? company.origin}</Body>
-          <Mono numberOfLines={1}>{company.origin}</Mono>
+      <View style={[styles.appbar, { borderBottomColor: c.border }]}>
+        <View style={styles.appbarInner}>
+          {companies.length > 1 ? (
+            <IconButton icon={<Text style={[styles.appbarIcon, { color: c.text }]}>‹</Text>} accessibilityLabel="Back" onPress={onBack} />
+          ) : null}
+          <View style={styles.companybar}>
+            <CompanyLogo
+              url={company.targets.signed.custom?.logo}
+              origin={company.origin}
+              expectedSha={company.targets.signed.custom?.logo_sha256}
+              size={size.logo}
+            />
+            <View style={styles.companybarText}>
+              <Text numberOfLines={1} style={[styles.companybarName, { color: c.text }]}>
+                {company.targets.signed.custom?.company_name ?? company.origin}
+              </Text>
+              <Mono numberOfLines={1}>{company.origin}</Mono>
+            </View>
+          </View>
+          <IconButton
+            icon={<Text style={[styles.appbarIcon, { color: c.text }]}>⟳</Text>}
+            accessibilityLabel="Refresh"
+            busy={syncing}
+            onPress={() => void actions.syncCompanyNow(company.origin)}
+          />
+          <IconButton
+            icon={<Text style={[styles.appbarIcon, { color: c.text }]}>⚙</Text>}
+            accessibilityLabel="Settings"
+            onPress={() => setShowSettings(true)}
+          />
+          {companies.length === 1 ? (
+            <IconButton
+              icon={<Text style={[styles.appbarIcon, { color: c.text }]}>＋</Text>}
+              accessibilityLabel="Add company"
+              onPress={onAdd}
+            />
+          ) : null}
         </View>
-        <Button
-          title="⟳"
-          accessibilityLabel="Refresh"
-          variant="ghost"
-          busy={syncing}
-          onPress={() => void actions.syncCompanyNow(company.origin)}
-        />
-        <Button title="⚙" accessibilityLabel="Settings" variant="ghost" onPress={() => setShowSettings(true)} />
-        {companies.length === 1 ? (
-          <Button title="＋" accessibilityLabel="Add company" variant="ghost" onPress={onAdd} />
-        ) : null}
       </View>
 
       <View style={styles.bannerWrap}>
@@ -206,9 +221,10 @@ export function CompanyView({
         }
         ListFooterComponent={
           visible.length > 0 ? (
-            <Small muted style={styles.footer}>
-              This channel will never ask you for a password, seed, or code.
-            </Small>
+            <View style={[styles.footer, { borderTopColor: c.border }]}>
+              <Text style={[styles.footerIcon, { color: c.text2 }]}>🔒</Text>
+              <Small muted>This channel will never ask you for a password, seed, or code.</Small>
+            </View>
           ) : null
         }
         renderItem={({ item: stored }) => (
@@ -299,7 +315,6 @@ function FeedArticle({
     </Card>
   );
 }
-
 function SettingsSheet({
   company,
   items,
@@ -338,8 +353,14 @@ function SettingsSheet({
 
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.backdrop}>
-        <View style={[styles.sheet, { backgroundColor: c.surface, borderColor: c.border }]}>
+      {/* the backdrop tap dismisses the sheet, like the reference .sheet-backdrop;
+          the sheet itself swallows the tap so an inner tap never closes it */}
+      <Pressable style={styles.backdrop} accessibilityLabel="Close settings" onPress={onClose}>
+        <Pressable
+          style={[styles.sheet, { backgroundColor: c.surface, borderColor: c.border }]}
+          onPress={(e) => e.stopPropagation()}
+        >
+          <SheetHandle onClose={onClose} color={c.border} />
           <ScrollView contentContainerStyle={styles.sheetBody}>
             <Title>Settings</Title>
 
@@ -423,9 +444,33 @@ function SettingsSheet({
             />
             <BuildStamp />
           </ScrollView>
-        </View>
-      </View>
+        </Pressable>
+      </Pressable>
     </Modal>
+  );
+}
+
+/**
+ * The sheet's grab handle: a downward swipe past the threshold closes the
+ * sheet, mirroring the reference backdrop gesture. PanResponder is used because
+ * a plain responder reports only the release, not the travel distance.
+ */
+function SheetHandle({ onClose, color }: { onClose: () => void; color: string }) {
+  const pan = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: (_evt, gesture) => Math.abs(gesture.dy) > 4,
+        onPanResponderRelease: (_evt, gesture) => {
+          if (gesture.dy > 60) onClose();
+        },
+      }),
+    [onClose],
+  );
+  return (
+    <View style={styles.handleWrap} {...pan.panHandlers}>
+      <View accessibilityLabel="Drag down to close" style={[styles.sheetHandle, { backgroundColor: color }]} />
+    </View>
   );
 }
 
@@ -459,31 +504,75 @@ function ChannelToggle({
 
 const styles = StyleSheet.create({
   pad: { flex: 1, padding: spacing(2.5), gap: spacing(1.5) },
-  appbar: {
+  // the app bar is full-bleed; its inner row carries the 640px measure and the
+  // 10/20 padding of the reference .appbar-inner, so the 44px icon buttons are
+  // flush with the page edge and the company name has room to stay on one line
+  appbar: { borderBottomWidth: StyleSheet.hairlineWidth },
+  appbarInner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing(1),
-    paddingHorizontal: spacing(1.5),
-    paddingVertical: spacing(1),
+    gap: spacing(1.5),
+    paddingHorizontal: spacing(2.5),
+    paddingVertical: spacing(1.25),
+    minHeight: 64,
   },
+  appbarIcon: { fontSize: 22, lineHeight: 26 },
+  companybar: { flexDirection: 'row', alignItems: 'center', gap: spacing(1.5), flex: 1, minWidth: 0 },
+  companybarText: { flexShrink: 1, minWidth: 0 },
+  companybarName: { fontSize: type.company, fontWeight: '600', lineHeight: 21 },
   bannerWrap: { paddingHorizontal: spacing(2.5), paddingVertical: spacing(0.5) },
-  feed: { paddingHorizontal: spacing(2.5), paddingBottom: spacing(4) },
-  empty: { alignItems: 'center', gap: spacing(1), paddingVertical: spacing(6) },
-  footer: { marginTop: spacing(3) },
-  article: { marginVertical: spacing(1), padding: 0, overflow: 'hidden' },
-  articleImg: { width: '100%', aspectRatio: 1 },
-  articleBody: { padding: spacing(2), gap: spacing(1) },
-  articleTitle: { fontSize: type.section, fontWeight: '700' },
-  meta: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing(1) },
-  backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
-  sheet: {
-    maxHeight: '85%',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    borderWidth: 1,
+  feed: { paddingBottom: spacing(2) },
+  empty: { alignItems: 'center', gap: spacing(1), paddingVertical: spacing(6), paddingHorizontal: spacing(3) },
+  footer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing(1),
+    marginTop: spacing(3.5),
+    marginHorizontal: spacing(2.5),
     paddingTop: spacing(2),
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
-  sheetBody: { padding: spacing(2.5), gap: spacing(1) },
+  footerIcon: { fontSize: 16, lineHeight: 20 },
+  // .article-card: 20px side padding, 0 bottom (the border is the separator),
+  // and no vertical margin between cards
+  article: {
+    marginVertical: 0,
+    paddingHorizontal: spacing(2.5),
+    paddingTop: spacing(2.5),
+    paddingBottom: 0,
+    borderRadius: 0,
+    borderWidth: 0,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    overflow: 'visible',
+  },
+  articleImg: { width: '100%', aspectRatio: 1, borderRadius: radius.card },
+  // .article-card-body: padding-top 14px; the title/meta/content spacing is
+  // the reference's own margins, not a uniform flex gap
+  articleBody: { paddingTop: spacing(1.75) },
+  articleTitle: {
+    fontSize: type.article,
+    fontWeight: '700',
+    lineHeight: 30,
+    letterSpacing: -0.24,
+    marginBottom: spacing(1),
+  },
+  meta: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing(1),
+    alignItems: 'center',
+    marginBottom: spacing(1.75),
+  },
+  backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.35)' },
+  sheetHandle: { alignSelf: 'center', width: 36, height: 4, borderRadius: 2 },
+  handleWrap: { alignSelf: 'stretch', alignItems: 'center', paddingVertical: spacing(1) },
+  sheet: {
+    maxHeight: '86%',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: spacing(2.5),
+  },
+  sheetBody: { paddingHorizontal: spacing(2.5), paddingBottom: spacing(3), gap: spacing(1) },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing(1) },
   channelRow: {
     flexDirection: 'row',
