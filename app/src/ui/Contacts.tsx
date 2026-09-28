@@ -4,12 +4,13 @@
  * join origin as a persistent secondary line, unread count.
  */
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import type { CompanyRecord, StoredItem } from '../lib/store';
 import type { AppActions } from '../state';
 import type { NotificationState } from '../lib/notify';
 import { CompanyLogo } from './CompanyLogo';
 import { NotificationBanner } from './NotificationBanner';
-import { IconButton, Mono, Screen, Small, Title } from './components';
+import { IconButton, Mono, Screen, Small } from './components';
 import { radius, size, spacing, type, usePalette } from '../theme';
 
 export function Contacts({
@@ -34,9 +35,9 @@ export function Contacts({
     <Screen>
       <View style={[styles.header, { borderBottomColor: c.border }]}>
         <View style={styles.headerInner}>
-          <Title style={{ flex: 1 }}>Messages</Title>
+          <Text style={[styles.headerTitle, { color: c.text }]}>Messages</Text>
           <IconButton
-            icon={<Text style={[styles.headerIcon, { color: c.accent }]}>＋</Text>}
+            icon={<Ionicons name="add" size={26} color={c.accent} />}
             accessibilityLabel="Add company"
             onPress={onAdd}
           />
@@ -96,12 +97,12 @@ const styles = StyleSheet.create({
   headerInner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing(1.5),
-    paddingHorizontal: spacing(2.5),
-    paddingVertical: spacing(1.25),
-    minHeight: 64,
+    gap: spacing(0.75),
+    paddingHorizontal: spacing(2),
+    paddingVertical: spacing(1),
+    minHeight: 60,
   },
-  headerIcon: { fontSize: 24, lineHeight: 28 },
+  headerTitle: { flex: 1, fontSize: type.section, fontWeight: '600' },
   list: { paddingHorizontal: spacing(2.5), paddingBottom: spacing(4) },
   row: {
     flexDirection: 'row',

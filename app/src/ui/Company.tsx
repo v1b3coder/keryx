@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert as RNAlert, FlatList, Image, Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, View, type ViewToken } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import type { ChannelState, CompanyRecord, StoredItem } from '../lib/store';
 import { formatDate, formatDateTime, matchesFilter } from '../lib/format';
 import { loadImage } from '../lib/media';
@@ -141,7 +142,11 @@ export function CompanyView({
       <View style={[styles.appbar, { borderBottomColor: c.border }]}>
         <View style={styles.appbarInner}>
           {companies.length > 1 ? (
-            <IconButton icon={<Text style={[styles.appbarIcon, { color: c.text }]}>‹</Text>} accessibilityLabel="Back" onPress={onBack} />
+            <IconButton
+              icon={<Ionicons name="chevron-back" size={24} color={c.text} />}
+              accessibilityLabel="Back"
+              onPress={onBack}
+            />
           ) : null}
           <View style={styles.companybar}>
             <CompanyLogo
@@ -154,23 +159,25 @@ export function CompanyView({
               <Text numberOfLines={1} style={[styles.companybarName, { color: c.text }]}>
                 {company.targets.signed.custom?.company_name ?? company.origin}
               </Text>
-              <Mono numberOfLines={1}>{company.origin}</Mono>
+              <Mono numberOfLines={1} style={styles.companybarOrigin}>
+                {company.origin}
+              </Mono>
             </View>
           </View>
           <IconButton
-            icon={<Text style={[styles.appbarIcon, { color: c.text }]}>⟳</Text>}
+            icon={<Ionicons name="refresh" size={22} color={c.text} />}
             accessibilityLabel="Refresh"
             busy={syncing}
             onPress={() => void actions.syncCompanyNow(company.origin)}
           />
           <IconButton
-            icon={<Text style={[styles.appbarIcon, { color: c.text }]}>⚙</Text>}
+            icon={<Ionicons name="settings-outline" size={22} color={c.text} />}
             accessibilityLabel="Settings"
             onPress={() => setShowSettings(true)}
           />
           {companies.length === 1 ? (
             <IconButton
-              icon={<Text style={[styles.appbarIcon, { color: c.text }]}>＋</Text>}
+              icon={<Ionicons name="add" size={26} color={c.text} />}
               accessibilityLabel="Add company"
               onPress={onAdd}
             />
@@ -222,7 +229,7 @@ export function CompanyView({
         ListFooterComponent={
           visible.length > 0 ? (
             <View style={[styles.footer, { borderTopColor: c.border }]}>
-              <Text style={[styles.footerIcon, { color: c.text2 }]}>🔒</Text>
+              <Ionicons name="lock-closed" size={15} color={c.text2} style={styles.footerIcon} />
               <Small muted>This channel will never ask you for a password, seed, or code.</Small>
             </View>
           ) : null
@@ -505,21 +512,21 @@ function ChannelToggle({
 const styles = StyleSheet.create({
   pad: { flex: 1, padding: spacing(2.5), gap: spacing(1.5) },
   // the app bar is full-bleed; its inner row carries the 640px measure and the
-  // 10/20 padding of the reference .appbar-inner, so the 44px icon buttons are
-  // flush with the page edge and the company name has room to stay on one line
+  // 10/16 padding of the reference .appbar-inner, so the 40pt icon buttons sit
+  // flush with the page edge and the company name keeps its column
   appbar: { borderBottomWidth: StyleSheet.hairlineWidth },
   appbarInner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing(1.5),
-    paddingHorizontal: spacing(2.5),
-    paddingVertical: spacing(1.25),
-    minHeight: 64,
+    gap: spacing(0.75),
+    paddingHorizontal: spacing(2),
+    paddingVertical: spacing(1),
+    minHeight: 60,
   },
-  appbarIcon: { fontSize: 22, lineHeight: 26 },
-  companybar: { flexDirection: 'row', alignItems: 'center', gap: spacing(1.5), flex: 1, minWidth: 0 },
+  companybar: { flexDirection: 'row', alignItems: 'center', gap: spacing(0.75), flex: 1, minWidth: 0 },
   companybarText: { flexShrink: 1, minWidth: 0 },
   companybarName: { fontSize: type.company, fontWeight: '600', lineHeight: 21 },
+  companybarOrigin: { fontSize: type.origin, lineHeight: 16 },
   bannerWrap: { paddingHorizontal: spacing(2.5), paddingVertical: spacing(0.5) },
   feed: { paddingBottom: spacing(2) },
   empty: { alignItems: 'center', gap: spacing(1), paddingVertical: spacing(6), paddingHorizontal: spacing(3) },
@@ -532,7 +539,7 @@ const styles = StyleSheet.create({
     paddingTop: spacing(2),
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  footerIcon: { fontSize: 16, lineHeight: 20 },
+  footerIcon: { marginTop: 2 },
   // .article-card: 20px side padding, 0 bottom (the border is the separator),
   // and no vertical margin between cards
   article: {

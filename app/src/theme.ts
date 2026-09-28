@@ -69,19 +69,23 @@ export const type = {
   company: 17,
   small: 13,
   mono: 13,
+  origin: 12,
 } as const;
 
 export const radius = { pill: 50, card: 16, control: 12 } as const;
 
 /**
- * Fixed control sizes from the reference stylesheet: the app bar icon button,
- * the company logo and the toggle. Kept here so every screen agrees.
+ * Fixed control sizes from the reference stylesheet. The app bar icon buttons are
+ * 40pt visually with a 4pt hit slop (48pt effective touch target), which keeps
+ * three actions from eating the company name's width.
  */
 export const size = {
-  /** .iconbtn / touch target */
-  iconbtn: 44,
+  /** .iconbtn visual box */
+  iconbtn: 40,
+  /** the touch slop that brings iconbtn to a 48pt target */
+  hitSlop: 4,
   /** .companybar-logo */
-  logo: 44,
+  logo: 40,
   /** .row-logo */
   rowLogo: 48,
   /** .toggle */

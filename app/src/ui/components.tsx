@@ -127,7 +127,7 @@ export function IconButton({
   onPress,
   busy,
 }: {
-  /** the glyph or icon node */
+  /** the icon node */
   icon: ReactNode;
   accessibilityLabel: string;
   onPress: () => void;
@@ -139,6 +139,7 @@ export function IconButton({
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       disabled={busy}
+      hitSlop={size.hitSlop}
       onPress={onPress}
       style={({ pressed }) => [
         styles.iconbtn,
