@@ -39,19 +39,32 @@ function withoutImages(html: string): string {
 }
 
 /**
- * The strict sandbox policy: nothing loads except https/data images. A script
- * (inline or external), a form, an iframe, a font or a media element cannot
- * execute or load at all, whatever the publisher wrote.
+ * The strict sandbox policy: nothing loads except https/data images, and the only
+ * stylesheet that may apply is the app's own `<style nonce>`. A script (inline or
+ * external), a form, an iframe, a font or a media element cannot execute or load
+ * at all, whatever the publisher wrote. The nonce is what lets the article
+ * typography through while every publisher `<style>` stays dead — with
+ * `style-src 'none'` the sandbox silently dropped its own stylesheet too.
  */
-const CSP =
-  "default-src 'none'; img-src https: data:; script-src 'none'; style-src 'none'; " +
-  "font-src 'none'; media-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'";
+function csp(nonce: string): string {
+  return (
+    "default-src 'none'; img-src https: data:; script-src 'none'; " +
+    `style-src 'nonce-${nonce}'; ` +
+    "font-src 'none'; media-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'"
+  );
+}
 
 /**
  * Runs in the page through `injectedJavaScript` (not subject to the document's
  * CSP): `__keryxImages` swaps the verified data URLs in, `__keryxMeasure`
- * reports the document height so the sandbox has no inner scrollbar. Neither
+ * reports the CONTENT height so the sandbox has no inner scrollbar. Neither
  * function ever touches the network.
+ *
+ * The measurement is repeated and observed, not taken once: the first layout can
+ * still be using the fallback font, and the web font arriving later reflows the
+ * text. `ResizeObserver` catches the reflow; `document.fonts.ready` catches the
+ * font swap; the timers cover slow first paints. Measuring once left short
+ * articles clipped by a line.
  */
 const BRIDGE = `(function () {
   window.__keryxImages = function (sources) {
@@ -61,12 +74,17 @@ const BRIDGE = `(function () {
     }
   };
   window.__keryxMeasure = function () {
-    var h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+    // document.body is the CONTENT box. documentElement must not be used: the root
+    // element fills the WebView viewport, so its scrollHeight is
+    // max(content, viewport) — measuring it pinned every article at the fallback
+    // height and left a screenful of blank space under short articles.
+    var h = Math.ceil(document.body.getBoundingClientRect().height);
     if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(String(h));
   };
   window.__keryxMeasure();
-  setTimeout(window.__keryxMeasure, 60);
-  setTimeout(window.__keryxMeasure, 400);
+  [0, 50, 150, 400, 1000, 2000].forEach(function (ms) { setTimeout(window.__keryxMeasure, ms); });
+  if (window.ResizeObserver) new ResizeObserver(window.__keryxMeasure).observe(document.body);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(window.__keryxMeasure);
 })(); true;`;
 
 export function SanitizedHtml({
@@ -86,6 +104,9 @@ export function SanitizedHtml({
   const c = usePalette();
   const [webview, setWebview] = useState<WebView | null>(null);
   const [height, setHeight] = useState(0);
+  // one nonce per rendered document: it authorizes exactly this document's own
+  // <style> and nothing a publisher could inject
+  const nonce = useMemo(() => Math.random().toString(36).slice(2), []);
 
   // the remote sources this article references, in document order
   const sources = useMemo(() => {
@@ -107,9 +128,9 @@ export function SanitizedHtml({
     void origin;
     return (
       `<!doctype html><html><head><meta charset="utf-8">` +
-      `<meta http-equiv="Content-Security-Policy" content="${CSP}">` +
+      `<meta http-equiv="Content-Security-Policy" content="${csp(nonce)}">` +
       `<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">` +
-      `<style>body{margin:0;padding:0;font-family:system-ui,sans-serif;font-size:17px;line-height:1.6;color:${c.text};background:${c.bg}}` +
+      `<style nonce="${nonce}">body{margin:0;padding:0;font-family:system-ui,sans-serif;font-size:17px;line-height:1.6;color:${c.text};background:${c.bg}}` +
       `a{color:${c.accent};text-decoration:none}` +
       `img{max-width:100%;height:auto;border-radius:12px;display:block;margin:16px 0}` +
       `p{margin:0 0 14px}` +
@@ -118,7 +139,7 @@ export function SanitizedHtml({
       `th,td{border:1px solid ${c.border};padding:8px;text-align:left}</style>` +
       `</head><body>${body}</body></html>`
     );
-  }, [html, c]);
+  }, [html, c, nonce]);
 
   // resolve every image through the hash-verifying loader and hand the verified
   // data URLs to the page; a mismatch leaves the image unrendered
@@ -159,13 +180,15 @@ export function SanitizedHtml({
         ref={setWebview}
         originWhitelist={['about:blank']}
         source={{ html: document }}
-        style={[styles.webview, { height: height > 0 ? height : 480 }]}
+        style={[styles.webview, { height: height > 0 ? height : 80 }]}
         scrollEnabled={false}
         javaScriptEnabled
         injectedJavaScript={BRIDGE}
         onMessage={(event) => {
-          const next = Number(event.nativeEvent.data);
-          if (Number.isFinite(next) && next > 0) setHeight(next);
+          const next = Math.ceil(Number(event.nativeEvent.data));
+          // never re-render for the same height: a redundant setState would
+          // re-layout the WebView and re-trigger the observer
+          if (Number.isFinite(next) && next > 0 && next !== height) setHeight(next);
         }}
         onShouldStartLoadWithRequest={onShouldStartLoadWithRequest}
       />
