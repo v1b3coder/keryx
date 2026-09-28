@@ -102,7 +102,10 @@ function Root() {
     } else {
       setView({ t: 'start' });
     }
-  }, [loaded, companies]);
+    // `view.t` is a dependency: leaving the pairing flow must re-route. Without
+    // it a Cancel from `add` left the zero-company start screen on screen while
+    // the company was still stored — it looked deleted until the next launch.
+  }, [loaded, companies, view.t]);
 
   // A deep link (`?domain=&p=`) starts pairing immediately, then drops the
   // params so a reload does not re-trigger pairing. Both the initial URL (cold
