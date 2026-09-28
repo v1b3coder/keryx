@@ -63,10 +63,29 @@ export const spacing = (n: number): number => n * 8;
 /** The shared type scale, in points; dynamic type scales it per the OS. */
 export const type = {
   title: 28,
+  article: 24,
   section: 20,
   body: 16,
+  company: 17,
   small: 13,
-  mono: 12,
+  mono: 13,
 } as const;
 
 export const radius = { pill: 50, card: 16, control: 12 } as const;
+
+/**
+ * Fixed control sizes from the reference stylesheet: the app bar icon button,
+ * the company logo and the toggle. Kept here so every screen agrees.
+ */
+export const size = {
+  /** .iconbtn / touch target */
+  iconbtn: 44,
+  /** .companybar-logo */
+  logo: 44,
+  /** .row-logo */
+  rowLogo: 48,
+  /** .toggle */
+  toggleWidth: 51,
+  toggleHeight: 31,
+  toggleKnob: 25,
+} as const;

@@ -14,7 +14,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { radius, spacing, type, usePalette } from '../theme';
+import { radius, size, spacing, type, usePalette } from '../theme';
 
 export function Screen({ children }: { children: ReactNode }) {
   const c = usePalette();
@@ -115,6 +115,40 @@ export function Button({
 export function Card({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) {
   const c = usePalette();
   return <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.border }, style]}>{children}</View>;
+}
+
+/**
+ * The app bar icon button (.iconbtn): a fixed 44x44 touch target that centers a
+ * single icon, so the glyphs never sit in a full-width button's padding.
+ */
+export function IconButton({
+  icon,
+  accessibilityLabel,
+  onPress,
+  busy,
+}: {
+  /** the glyph or icon node */
+  icon: ReactNode;
+  accessibilityLabel: string;
+  onPress: () => void;
+  busy?: boolean;
+}) {
+  const c = usePalette();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      disabled={busy}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.iconbtn,
+        { backgroundColor: pressed ? c.surface2 : 'transparent' },
+        busy ? styles.disabled : null,
+      ]}
+    >
+      {busy ? <ActivityIndicator color={c.text} /> : icon}
+    </Pressable>
+  );
 }
 
 export function Alert({
@@ -249,6 +283,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: spacing(1.5),
     paddingVertical: spacing(0.75),
+  },
+  iconbtn: {
+    width: size.iconbtn,
+    height: size.iconbtn,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   toggle: {
     width: 50,
