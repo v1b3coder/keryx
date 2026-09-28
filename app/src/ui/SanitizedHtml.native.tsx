@@ -109,9 +109,13 @@ export function SanitizedHtml({
       `<!doctype html><html><head><meta charset="utf-8">` +
       `<meta http-equiv="Content-Security-Policy" content="${CSP}">` +
       `<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">` +
-      `<style>body{margin:0;padding:0 16px;font-family:system-ui,sans-serif;font-size:16px;line-height:1.5;color:${c.text};background:${c.bg}}` +
-      `a{color:${c.accent}}img{max-width:100%;height:auto;border-radius:8px}` +
-      `p,li{overflow-wrap:anywhere}</style>` +
+      `<style>body{margin:0;padding:0;font-family:system-ui,sans-serif;font-size:17px;line-height:1.6;color:${c.text};background:${c.bg}}` +
+      `a{color:${c.accent};text-decoration:none}` +
+      `img{max-width:100%;height:auto;border-radius:12px;display:block;margin:16px 0}` +
+      `p{margin:0 0 14px}` +
+      `p,li{overflow-wrap:anywhere}` +
+      `table{border-collapse:collapse;width:100%}` +
+      `th,td{border:1px solid ${c.border};padding:8px;text-align:left}</style>` +
       `</head><body>${body}</body></html>`
     );
   }, [html, c]);

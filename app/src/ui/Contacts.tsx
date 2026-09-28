@@ -1,16 +1,16 @@
 /**
  * Contacts list (shown only when more than one company is added — with a
- * single company the app opens it directly). Each card: logo, name, the
+ * single company the app opens it directly). Each row: logo, name, the
  * join origin as a persistent secondary line, unread count.
  */
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { CompanyRecord, StoredItem } from '../lib/store';
 import type { AppActions } from '../state';
 import type { NotificationState } from '../lib/notify';
 import { CompanyLogo } from './CompanyLogo';
 import { NotificationBanner } from './NotificationBanner';
-import { Body, Button, Mono, Screen, Small, Title } from './components';
-import { spacing, type, usePalette } from '../theme';
+import { IconButton, Mono, Screen, Small, Title } from './components';
+import { radius, size, spacing, type, usePalette } from '../theme';
 
 export function Contacts({
   companies,
@@ -32,9 +32,15 @@ export function Contacts({
   const c = usePalette();
   return (
     <Screen>
-      <View style={styles.header}>
-        <Title style={{ flex: 1 }}>Messages</Title>
-        <Button title="Add" accessibilityLabel="Add company" onPress={onAdd} />
+      <View style={[styles.header, { borderBottomColor: c.border }]}>
+        <View style={styles.headerInner}>
+          <Title style={{ flex: 1 }}>Messages</Title>
+          <IconButton
+            icon={<Text style={[styles.headerIcon, { color: c.accent }]}>＋</Text>}
+            accessibilityLabel="Add company"
+            onPress={onAdd}
+          />
+        </View>
       </View>
       <ScrollView contentContainerStyle={styles.list}>
         <NotificationBanner
@@ -47,50 +53,56 @@ export function Contacts({
         {companies.map((company) => {
           const unread = items.filter((i) => i.origin === company.origin && !i.read).length;
           return (
-            <View key={company.origin} style={[styles.row, { borderBottomColor: c.border }]}>
+            <Pressable
+              key={company.origin}
+              accessibilityRole="button"
+              accessibilityLabel={`Open ${company.targets.signed.custom?.company_name ?? company.origin}`}
+              onPress={() => onOpen(company.origin)}
+              style={({ pressed }) => [
+                styles.row,
+                { borderBottomColor: c.border },
+                pressed ? { backgroundColor: c.surface2 } : null,
+              ]}
+            >
               <CompanyLogo
                 url={company.targets.signed.custom?.logo}
                 origin={company.origin}
                 expectedSha={company.targets.signed.custom?.logo_sha256}
-                size={44}
+                size={size.rowLogo}
               />
               <View style={{ flex: 1, minWidth: 0 }}>
-                <Button
-                  title={company.targets.signed.custom?.company_name ?? company.origin}
-                  accessibilityLabel={`Open ${company.targets.signed.custom?.company_name ?? company.origin}`}
-                  variant="ghost"
-                  onPress={() => onOpen(company.origin)}
-                />
-                <Mono>{company.origin}</Mono>
+                <Text numberOfLines={1} style={[styles.rowName, { color: c.text }]}>
+                  {company.targets.signed.custom?.company_name ?? company.origin}
+                </Text>
+                <Mono numberOfLines={1}>{company.origin}</Mono>
               </View>
               {unread > 0 ? (
                 <View style={[styles.unread, { backgroundColor: c.accent }]}>
-                  <Text style={{ color: c.onAccent, fontSize: type.small, fontWeight: '700' }}>
+                  <Text style={{ color: c.onAccent, fontSize: 12, fontWeight: '700' }}>
                     {unread > 99 ? '99+' : unread}
                   </Text>
                 </View>
               ) : null}
-            </View>
+            </Pressable>
           );
         })}
-        <Body muted style={styles.hint}>
-          Each card keeps the confirmed origin visible: that is the anchor the company name and logo
-          are shown against.
-        </Body>
       </ScrollView>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  header: {
+  header: { borderBottomWidth: StyleSheet.hairlineWidth },
+  headerInner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing(1),
+    gap: spacing(1.5),
     paddingHorizontal: spacing(2.5),
-    paddingVertical: spacing(1),
+    paddingVertical: spacing(1.25),
+    minHeight: 64,
   },
-  list: { paddingHorizontal: spacing(2.5), paddingBottom: spacing(4), gap: spacing(0.5) },
+  headerIcon: { fontSize: 24, lineHeight: 28 },
+  list: { paddingHorizontal: spacing(2.5), paddingBottom: spacing(4) },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -98,13 +110,13 @@ const styles = StyleSheet.create({
     paddingVertical: spacing(1.5),
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
+  rowName: { fontSize: type.body, fontWeight: '600' },
   unread: {
-    minWidth: 26,
-    height: 26,
-    borderRadius: 13,
+    minWidth: 22,
+    height: 22,
+    borderRadius: radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 6,
+    paddingHorizontal: 7,
   },
-  hint: { marginTop: spacing(3) },
 });

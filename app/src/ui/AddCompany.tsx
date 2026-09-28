@@ -456,11 +456,12 @@ const styles = StyleSheet.create({
     paddingVertical: spacing(1.5),
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
+  // .input: pill radius, 50px min-height, 18px side padding
   input: {
     minHeight: 50,
-    borderRadius: radius.control,
+    borderRadius: radius.pill,
     borderWidth: 1,
-    paddingHorizontal: spacing(1.5),
+    paddingHorizontal: spacing(2.25),
     fontSize: type.body,
   },
   flexSpacer: { flex: 1 },
