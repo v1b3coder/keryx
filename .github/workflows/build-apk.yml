@@ -14,9 +14,10 @@ permissions:
   contents: write
 
 env:
-  # The release certificate (app/plugins/withAndroidReleaseSigning.js). A mismatch
-  # means the APK cannot update an install made by an earlier release.
-  EXPECTED_CERT_SHA256: 'f6051a67f984ad86b926ee41edb3e9a4fad257e005135eb88fd9f74b9eb5645f'
+  # The release certificate (app/plugins/withAndroidReleaseSigning.js; the key is
+  # ../keryx-android-keys). A mismatch means the APK cannot update an install
+  # made by an earlier release.
+  EXPECTED_CERT_SHA256: '5e5acdaf318849f96dc4f508a0daa5a474bc60b23a2c639d337585fff5e7c8a1'
 
 jobs:
   build:
@@ -83,7 +84,12 @@ jobs:
       - name: Decode the release keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KERYX_KEYSTORE_BASE64 }}
-        run: printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keryx-release.jks"
+        run: |
+          if [[ -z "$KEYSTORE_BASE64" ]]; then
+            echo "::error::KERYX_KEYSTORE_BASE64 is not set; refusing to publish an unsigned release"
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keryx-release.jks"
 
       - name: Build release APK
         working-directory: app/android

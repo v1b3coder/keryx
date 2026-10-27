@@ -7,7 +7,7 @@
  * key only when KERYX_KEYSTORE_FILE (absolute path), KERYX_KEYSTORE_PASSWORD,
  * KERYX_KEY_ALIAS and KERYX_KEY_PASSWORD are set — CI sets them from the
  * repository secrets, a local release build sources
- * `../keryx-release-keys/credentials.env`. Without them `release` keeps the
+ * `../keryx-android-keys/secrets.env`. Without them `release` keeps the
  * debug key, so a plain local build needs no credentials.
  */
 const { withAppBuildGradle } = require('@expo/config-plugins');

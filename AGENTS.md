@@ -38,7 +38,7 @@ site is public.
   `vapid_public` must match the PWA's default (`app/src/lib/relay.ts`).
 - `../keryx-demo` → demo site, own repo; regenerate with `make demo`.
 - `../keryx-demo-keys` → maintainer-only demo signing keystore, never commit it.
-- `../keryx-release-keys` → maintainer-only **Android APK** signing keystore
+- `../keryx-android-keys` → maintainer-only **Android APK** signing keystore
   (the `Build APK` workflow reads it from repository secrets), never commit it.
 
 ## Publishing
