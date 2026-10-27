@@ -55,7 +55,7 @@ so the release signing config comes from
 (`../keryx-android-keys`, never committed) from the repository secrets and
 refuses an APK whose certificate does not match the expected one. A plain local
 build needs no credentials and stays debug-signed. Changing the signature breaks
-updates, so an install of a debug-signed release must be uninstalled once. The iOS
+updates, so an install built with the debug key must be uninstalled once. The iOS
 target is built with **EAS Build** (`eas build -p ios`), see `eas.json`; it needs
 the maintainer's Apple account.
 
