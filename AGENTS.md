@@ -37,7 +37,9 @@ site is public.
 - `app/` → PWA, GitHub Pages on a push to `main`; the deployed relay's
   `vapid_public` must match the PWA's default (`app/src/lib/relay.ts`).
 - `../keryx-demo` → demo site, own repo; regenerate with `make demo`.
-- `../keryx-demo-keys` → maintainer-only release keystore, never commit it.
+- `../keryx-demo-keys` → maintainer-only demo signing keystore, never commit it.
+- `../keryx-release-keys` → maintainer-only **Android APK** signing keystore
+  (the `Build APK` workflow reads it from repository secrets), never commit it.
 
 ## Publishing
 

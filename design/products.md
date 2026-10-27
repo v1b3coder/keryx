@@ -8,7 +8,7 @@ implements a protocol rule, the rule itself is normative in
 
 ## 1. User App
 
-- Web technology core (e.g., React Native / Capacitor), wrapped as native
+- Web technology core (React Native / Expo), wrapped as native
   Android + iOS apps. Must run on de-Googled Android without Play Services.
 - **Zero onboarding:** first screen is "Scan company QR code".
 - **Origin confirmation screen:** shows the full join URL origin in plain

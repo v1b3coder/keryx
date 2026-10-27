@@ -52,7 +52,7 @@ function Root() {
 
   // Android hardware back: the app's routing is component state, so without this
   // the gesture would exit the app from any screen instead of going back one
-  // step (the Capacitor WebView used browser history for the same effect).
+  // step (the web build used browser history for the same effect).
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {

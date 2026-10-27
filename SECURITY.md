@@ -20,8 +20,8 @@ Please include:
 ## Scope
 
 In scope: the protocol specification in `spec/`, the publisher SDK and the `pub`
-CLI in `sdk/`, the notification relay in `relay/`, the PWA / Capacitor client in
-`app/`, and the demo generator in `demo-tool/`.
+CLI in `sdk/`, the notification relay in `relay/`, the PWA / React Native client
+in `app/`, and the demo generator in `demo-tool/`.
 
 Out of scope: vulnerabilities that are already public upstream, and the demo
 deployment treated as a hosting service — it is a test artifact, not production

@@ -20,7 +20,7 @@ body:
       label: Component
       description: Which part of Keryx misbehaves?
       options:
-        - app — the PWA / Capacitor client
+        - app — the PWA / Android / iOS client
         - relay — the notification relay
         - sdk — the publisher SDK or the `pub` CLI
         - demo — the keryx-demo site or its generator

@@ -964,7 +964,7 @@ need not distinguish PWA from de-Googled Android subscriptions.
 The de-Googled path reuses §6.2 entirely; only the client side differs.
 
 - **Client:** the Keryx app embeds a UnifiedPush **connector** (a small
-  Capacitor plugin wrapping `org.unifiedpush.android:connector`). The user
+  Expo module wrapping `org.unifiedpush.android:connector`). The user
   picks a distributor — ntfy today, any other UnifiedPush distributor later.
 - **Distributor:** ntfy (F-Droid flavor, no Firebase) holds the device's one
   push connection (WebSocket, "instant delivery" foreground service) and

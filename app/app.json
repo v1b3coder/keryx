@@ -57,7 +57,8 @@
           "color": "#0000ee",
           "defaultChannel": "keryx-wakeup"
         }
-      ]
+      ],
+      "./plugins/withAndroidReleaseSigning"
     ],
     "experiments": {
       "baseUrl": "/keryx/"

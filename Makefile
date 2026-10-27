@@ -113,7 +113,7 @@ demo-tool: ## Build the demo site generator into bin/demo-tool
 	mkdir -p $(BIN)
 	cd $(DEMO_TOOL_DIR) && $(GO) build -o $(CURDIR)/$(BIN)/demo-tool .
 
-# --- PWA / Capacitor app ------------------------------------------------------
+# --- PWA / React Native app ----------------------------------------------------
 
 # A stamp so `npm install` runs only when the lockfile changes (the
 # node_modules directory mtime is not a reliable prerequisite).

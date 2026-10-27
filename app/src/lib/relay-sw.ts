@@ -66,7 +66,8 @@ export const RECOVERY_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 /**
  * Where the endpoint subscription comes from (design/notifications.md): the
  * browser's PushManager by default, the UnifiedPush connector on Android. The page
- * installs the native source; the service-worker bundle never imports Capacitor.
+ * installs the native source; the service-worker bundle never imports the
+ * native module.
  */
 export interface SubscriptionSource {
   subscribe(vapid: string): Promise<PushSubscriptionKeys>;

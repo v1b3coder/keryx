@@ -13,3 +13,7 @@ __pycache__/
 # Generated SDK demo artifacts and their key store (keys must never be committed)
 /demo-sdk/
 /demo-sdk.keys/
+
+# Signing material (release keystore lives in ../keryx-release-keys)
+*.jks
+*.keystore

@@ -99,12 +99,12 @@ leg, put the service-account JSON on the volume and set
 `RELAY_FCM_SERVICE_ACCOUNT=/data/fcm-sa.json`; without it the leg reports
 `disabled`.
 
-The Capacitor Android shell serves the app from `https://localhost`, so that
-origin must be in `RELAY_CORS_ORIGINS` for `POST /v1/registrations` and the
-self-test to work from the app:
+The native app talks to the relay outside a browser, so it needs no CORS origin;
+only the PWA origin must be in `RELAY_CORS_ORIGINS` for `POST /v1/registrations`
+and the self-test:
 
 ```sh
-fly secrets set RELAY_CORS_ORIGINS="https://v1b3coder.github.io,https://localhost" -a keryx-relay
+fly secrets set RELAY_CORS_ORIGINS="https://v1b3coder.github.io" -a keryx-relay
 ```
 
 The de-Googled Android path uses ntfy as a UnifiedPush distributor. `ntfy.sh` is

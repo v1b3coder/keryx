@@ -343,8 +343,8 @@ func copyDir(src, dst string) error {
 var qrLib string
 
 // installSection lists the three client options on the demo pages. The PWA
-// and the Android APK (GitHub Releases) are live; the iOS Capacitor shell
-// exists in keryx/app but has no store build yet, so it stays a placeholder.
+// and the Android APK (GitHub Releases) are live; the iOS shell exists in
+// keryx/app but has no store build yet, so it stays a placeholder.
 // The PWA link carries ?domain=<origin> (the join page appends &p=
 // client-side) — an out-of-spec PWA deep link that starts pairing without
 // the input screen.
